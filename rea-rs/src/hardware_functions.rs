@@ -3,7 +3,7 @@ use std::mem::MaybeUninit;
 use log::debug;
 
 use crate::{
-    utils::{as_string, make_string_buf},
+    utils::{as_string, as_string_mut, make_c_string_buf},
     HardwareSocket, Reaper, SampleAmount,
 };
 
@@ -69,19 +69,77 @@ impl Reaper {
     }
 
     pub fn iter_audio_inputs(&self) -> AudioInputsIterator {
-        AudioInputsIterator::new(*self.low(), self.get_n_audio_inputs())
+        AudioInputsIterator::new(self.get_n_audio_inputs())
     }
 
     pub fn iter_audio_outputs(&self) -> AudioOutputsIterator {
-        AudioOutputsIterator::new(*self.low(), self.get_n_audio_outputs())
+        AudioOutputsIterator::new(self.get_n_audio_outputs())
     }
 
     pub fn get_max_midi_inputs(&self) -> usize {
         self.low().GetMaxMidiInputs() as usize
     }
 
+    pub fn get_midi_input(&self, index: usize) -> Option<HardwareSocket> {
+        let size = 256;
+        let buf = make_c_string_buf(size).into_raw();
+        let status = unsafe {
+            self.low().GetMIDIInputName(index as i32, buf, size as i32)
+        };
+        match status {
+            false => None,
+            true => HardwareSocket::new(
+                index as u32,
+                as_string_mut(buf).expect("Can not convert name to String."),
+            )
+            .into(),
+        }
+    }
+
     pub fn get_max_midi_outputs(&self) -> usize {
         self.low().GetMaxMidiOutputs() as usize
+    }
+
+    pub fn get_midi_output(&self, index: usize) -> Option<HardwareSocket> {
+        let size = 256;
+        let buf = make_c_string_buf(size).into_raw();
+        let status = unsafe {
+            self.low().GetMIDIOutputName(index as i32, buf, size as i32)
+        };
+        match status {
+            false => None,
+            true => HardwareSocket::new(
+                index as u32,
+                as_string_mut(buf).expect("Can not convert name to String."),
+            )
+            .into(),
+        }
+    }
+
+    pub fn get_audio_input(&self, index: usize) -> Option<HardwareSocket> {
+        let result = self.low().GetInputChannelName(index as i32);
+        match as_string(result) {
+            Err(_) => None,
+            Ok(name) => {
+                if &name == "" {
+                    return None;
+                }
+                HardwareSocket::new(index as u32, name).into()
+            }
+        }
+    }
+
+    pub fn get_audio_output(&self, index: usize) -> Option<HardwareSocket> {
+        let result = self.low().GetOutputChannelName(index as i32);
+        match as_string(result) {
+            Err(_) => None,
+            Ok(name) => {
+                if &name == "" {
+                    return None;
+                }
+                HardwareSocket::new(index as u32, name).into()
+            }
+        }
     }
 
     pub fn get_n_midi_inputs(&self) -> usize {
@@ -93,23 +151,21 @@ impl Reaper {
     }
 
     pub fn iter_midi_inputs(&self) -> MidiInputsIterator {
-        MidiInputsIterator::new(*self.low(), self.get_n_midi_inputs())
+        MidiInputsIterator::new(self.get_n_midi_inputs())
     }
 
     pub fn iter_midi_outputs(&self) -> MidiOutputsIterator {
-        MidiOutputsIterator::new(*self.low(), self.get_n_midi_outputs())
+        MidiOutputsIterator::new(self.get_n_midi_outputs())
     }
 }
 
 pub struct AudioInputsIterator {
-    low: reaper_low::Reaper,
     index: usize,
     amount: usize,
 }
 impl AudioInputsIterator {
-    pub fn new(reaper: reaper_low::Reaper, num_inputs: usize) -> Self {
+    pub fn new(num_inputs: usize) -> Self {
         Self {
-            low: reaper,
             index: 0,
             amount: num_inputs,
         }
@@ -121,22 +177,18 @@ impl Iterator for AudioInputsIterator {
         if self.index >= self.amount {
             return None;
         }
-        let name = self.low.GetInputChannelName(self.index as i32);
-        let name = as_string(name).expect("Can not get name for the channel");
         self.index += 1;
-        Some(HardwareSocket::new(self.index as u32 - 1, name))
+        Reaper::get().get_audio_input(self.index - 1)
     }
 }
 
 pub struct AudioOutputsIterator {
-    low: reaper_low::Reaper,
     index: usize,
     amount: usize,
 }
 impl AudioOutputsIterator {
-    pub fn new(reaper: reaper_low::Reaper, num_outputs: usize) -> Self {
+    pub fn new(num_outputs: usize) -> Self {
         Self {
-            low: reaper,
             index: 0,
             amount: num_outputs,
         }
@@ -148,22 +200,18 @@ impl Iterator for AudioOutputsIterator {
         if self.index >= self.amount {
             return None;
         }
-        let name = self.low.GetOutputChannelName(self.index as i32);
-        let name = as_string(name).expect("Can not get name for the channel");
         self.index += 1;
-        Some(HardwareSocket::new(self.index as u32 - 1, name))
+        Reaper::get().get_audio_output(self.index - 1)
     }
 }
 
 pub struct MidiInputsIterator {
-    low: reaper_low::Reaper,
     index: usize,
     amount: usize,
 }
 impl MidiInputsIterator {
-    pub fn new(reaper: reaper_low::Reaper, num_inputs: usize) -> Self {
+    pub fn new(num_inputs: usize) -> Self {
         Self {
-            low: reaper,
             index: 0,
             amount: num_inputs,
         }
@@ -175,31 +223,18 @@ impl Iterator for MidiInputsIterator {
         if self.index >= self.amount {
             return None;
         }
-        let size = 1024;
-        let buf = make_string_buf(size as usize);
-        unsafe {
-            let status =
-                self.low.GetMIDIInputName(self.index as i32, buf, size);
-            if status == false {
-                return None;
-            }
-            let name =
-                as_string(buf).expect("Can not get name for the channel");
-            self.index += 1;
-            Some(HardwareSocket::new(self.index as u32 - 1, name))
-        }
+        self.index += 1;
+        Reaper::get().get_midi_input(self.index - 1)
     }
 }
 
 pub struct MidiOutputsIterator {
-    low: reaper_low::Reaper,
     index: usize,
     amount: usize,
 }
 impl MidiOutputsIterator {
-    pub fn new(reaper: reaper_low::Reaper, num_outputs: usize) -> Self {
+    pub fn new(num_outputs: usize) -> Self {
         Self {
-            low: reaper,
             index: 0,
             amount: num_outputs,
         }
@@ -211,18 +246,7 @@ impl Iterator for MidiOutputsIterator {
         if self.index >= self.amount {
             return None;
         }
-        let size = 1024;
-        let buf = make_string_buf(size as usize);
-        unsafe {
-            let status =
-                self.low.GetMIDIOutputName(self.index as i32, buf, size);
-            if status == false {
-                return None;
-            }
-            let name =
-                as_string(buf).expect("Can not get name for the channel");
-            self.index += 1;
-            Some(HardwareSocket::new(self.index as u32 - 1, name))
-        }
+        self.index += 1;
+        Reaper::get().get_midi_output(self.index - 1)
     }
 }

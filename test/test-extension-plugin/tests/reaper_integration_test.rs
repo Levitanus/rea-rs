@@ -65,6 +65,8 @@ fn run_integration_test_in_reaper(reaper_executable: &Path) -> Result<()> {
     println!("Starting REAPER ({:?})...", &reaper_executable);
     let mut child = Command::new(reaper_executable)
         .env("RUN_REAPER_RS_INTEGRATION_TEST", "true")
+        .arg("-newinst")
+        .arg("-new")
         // .arg("-splashlog")
         // .arg("splash.log")
         .spawn()?;

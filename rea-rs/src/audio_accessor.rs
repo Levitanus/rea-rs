@@ -1,30 +1,31 @@
 use std::marker::PhantomData;
 
-use reaper_medium::{self, ReaperPointer};
+use reaper_medium;
 
 use crate::{
     errors::{ReaperError, ReaperResult},
-    Mutable, Position, ProbablyMutable, Project, Reaper, WithReaperPtr,
+    KnowsProject, Mutable, Position, ProbablyMutable, Reaper, SampleAmount,
+    WithReaperPtr,
 };
 
-pub trait AudioAccessorParent<'a>
-where
-    Self: WithReaperPtr,
-{
-    fn project(&'a self) -> &'a Project;
-}
-
-pub struct AudioAccessor<'a, T: AudioAccessorParent<'a>, P: ProbablyMutable> {
+#[derive(Debug, PartialEq)]
+pub struct AudioAccessor<'a, T: KnowsProject, P: ProbablyMutable> {
     ptr: reaper_medium::AudioAccessor,
     parent: &'a T,
     should_check: bool,
     phantom: PhantomData<P>,
 }
-impl<'a, T: AudioAccessorParent<'a>, P: ProbablyMutable> WithReaperPtr
+impl<'a, T: KnowsProject, P: ProbablyMutable> WithReaperPtr<'a>
     for AudioAccessor<'a, T, P>
 {
-    fn get_pointer(&self) -> ReaperPointer {
-        ReaperPointer::AudioAccessor(self.ptr)
+    type Ptr = reaper_medium::AudioAccessor;
+    fn get_pointer(&self) -> Self::Ptr {
+        self.ptr
+    }
+    fn get(&self) -> Self::Ptr {
+        self.require_valid_2(self.parent.project())
+            .expect("Object no longer is valid.");
+        self.ptr
     }
     fn make_unchecked(&mut self) {
         self.should_check = false
@@ -36,9 +37,7 @@ impl<'a, T: AudioAccessorParent<'a>, P: ProbablyMutable> WithReaperPtr
         self.should_check
     }
 }
-impl<'a, T: AudioAccessorParent<'a>, P: ProbablyMutable>
-    AudioAccessor<'a, T, P>
-{
+impl<'a, T: KnowsProject, P: ProbablyMutable> AudioAccessor<'a, T, P> {
     pub fn new(parent: &'a T, ptr: reaper_medium::AudioAccessor) -> Self {
         Self {
             ptr,
@@ -46,11 +45,6 @@ impl<'a, T: AudioAccessorParent<'a>, P: ProbablyMutable>
             should_check: true,
             phantom: PhantomData,
         }
-    }
-    pub fn get(&self) -> reaper_medium::AudioAccessor {
-        self.require_valid_2(self.parent.project())
-            .expect("Object no longer is valid.");
-        self.ptr
     }
     pub fn has_state_changed(&self) -> bool {
         unsafe {
@@ -76,22 +70,42 @@ impl<'a, T: AudioAccessorParent<'a>, P: ProbablyMutable>
         }
     }
 
-    /// https://wiki.cockos.com/wiki/images/5/50/SWS_loudness_analysis_signal_flow_chart.png
+    /// Get buffer of samples with given absolute project position in samples.
+    ///
+    /// Returned buffer is `Vec<f64>` of length samples_per_channel *
+    /// n_channels: values placed sample by sample for each channel in a
+    /// turn. E.g. [spl1_ch1, spl1_ch2, spl1_ch3, spl2_ch1, spl2_ch2,
+    /// spl3_ch3]
+    ///
+    /// `start` is amount of samples since audio accessor start time.
+    ///
+    /// You can look at the routing scheme to see where AudioAccessor
+    /// is connected in case of track or take parenting:
+    /// <https://wiki.cockos.com/wiki/images/5/50/SWS_loudness_analysis_signal_flow_chart.png>
+    ///
+    /// Example from SWS:
+    /// <https://github.com/reaper-oss/sws/blob/bcc8fbc96f30a943bd04fb8030b4a03ea1ff7557/Breeder/BR_Loudness.cpp#L1020-L1079>
+    ///
+    /// # note
+    ///
+    /// Samples converted back to seconds as persized as possible,
+    /// but I still afraid a bit of this function being sample-accurate.
     pub fn get_sample_block_raw(
         &self,
-        start: Position,
+        start: SampleAmount,
         samples_per_channel: u32,
         n_channels: u8,
         samplerate: u32,
     ) -> ReaperResult<Option<Vec<f64>>> {
         let mut sample_buffer =
             vec![0.0; (samples_per_channel * n_channels as u32) as usize];
+        let start = start.as_time(samplerate) + self.start().as_duration();
         let result = unsafe {
             Reaper::get().low().GetAudioAccessorSamples(
                 self.get().as_ptr(),
                 samplerate as i32,
                 n_channels as i32,
-                start.into(),
+                start.as_secs_f64(),
                 samples_per_channel as i32,
                 sample_buffer.as_mut_ptr(),
             )
@@ -105,10 +119,8 @@ impl<'a, T: AudioAccessorParent<'a>, P: ProbablyMutable>
             _ => Ok(Some(sample_buffer)),
         }
     }
-
-    // pub fn iter_samples()
 }
-impl<'a, T: AudioAccessorParent<'a>> AudioAccessor<'a, T, Mutable> {
+impl<'a, T: KnowsProject> AudioAccessor<'a, T, Mutable> {
     /// Validates the current state of the audio accessor
     ///
     /// -- must ONLY call this from the main thread.
@@ -128,7 +140,7 @@ impl<'a, T: AudioAccessorParent<'a>> AudioAccessor<'a, T, Mutable> {
         unsafe { Reaper::get().low().AudioAccessorUpdate(self.get().as_ptr()) }
     }
 }
-impl<'a, T: AudioAccessorParent<'a>, P: ProbablyMutable> Drop
+impl<'a, T: KnowsProject, P: ProbablyMutable> Drop
     for AudioAccessor<'a, T, P>
 {
     fn drop(&mut self) {

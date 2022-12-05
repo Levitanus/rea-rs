@@ -1,23 +1,23 @@
 [package]
-name = "reaper-test-vst-plugin"
-version = "0.1.0"
 authors = ["Benjamin Klum <benjamin.klum@helgoboss.org>"]
 edition = "2021"
+name = "reaper-test-vst-plugin"
 publish = false
+version = "0.1.0"
 
 [dependencies]
-reaper-rx = { git = "https://github.com/helgoboss/reaper-rs" }
-reaper-high = { git = "https://github.com/helgoboss/reaper-rs" }
-reaper-medium = { git = "https://github.com/helgoboss/reaper-rs" }
-reaper-low = { git = "https://github.com/helgoboss/reaper-rs" }
-reaper-test = {path = "../test"}
 c_str_macro = "1.0.2"
-rxrust = { git = "https://github.com/rxRust/rxRust", rev = "349e50b3197e05926e2378ef8fc45cb67ad43b83" }
-vst = "*"
 futures-timer = "3.0.2"
+rea-rs = {path = "../../rea-rs"}
+reaper-high = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
+reaper-low = {workspace = true}
+reaper-medium = {workspace = true}
+reaper-rx = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
+reaper-test = {path = "../test"}
+rxrust = {git = "https://github.com/rxRust/rxRust", rev = "349e50b3197e05926e2378ef8fc45cb67ad43b83"}
 slog = "2.5.2"
-rea-rs = { path = "../../rea-rs" }
+vst = "*"
 
 [lib]
-name = "reaper_test_vst_plugin"
 crate-type = ["cdylib"]
+name = "reaper_test_vst_plugin"

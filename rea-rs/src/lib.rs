@@ -33,6 +33,9 @@ pub use marker::*;
 pub mod track;
 pub use track::*;
 
+pub mod send;
+pub use send::*;
+
 pub mod item;
 pub use item::*;
 
@@ -45,7 +48,10 @@ pub use fx::*;
 pub mod audio_accessor;
 pub use audio_accessor::*;
 
+pub mod envelope;
+pub use envelope::*;
+
 #[cfg(test)]
-mod  test;
+mod test;
 
 // TODO: get_active_midi_editor()

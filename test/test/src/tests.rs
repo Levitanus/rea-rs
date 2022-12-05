@@ -10,9 +10,11 @@ use crate::api::VersionRestriction::AllVersions;
 use crate::api::{step, TestStep};
 use c_str_macro::c_str;
 use rea_rs::{
-    AutomationMode, Color, CommandId, ExtValue, HardwareSocket,
-    MarkerRegionInfo, MessageBoxValue, Mutable, PlayRate, Position, Project,
-    Reaper, SampleAmount, Track, UndoFlags, WithReaperPtr,
+    AutomationMode, Color, CommandId, EnvelopeChunk, ExtValue, Fx,
+    GenericSend, GenericSendMut, HardwareSocket, MarkerRegionInfo,
+    MessageBoxValue, Mutable, Pan, PanLaw, PlayRate, Position, Project,
+    Reaper, SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
+    SendSourceChannels, Track, TrackSend, UndoFlags, Volume, WithReaperPtr,
 };
 use reaper_low::Swell;
 use std::collections::HashMap;
@@ -38,6 +40,7 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
         ext_state(),
         markers(),
         tracks(),
+        sends(),
     ]
     .into_iter();
     let user_interaction =
@@ -414,7 +417,7 @@ fn misc_types() -> TestStep {
 
 fn ext_state() -> TestStep {
     step(AllVersions, "ExtState", |_, _| {
-        info!("ExtState does not keep persistence between test sessions.");
+        info!("ExtState keep persistence between test sessions.");
         debug!("test on integer and in reaper");
         let mut state =
             ExtValue::new("test section", "first", Some(10), false, None);
@@ -443,9 +446,10 @@ fn ext_state() -> TestStep {
         state.delete();
         assert!(state.get().is_none());
         state.set(SampleAmount::new(3344));
-        // assert_eq!(state.get().expect("can not get value").get(), 3344);
-        // state.delete();
-        // assert!(state.get().is_none());
+
+        assert_eq!(state.get().expect("can not get value").get(), 3344);
+        state.delete();
+        assert!(state.get().is_none());
         Ok(())
     })
 }
@@ -513,35 +517,183 @@ fn tracks() -> TestStep {
     step(AllVersions, "Tracks", |_, _| {
         let rpr = Reaper::get();
         let mut pr = rpr.current_project();
+        debug!("add track 'first'");
         pr.add_track(0, "first");
         assert!(Track::<Mutable>::from_name(&pr, "first").is_some());
         let tr1 = pr.get_track(0).unwrap();
         assert_eq!(tr1.get_name()?, "first");
 
+        debug!("add track 'second'");
         let tr2 = pr.add_track(1, "second").index();
         let tr2 = pr.get_track(tr2).unwrap();
         assert_eq!(tr2.get_name()?, "second");
         assert_eq!(tr2.index(), 1);
         let tr2 = tr2.get();
-        let tr2 = Track::new_mut(&mut pr, tr2);
+        let tr2 = Track::<Mutable>::new(&mut pr, tr2);
         assert_eq!(tr2.index(), 1);
 
+        debug!("add track 'third'");
         let mut tr3 = pr.add_track(2, "third");
         assert_eq!(tr3.get_name()?, "third");
         tr3.set_name("third new name")?;
 
+        debug!("iter tracks mut");
         pr.iter_tracks_mut(|mut tr| {
             if tr.get_name()? != "second" {
                 return Ok(());
             }
+            debug!("set track {:?} name to 'new second'", tr);
             tr.set_name("new second")?;
             Ok(())
         })?;
 
+        debug!("try to find track with new name");
         assert_eq!(
             pr.get_track(1).ok_or("no track!")?.get_name()?,
             "new second"
         );
+
+        let pos = Position::from_quarters(4.0, &pr);
+
+        debug!("audio accessor");
+        let mut tr = pr.get_track_mut(0).expect("Here should be track.");
+        let aac = tr.add_audio_accessor()?;
+        assert_eq!(aac.end(), 0.0.into());
+        drop(aac);
+
+        debug!("FX");
+        let fx = tr
+            .add_fx("ReaEQ", None, false, false)
+            .expect("Can not add FX");
+        assert!(fx.is_enabled());
+        drop(fx);
+
+        debug!("Item");
+        let item = tr.add_item(pos, Duration::from_secs(2));
+        assert!(!item.is_selected());
+        let item =
+            tr.add_midi_item(Position::from(2.0), Duration::from_secs(2));
+        assert!(!item.is_selected());
+
+        debug!("Sends");
+        let mut send = tr.add_hardware_send();
+        assert_eq!(send.is_mute(), false);
+        send.set_mute(true)?;
+        assert_eq!(send.is_mute(), true);
+        tr.delete();
+
+        let tr1 = pr.get_track(0).unwrap();
+        let tr2 = pr.get_track(1).unwrap();
+        let send = TrackSend::create_new(&tr1, &tr2);
+        assert_eq!(
+            tr1,
+            send.source_track().expect("should return track.")
+        );
+        assert_eq!(tr2, send.dest_track().expect("should return track."));
+
+        Ok(())
+    })
+}
+
+fn sends() -> TestStep {
+    step(AllVersions, "Sends", |_, _| {
+        let rpr = Reaper::get();
+        // rpr.perform_action(40886, 0, None);
+        let mut pr = rpr.current_project();
+        for idx in pr.n_tracks()..1 {
+            let tr = pr.get_track_mut(idx - 1);
+            match tr {
+                None => continue,
+                Some(tr) => tr.delete(),
+            };
+        }
+        pr.add_track(0, "first");
+        pr.add_track(1, "second");
+        let tr1 = pr.get_track(0).unwrap();
+        let tr2 = pr.get_track(1).unwrap();
+        let mut send = TrackSend::create_new(&tr1, &tr2);
+        assert_eq!(
+            tr1,
+            send.source_track().expect("should return track.")
+        );
+        assert_eq!(tr2, send.dest_track().expect("should return track."));
+
+        assert_eq!(send.automation_mode(), AutomationMode::None);
+        send.set_automation_mode(AutomationMode::Touch)?;
+        assert_eq!(send.automation_mode(), AutomationMode::Touch);
+
+        assert_eq!(send.is_mute(), false);
+        send.set_mute(true)?;
+        assert_eq!(send.is_mute(), true);
+        send.set_mute(false)?;
+
+        assert_eq!(send.is_mono(), false);
+        send.set_mono(true)?;
+        assert_eq!(send.is_mono(), true);
+        send.set_mono(false)?;
+
+        assert_eq!(send.phase_flipped(), false);
+        send.set_phase(true)?;
+        assert_eq!(send.phase_flipped(), true);
+
+        assert_eq!(send.volume(), Volume::from(1.0));
+        send.set_volume(Volume::from_db(-20.0))?;
+        assert_eq!(0.1, send.volume().into());
+
+        assert_eq!(send.pan(), Pan::from(0.0));
+        send.set_pan(-0.5)?;
+        assert_eq!(send.pan().get(), -0.5);
+
+        assert_eq!(send.pan_law(), PanLaw::Default);
+        send.set_pan_law(PanLaw::Minus6dBCompensated)?;
+        assert_eq!(send.pan_law(), PanLaw::Minus6dBCompensated);
+
+        assert_eq!(send.send_mode(), SendMode::PostFader);
+        send.set_send_mode(SendMode::PostFx)?;
+        assert_eq!(send.send_mode(), SendMode::PostFx);
+        send.set_send_mode(SendMode::PreFx)?;
+        assert_eq!(send.send_mode(), SendMode::PreFx);
+
+        let ch = SendSourceChannels::new(2, true);
+        assert_eq!(
+            send.source_channels(),
+            SendSourceChannels::new(0, false).into()
+        );
+        send.set_source_channels(ch.into())?;
+        assert_eq!(send.source_channels(), ch.into());
+        send.set_source_channels(None)?;
+        assert_eq!(send.source_channels(), None);
+        send.set_source_channels(ch.into())?;
+
+        assert_eq!(
+            send.dest_channels(),
+            SendDestChannels::new(0, false, false).into()
+        );
+        send.set_dest_channels(ch.into())?;
+        assert_eq!(
+            send.dest_channels(),
+            SendDestChannels::from(ch).into()
+        );
+
+        let properties = SendMIDIProps::new(2, 5, 16, 16);
+        assert_eq!(
+            send.midi_properties(),
+            SendMIDIProps::new(0, 0, 0, 0).into()
+        );
+        send.set_midi_properties(properties)?;
+        assert_eq!(send.midi_properties(), properties.into());
+        send.set_midi_properties(None)?;
+        assert_eq!(send.midi_properties(), None);
+
+        send.get_envelope(EnvelopeChunk::Pan);
+        assert_eq!(tr1.n_sends(), 1);
+        assert_eq!(tr2.n_receives(), 1);
+
+        send.delete()?;
+
+        assert_eq!(tr1.n_sends(), 0);
+        assert_eq!(tr2.n_receives(), 0);
+
         Ok(())
     })
 }

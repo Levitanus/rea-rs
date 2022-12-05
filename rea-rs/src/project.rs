@@ -13,7 +13,7 @@ use c_str_macro::c_str;
 use int_enum::IntEnum;
 use log::{debug, warn};
 pub use reaper_medium::ProjectContext;
-use reaper_medium::{MediaItem, MediaTrack, ReaperPointer};
+use reaper_medium::{MediaItem, MediaTrack};
 use std::{
     ffi::CString, mem::MaybeUninit, path::PathBuf, ptr::NonNull,
     time::Duration,
@@ -29,13 +29,14 @@ pub struct Project {
     checked: bool,
     info_buf_size: usize,
 }
-impl WithReaperPtr for Project {
-    fn get_pointer(&self) -> ReaperPointer {
-        unsafe {
-            ReaperPointer::ReaProject(NonNull::new_unchecked(
-                self.context.to_raw(),
-            ))
-        }
+impl<'a> WithReaperPtr<'a> for Project {
+    type Ptr = reaper_medium::ReaProject;
+    fn get_pointer(&self) -> Self::Ptr {
+        unsafe { NonNull::new_unchecked(self.context.to_raw()) }
+    }
+    fn get(&self) -> Self::Ptr {
+        self.require_valid().unwrap();
+        self.get_pointer()
     }
     fn make_unchecked(&mut self) {
         self.checked = false;
@@ -444,7 +445,9 @@ impl<'a> Project {
     /// it's better to work with them through iteration.
     ///
     /// # Example
-    /// ```ignore
+    /// ```no_run
+    /// # use rea_rs::{Project, ProjectContext};
+    /// let project = Project::new(ProjectContext::CurrentProject);
     /// assert_eq!(
     ///     project
     ///     .iter_markers_and_regions()
@@ -915,8 +918,8 @@ impl<'a> Project {
     /// Overwrite default size of string buffer,
     /// used to set and get string values:
     ///
-    /// [Project::get_info_string]
-    /// [Project::set_info_string]
+    /// `Project::get_info_string`
+    /// `Project::set_info_string`
     ///
     /// # Example
     ///
@@ -1459,30 +1462,6 @@ pub mod project_info {
 }
 
 /// Returned by [Project::focused_fx]
-///
-/// # Example
-///
-/// ```no_run
-/// use rea_rs::{Project, Track, Item, Take, Fx, ProjectContext};
-/// let pr = Project::new(ProjectContext::CurrentProject);
-/// let res = pr.focused_fx().unwrap();
-/// let track = match res.track_index{
-///                 -1 => pr.get_master_track(),
-///                 idx => pr.get_track(idx as usize).unwrap(),
-///             };
-/// let item: Item;
-/// let take: Take;
-/// let fx: Fx;
-/// match res.item_index{
-/// //     None => fx = track.get_fx_by_index(res.fx_index).unwrap(),
-///     None => fx = todo!(),
-///     Some(item_index) => {
-///         item = pr.get_item(item_index).unwrap();
-///         take = item.get_take(res.take_index.unwrap()).unwrap();
-///         fx = take.get_fx_by_index(res.fx_index).unwrap();
-///     }
-/// };
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FocusedFxResult {
     pub track_index: i32,

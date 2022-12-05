@@ -10,7 +10,7 @@ use crate::{
     Project, Reaper,
 };
 
-pub(crate) trait WithNull: Clone {
+pub trait WithNull: Clone {
     fn with_null(&mut self) -> &String;
 }
 impl WithNull for String {
@@ -46,6 +46,9 @@ pub fn as_c_string<'a>(value: &'a String) -> CString {
     value
 }
 
+/// Convert null-terminated String to CStr.
+///
+/// You can use trait [WithNull].
 pub fn as_c_str<'a>(value: &'a String) -> &'a CStr {
     let value = CStr::from_bytes_with_nul(value.as_bytes()).unwrap();
     value
@@ -102,11 +105,14 @@ pub fn make_c_string_buf(size: usize) -> CString {
 /// has to return `false`.
 /// - After invocation of `make_checked`, method `should_check`
 /// has to return `true`.
-/// - Every method call should invoke either `require_valid`
+/// - `get()` call should invoke either `require_valid`
 /// or `require_valid_2`.
-pub trait WithReaperPtr {
+pub trait WithReaperPtr<'a> {
+    type Ptr: Into<ReaperPointer<'a>>;
     /// Get underlying ReaperPointer.
-    fn get_pointer(&self) -> ReaperPointer;
+    fn get_pointer(&self) -> Self::Ptr;
+    /// Get underlying ReaperPointer with validity check.
+    fn get(&self) -> Self::Ptr;
     /// Turn validity checks off.
     fn make_unchecked(&mut self);
     /// Turn validity checks on.

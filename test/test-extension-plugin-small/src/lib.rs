@@ -26,31 +26,11 @@ fn main(context: PluginContext) -> Result<(), Box<dyn Error>> {
                 "possible undo: {:?}",
                 rpr.current_project().next_undo()
             ));
-            let mut state =
-                ExtValue::new("small test", "first", Some(56), true, None);
-            rpr.show_console_msg(format!("{:?}", state.get()));
-            state.set(80);
-            rpr.show_console_msg(format!("{:?}", state.get()));
-            rpr.with_undo_block(
-                "New Undo",
-                UndoFlags::empty(),
-                Some(&rpr.current_project()),
-                || -> ReaperResult<()> {
-                    rpr.perform_action(CommandId::new(40001), 0, None);
-                    Ok(())
-                },
-            )?;
-            rpr.show_console_msg("render format:");
-            rpr.show_console_msg(
-                rpr.current_project().get_render_format(false)?,
-            );
-            rpr.show_console_msg("render project directory:");
-            rpr.show_console_msg(format!(
-                "{:?}",
-                rpr.current_project().get_render_directory()?
-            ));
-            rpr.current_project()
-                .set_track_group_name(3, "my group (maybe, flutes)")?;
+            let mut pr = rpr.current_project();
+            let mut tr = pr.get_track_mut(0).unwrap();
+            let (ch, socket) = tr.midi_hardware_out().unwrap();
+            debug!("{}, {:?}", ch, socket);
+            tr.set_midi_hardware_out(3, socket.into())?;
             Ok(())
         },
         ActionKind::NotToggleable,

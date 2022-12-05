@@ -1,5 +1,5 @@
 use crate::{
-    utils::make_c_string_buf, Mutable, ProbablyMutable, Reaper, Track, Take,
+    utils::make_c_string_buf, Mutable, ProbablyMutable, Reaper, Track, Take, WithReaperPtr,
 };
 
 pub trait Fx<T: ProbablyMutable>

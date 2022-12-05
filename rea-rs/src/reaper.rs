@@ -183,6 +183,16 @@ impl Into<reaper_medium::CommandId> for CommandId {
         reaper_medium::CommandId::new(self.get())
     }
 }
+impl From<u32> for CommandId {
+    fn from(id: u32) -> Self {
+        Self { id }
+    }
+}
+impl Into<u32> for CommandId {
+    fn into(self) -> u32 {
+        self.id
+    }
+}
 
 pub struct RegisteredAction {
     // For identifying the registered command (= the functions to be executed)

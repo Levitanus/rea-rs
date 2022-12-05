@@ -1,8 +1,10 @@
-use std::{marker::PhantomData, ptr::NonNull};
+use std::{marker::PhantomData, ptr::NonNull, time::Duration};
 
-use reaper_medium::{MediaItem, MediaItemTake, ReaperPointer};
+use reaper_medium::{MediaItem, MediaItemTake};
 
-use crate::{Mutable, ProbablyMutable, Project, Reaper, Take, WithReaperPtr};
+use crate::{
+    Mutable, Position, ProbablyMutable, Project, Reaper, Take, WithReaperPtr,
+};
 
 #[derive(Debug, PartialEq)]
 pub struct Item<'a, T: ProbablyMutable> {
@@ -11,9 +13,14 @@ pub struct Item<'a, T: ProbablyMutable> {
     should_check: bool,
     phantom_mut: PhantomData<T>,
 }
-impl<'a, T: ProbablyMutable> WithReaperPtr for Item<'a, T> {
-    fn get_pointer(&self) -> reaper_medium::ReaperPointer {
-        ReaperPointer::MediaItem(self.ptr)
+impl<'a, T: ProbablyMutable> WithReaperPtr<'a> for Item<'a, T> {
+    type Ptr = MediaItem;
+    fn get_pointer(&self) -> Self::Ptr {
+        self.ptr
+    }
+    fn get(&self) -> Self::Ptr {
+        self.require_valid_2(self.project).unwrap();
+        self.ptr
     }
     fn make_unchecked(&mut self) {
         self.should_check = false;
@@ -34,10 +41,6 @@ impl<'a, T: ProbablyMutable> Item<'a, T> {
             phantom_mut: PhantomData,
         }
     }
-    pub fn get(&self) -> MediaItem {
-        self.require_valid_2(self.project).unwrap();
-        self.ptr
-    }
     pub fn get_take(&'a self, index: usize) -> Option<Take<'a, T>> {
         let ptr = self.get_take_ptr(index)?;
         Some(Take::new(ptr, self))
@@ -57,6 +60,9 @@ impl<'a, T: ProbablyMutable> Item<'a, T> {
     pub fn parent_project(&self) -> &Project {
         self.project
     }
+    pub fn is_selected(&self) -> bool {
+        unsafe { Reaper::get().low().IsMediaItemSelected(self.get().as_ptr()) }
+    }
 }
 impl<'a> Item<'a, Mutable> {
     pub fn get_take_mut(
@@ -65,5 +71,31 @@ impl<'a> Item<'a, Mutable> {
     ) -> Option<Take<'a, Mutable>> {
         let ptr = self.get_take_ptr(index)?;
         Some(Take::new(ptr, self))
+    }
+
+    pub fn set_position(&mut self, position: Position) {
+        unsafe {
+            Reaper::get().low().SetMediaItemPosition(
+                self.get().as_ptr(),
+                position.into(),
+                true,
+            );
+        }
+    }
+    pub fn set_length(&mut self, length: Duration) {
+        unsafe {
+            Reaper::get().low().SetMediaItemLength(
+                self.get().as_ptr(),
+                length.as_secs_f64(),
+                true,
+            );
+        }
+    }
+    pub fn set_selected(&self, selected: bool) {
+        unsafe {
+            Reaper::get()
+                .low()
+                .SetMediaItemSelected(self.get().as_ptr(), selected)
+        }
     }
 }

@@ -2,7 +2,6 @@ use crate::{
     utils::{as_c_str, make_c_string_buf, WithNull},
     Project, Reaper,
 };
-use log::debug;
 use serde::de::DeserializeOwned;
 pub use serde::{Deserialize, Serialize};
 use std::ffi::{CStr, CString};
@@ -32,8 +31,9 @@ use std::ffi::{CStr, CString};
 ///
 /// # Usage
 ///
-/// ```ignore
-/// let state =
+/// ```no_run
+/// # use rea_rs::ExtValue;
+/// let mut state =
 ///     ExtValue::new("test section", "first", Some(10), true, None);
 /// assert_eq!(state.get().expect("can not get value"), 10);
 /// state.set(56);
@@ -126,7 +126,6 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + std::fmt::Debug>
                         as_c_str(&self.key()).as_ptr(),
                     );
                     let value: &[u8] = CStr::from_ptr(value).to_bytes();
-                    debug!("{:?}", value);
                     let value: T = rmp_serde::decode::from_slice(value)
                         .expect("This value was not serialized by ExtState");
                     Some(value)
@@ -137,30 +136,28 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + std::fmt::Debug>
 
     fn value_from_project<'b>(&self, project: &Project) -> Option<T> {
         let low = Reaper::get().low();
-        unsafe {
-            let (section, key) = (
-                as_c_str(&self.section()).as_ptr(),
-                as_c_str(&self.key()).as_ptr(),
-            );
-            // let mut buf = vec![0_i8; self.buf_size];
-            let buf = make_c_string_buf(self.buf_size);
-            let ptr = buf.into_raw();
-            let status = low.GetProjExtState(
+        let (section_str, key_str) = (self.section(), self.key());
+        let (section, key) = (as_c_str(&section_str), as_c_str(&key_str));
+        // let mut buf = vec![0_i8; self.buf_size];
+        let buf = make_c_string_buf(self.buf_size);
+        let ptr = buf.into_raw();
+        let status = unsafe {
+            low.GetProjExtState(
                 project.context().to_raw(),
-                section,
-                key,
+                section.as_ptr(),
+                key.as_ptr(),
                 ptr,
                 self.buf_size as i32,
-            );
-            if status <= 0 {
-                return None;
-            }
-            let value = CString::from_raw(ptr);
-            let value = value.as_bytes();
-            let value: T = rmp_serde::decode::from_slice(value)
-                .expect("This value was not serialized by ExtState");
-            Some(value)
+            )
+        };
+        if status <= 0 {
+            return None;
         }
+        let value = unsafe { CString::from_raw(ptr) };
+        let value = value.as_bytes();
+        let value: T = rmp_serde::decode::from_slice(value)
+            .expect("This value was not serialized by ExtState");
+        Some(value)
     }
 
     /// Set the value to ext state.
@@ -188,23 +185,21 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + std::fmt::Debug>
 
     fn value_to_project(&self, project: &Project, value: T) {
         let low = Reaper::get().low();
-        unsafe {
-            let (section, key) = (
-                as_c_str(&self.section()).as_ptr(),
-                as_c_str(&self.key()).as_ptr(),
-            );
-            let mut value = rmp_serde::encode::to_vec(&value)
-                .expect("can not serialize value");
-            value.push(0);
-            let value = CString::from_vec_with_nul(value)
-                .expect("can not serialize to string");
-            let _result = low.SetProjExtState(
+        let (section_str, key_str) = (self.section(), self.key());
+        let (section, key) = (as_c_str(&section_str), as_c_str(&key_str));
+        let mut value = rmp_serde::encode::to_vec(&value)
+            .expect("can not serialize value");
+        value.push(0);
+        let value = CString::from_vec_with_nul(value)
+            .expect("can not serialize to string");
+        let _result = unsafe {
+            low.SetProjExtState(
                 project.context().to_raw(),
-                section,
-                key,
+                section.as_ptr(),
+                key.as_ptr(),
                 value.into_raw(),
-            );
-        }
+            )
+        };
     }
 
     /// Erase ext value, but keep the object.

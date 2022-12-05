@@ -1,14 +1,19 @@
+use crate::{
+    errors::ReaperResult, Direction, Project, Reaper, Take, WithReaperPtr,
+};
 use reaper_medium::PositionInSeconds;
 use serde_derive::{Deserialize, Serialize};
-
-use crate::{Direction, Project, Reaper};
-use std::{mem::MaybeUninit, time::Duration};
+use std::{
+    mem::MaybeUninit,
+    ops::{Add, Sub},
+    time::Duration,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Color {
-    r: u8,
-    g: u8,
-    b: u8,
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
 }
 impl Color {
     /// New color from r, g, b (0..255).
@@ -51,6 +56,7 @@ impl Color {
     }
 }
 
+/// Good helper to be sample-accurate.
 #[derive(
     Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize,
 )]
@@ -70,8 +76,14 @@ impl SampleAmount {
             amount: amount as u32,
         }
     }
+    pub fn as_time(self, samplerate: u32) -> Duration {
+        Duration::from_micros(
+            self.amount as u64 * 1_000_000 / samplerate as u64,
+        )
+    }
 }
 
+/// Represents Audio\MIDI physical out pin.
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct HardwareSocket {
     index: u32,
@@ -166,23 +178,148 @@ impl Position {
             ))
         }
     }
-    // pub fn as_ppq(&self, take: Take) -> u32 {
-    //     unsafe {
-    //         Reaper::get().low().MIDI_GetPPQPosFromProjTime(
-    //             take.get().as_mut(),
-    //             self.as_duration().as_secs_f64(),
-    //         ) as u32
-    //     }
-    // }
+    pub fn as_ppq<T: ProbablyMutable>(&self, take: Take<T>) -> u32 {
+        unsafe {
+            Reaper::get().low().MIDI_GetPPQPosFromProjTime(
+                take.get().as_mut(),
+                self.as_duration().as_secs_f64(),
+            ) as u32
+        }
+    }
 
-    // pub fn from_ppq(ppq: impl Into<u32>, take: Take) -> Self {
-    //     unsafe {
-    //         Self::from(Reaper::get().low().MIDI_GetProjTimeFromPPQPos(
-    //             take.get().as_mut(),
-    //             ppq.into() as f64,
-    //         ))
-    //     }
-    // }
+    pub fn from_ppq<T: ProbablyMutable>(
+        ppq: impl Into<u32>,
+        take: Take<T>,
+    ) -> Self {
+        unsafe {
+            Self::from(Reaper::get().low().MIDI_GetProjTimeFromPPQPos(
+                take.get().as_mut(),
+                ppq.into() as f64,
+            ))
+        }
+    }
+}
+impl Add for Position {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        let dur = self.as_duration + rhs.as_duration;
+        Self::from(dur)
+    }
+}
+impl Sub for Position {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        let dur = self.as_duration - rhs.as_duration;
+        Self::from(dur)
+    }
+}
+
+pub trait GetLength {
+    fn get_length(&self, start: Position) -> Duration;
+}
+
+impl GetLength for Position {
+    fn get_length(&self, start: Position) -> Duration {
+        if start > *self {
+            panic!("end is earlier, than start!");
+        }
+        let length = *self - start;
+        length.as_duration()
+    }
+}
+impl GetLength for Duration {
+    fn get_length(&self, _start: Position) -> Duration {
+        *self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Volume {
+    raw: f64,
+}
+impl Volume {
+    pub fn get(&self) -> f64 {
+        self.raw
+    }
+    pub fn from_db(db: f64) -> Self {
+        Self {
+            raw: 10.0_f64.powf(db / 20.0),
+        }
+    }
+    pub fn as_db(&self) -> f64 {
+        20.0 * self.raw.log10()
+    }
+}
+impl From<f64> for Volume {
+    fn from(value: f64) -> Self {
+        if value < 0.0 {
+            panic!("Volume can't be < 0. Got: {}", value);
+        }
+        Self { raw: value }
+    }
+}
+impl Into<f64> for Volume {
+    fn into(self) -> f64 {
+        self.raw
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Pan {
+    raw: f64,
+}
+impl Pan {
+    pub fn get(&self) -> f64 {
+        self.raw
+    }
+}
+impl From<f64> for Pan {
+    fn from(value: f64) -> Self {
+        if value < -1.0 && value > 1.0 {
+            panic!("Pan has to be in range of -1.0 .. 1.0. Got: {}", value);
+        }
+        Self { raw: value }
+    }
+}
+impl Into<f64> for Pan {
+    fn into(self) -> f64 {
+        self.raw
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub enum PanLaw {
+    Default,
+    Minus6dB,
+    Minus3dB,
+    Zero,
+    Minus3dBCompensated,
+    Minus6dBCompensated,
+}
+impl From<f64> for PanLaw {
+    fn from(value: f64) -> Self {
+        match value {
+            x if x < 0.0 => Self::Default,
+            x if x == 0.5 => Self::Minus6dB,
+            x if x == 0.707 => Self::Minus3dB,
+            x if x == 1.0 => Self::Zero,
+            x if x == 1.414 => Self::Minus3dBCompensated,
+            x if x == 2.0 => Self::Minus6dBCompensated,
+            _ => panic!("Can not infer PanLaw from f64"),
+        }
+    }
+}
+impl Into<f64> for PanLaw {
+    fn into(self) -> f64 {
+        match self {
+            Self::Default => -1.0,
+            Self::Minus6dB => 0.5,
+            Self::Minus3dB => 0.707,
+            Self::Zero => 1.0,
+            Self::Minus3dBCompensated => 1.414,
+            Self::Minus6dBCompensated => 2.0,
+        }
+    }
 }
 
 /// Project playback rate.
@@ -343,6 +480,10 @@ impl<'a> TimeRange<'a> {
     }
 }
 
+/// Straightforward TimeSignature, that can be used as
+/// [Project] parameter.
+/// 
+/// Not sure it should be used in complex musical analysis.
 pub struct TimeSignature {
     numerator: u32,
     denominator: u32,
@@ -359,10 +500,50 @@ impl TimeSignature {
     }
 }
 
-pub trait ProbablyMutable{}
+/// Generic mutability marker, that allows to
+/// mutate only one Reaper object at time.
+/// 
+/// Used as generic parameter (usually as marker),
+/// that resolved to [Mutable] or [Immutable].
+pub trait ProbablyMutable {}
+/// Guarantees, that only this object and its
+/// child (and sub_child) can be mutated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mutable;
 impl ProbablyMutable for Mutable {}
+/// Guarantees, that object is immutable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Immutable;
 impl ProbablyMutable for Immutable {}
+
+pub trait KnowsProject {
+    fn project(&self) -> &Project;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GUID {
+    raw: reaper_low::raw::GUID,
+}
+impl Into<String> for GUID {
+    fn into(self) -> String {
+        Reaper::get()
+            .medium()
+            .guid_to_string(&self.raw)
+            .into_string()
+    }
+}
+impl ToString for GUID {
+    fn to_string(&self) -> String {
+        self.clone().into()
+    }
+}
+impl GUID {
+    pub fn from_string(value: String) -> ReaperResult<Self> {
+        let ptr = Reaper::get().medium().string_to_guid(value)?;
+        Ok(Self { raw: ptr })
+    }
+    pub fn new() -> Self {
+        let ptr = Reaper::get().medium().gen_guid();
+        Self { raw: ptr }
+    }
+}

@@ -36,10 +36,11 @@ impl Reaper {
     /// If project is None — will perform on current project.
     pub fn perform_action(
         &self,
-        action_id: CommandId,
+        action_id: impl Into<CommandId>,
         flag: i32,
         project: Option<&Project>,
     ) {
+        let action_id = action_id.into();
         let current: Project;
         let project = match project {
             None => {
@@ -62,7 +63,7 @@ impl Reaper {
 
     /// Open new project tab.
     ///
-    /// To open project in new tab use [`open_project`]
+    /// To open project in new tab use [Reaper::open_project]
     pub fn add_project_tab(&self, make_current_project: bool) -> Project {
         match make_current_project {
             false => {
@@ -447,7 +448,7 @@ impl Reaper {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
     /// # let session = reaper_medium::ReaperSession::default();
     /// use reaper_medium::ProjectContext::CurrentProject;
     ///
