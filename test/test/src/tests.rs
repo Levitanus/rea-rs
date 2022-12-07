@@ -80,11 +80,7 @@ fn global_instances() -> TestStep {
                 c_str!("- Hello from low-level API\n").as_ptr(),
             );
         }
-        // Low-level SWELL
-        let swell = Swell::load(*medium_reaper.low().plugin_context());
-        println!("reaper_low::Swell {:?}", &swell);
-        Swell::make_available_globally(swell);
-        let _ = Swell::get();
+        
         // Medium-level REAPER
         reaper_medium::Reaper::make_available_globally(medium_reaper.clone());
         reaper_medium::Reaper::make_available_globally(medium_reaper.clone());
