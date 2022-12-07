@@ -11,12 +11,11 @@ use crate::api::{step, TestStep};
 use c_str_macro::c_str;
 use rea_rs::{
     AutomationMode, Color, CommandId, EnvelopeChunk, ExtValue, Fx,
-    GenericSend, GenericSendMut, HardwareSocket, MarkerRegionInfo,
+    GenericSend, GenericSendMut, HardwareSocket, Immutable, MarkerRegionInfo,
     MessageBoxValue, Mutable, Pan, PanLaw, PlayRate, Position, Project,
     Reaper, SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
     SendSourceChannels, Track, TrackSend, UndoFlags, Volume, WithReaperPtr,
 };
-use reaper_low::Swell;
 use std::collections::HashMap;
 use std::fs::canonicalize;
 use std::iter;
@@ -32,7 +31,7 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
     // In theory all steps could be declared inline. But that makes the IDE
     // become terribly slow.
     let steps_a = vec![
-        global_instances(),
+        // global_instances(),
         action(),
         projects(),
         misc(),
@@ -80,7 +79,7 @@ fn global_instances() -> TestStep {
                 c_str!("- Hello from low-level API\n").as_ptr(),
             );
         }
-        
+
         // Medium-level REAPER
         reaper_medium::Reaper::make_available_globally(medium_reaper.clone());
         reaper_medium::Reaper::make_available_globally(medium_reaper.clone());
@@ -544,10 +543,7 @@ fn tracks() -> TestStep {
         })?;
 
         debug!("try to find track with new name");
-        assert_eq!(
-            pr.get_track(1).ok_or("no track!")?.name()?,
-            "new second"
-        );
+        assert_eq!(pr.get_track(1).ok_or("no track!")?.name()?, "new second");
 
         let pos = Position::from_quarters(4.0, &pr);
 
@@ -581,11 +577,20 @@ fn tracks() -> TestStep {
         let tr1 = pr.get_track(0).unwrap();
         let tr2 = pr.get_track(1).unwrap();
         let send = TrackSend::create_new(&tr1, &tr2);
-        assert_eq!(
-            tr1,
-            send.source_track().expect("should return track.")
-        );
+        assert_eq!(tr1, send.source_track().expect("should return track."));
         assert_eq!(tr2, send.dest_track().expect("should return track."));
+        let mut tr2 = pr.get_track_mut(1).unwrap();
+        assert_eq!(tr2.index(), 1);
+        debug!("set 2nd track index to 0");
+        tr2.set_index(0)?;
+        assert_eq!(tr2.index(), 0);
+        assert_eq!(
+            Track::<Immutable>::from_name(&pr, "first")
+                .expect("Wrong track name.")
+                .index(),
+            1
+        );
+        let mut tr2 = pr.get_track_mut(0).unwrap();
 
         Ok(())
     })
@@ -608,10 +613,7 @@ fn sends() -> TestStep {
         let tr1 = pr.get_track(0).unwrap();
         let tr2 = pr.get_track(1).unwrap();
         let mut send = TrackSend::create_new(&tr1, &tr2);
-        assert_eq!(
-            tr1,
-            send.source_track().expect("should return track.")
-        );
+        assert_eq!(tr1, send.source_track().expect("should return track."));
         assert_eq!(tr2, send.dest_track().expect("should return track."));
 
         assert_eq!(send.automation_mode(), AutomationMode::None);
@@ -666,10 +668,7 @@ fn sends() -> TestStep {
             SendDestChannels::new(0, false, false).into()
         );
         send.set_dest_channels(ch.into())?;
-        assert_eq!(
-            send.dest_channels(),
-            SendDestChannels::from(ch).into()
-        );
+        assert_eq!(send.dest_channels(), SendDestChannels::from(ch).into());
 
         let properties = SendMIDIProps::new(2, 5, 16, 16);
         assert_eq!(

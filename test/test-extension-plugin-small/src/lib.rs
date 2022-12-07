@@ -1,7 +1,5 @@
 use log::{debug, info};
-use rea_rs::{
-    errors::ReaperResult, ActionKind, CommandId, ExtValue, Reaper, UndoFlags,
-};
+use rea_rs::{errors::ReaperResult, ActionKind, Reaper};
 use reaper_low::PluginContext;
 use reaper_macros::reaper_extension_plugin;
 use std::error::Error;
