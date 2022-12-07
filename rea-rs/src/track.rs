@@ -15,10 +15,10 @@ use crate::{
     utils::{as_c_str, as_mut_i8, as_string_mut, make_c_string_buf, WithNull},
     AudioAccessor, AutomationMode, Color, Fx, GenericSend, GetLength,
     HardwareSend, HardwareSocket, Immutable, Item, KnowsProject, Mutable, Pan,
-    PanLaw, PanLawMode, Position, ProbablyMutable, Project, Reaper,
-    RecInput, RecMode, RecOutMode, SampleAmount, SendIntType,
-    SoloMode, TimeMode, TrackFX, TrackFolderState, TrackReceive, TrackSend,
-    VUMode, Volume, WithReaperPtr,
+    PanLaw, PanLawMode, Position, ProbablyMutable, Project, Reaper, RecInput,
+    RecMode, RecOutMode, SampleAmount, SendIntType, SoloMode, TimeMode,
+    TrackFX, TrackFolderState, TrackReceive, TrackSend, VUMode, Volume,
+    WithReaperPtr,
 };
 
 #[derive(Debug, PartialEq)]
@@ -153,25 +153,29 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         RecInput::from_raw(self.get_info_value("I_RECINPUT"))
             .expect("Can not convert to RecordInput.")
     }
+
     pub fn rec_mode(&self) -> RecMode {
         RecMode::from_int(self.get_info_value("I_RECMODE") as i32)
             .expect("Can not convert to RecordingMode")
     }
+
+    #[deprecated = "This function probably, doesn't work: \
+        Can not found GUI for the setting."]
     /// If rec_mode records output. Otherwise — None.
     pub fn rec_out_mode(&self) -> Option<RecOutMode> {
-        RecOutMode::from_raw(
-            self.get_info_value("I_RECMODE_FLAGS") as u32
-        )
+        RecOutMode::from_raw(self.get_info_value("I_RECMODE_FLAGS") as u32)
     }
     pub fn rec_monitoring(&self) -> RecMonitoring {
         let mode = self.get_info_value("I_RECMON") as u32;
         let monitor_items = self.get_info_value("I_RECMONITEMS") != 0.0;
         RecMonitoring::new(mode, monitor_items)
     }
+    #[deprecated = "This function fails in tests."]
     /// True if automatically armed when track is selected.
     pub fn auto_rec_arm(&self) -> bool {
         self.get_info_value("B_AUTO_RECARM") != 0.0
     }
+    #[deprecated = "Can not find function in GUI, can not set value."]
     pub fn vu_mode(&self) -> VUMode {
         VUMode::from_raw(self.get_info_value("I_VUMODE") as u32)
     }
@@ -599,20 +603,16 @@ impl<'a> Track<'a, Mutable> {
         };
         self.set_info_value("I_RECARM", value)
     }
-    pub fn set_rec_input(
-        &mut self,
-        rec_input: RecInput,
-    ) -> ReaperResult<()> {
+    pub fn set_rec_input(&mut self, rec_input: RecInput) -> ReaperResult<()> {
         self.set_info_value("I_RECINPUT", rec_input.to_raw() as f64)
     }
     pub fn set_rec_mode(&mut self, rec_mode: RecMode) -> ReaperResult<()> {
         self.set_info_value("I_RECMODE", rec_mode.int_value() as f64)
     }
+
+    #[deprecated = "This function fails in tests."]
     /// If rec_mode records output. Otherwise — None.
-    pub fn set_rec_out_mode(
-        &mut self,
-        flags: RecOutMode,
-    ) -> ReaperResult<()> {
+    pub fn set_rec_out_mode(&mut self, flags: RecOutMode) -> ReaperResult<()> {
         self.set_info_value("I_RECMODE_FLAGS", flags.to_raw() as f64)
     }
     pub fn set_rec_monitoring(
@@ -622,6 +622,8 @@ impl<'a> Track<'a, Mutable> {
         self.set_info_value("I_RECMON", value.mode as f64)?;
         self.set_info_value("I_RECMONITEMS", value.monitor_items as i32 as f64)
     }
+
+    #[deprecated = "This function fails in tests."]
     /// True if automatically armed when track is selected.
     ///
     /// If track is already selected and not rec armed — it will not
@@ -629,7 +631,10 @@ impl<'a> Track<'a, Mutable> {
     pub fn set_auto_rec_arm(&mut self, value: bool) -> ReaperResult<()> {
         self.set_info_value("B_AUTO_RECARM", value as i32 as f64)
     }
+
+    #[deprecated = "Can not find function in GUI, can not set value."]
     pub fn set_vu_mode(&mut self, value: VUMode) -> ReaperResult<()> {
+        debug!("{:?}", value.to_raw());
         self.set_info_value("I_VUMODE", value.to_raw() as f64)
     }
     pub fn set_n_channels(&mut self, amount: usize) -> ReaperResult<()> {

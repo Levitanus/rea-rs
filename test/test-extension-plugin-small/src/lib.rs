@@ -26,9 +26,7 @@ fn main(context: PluginContext) -> Result<(), Box<dyn Error>> {
             ));
             let mut pr = rpr.current_project();
             let mut tr = pr.get_track_mut(0).unwrap();
-            let (ch, socket) = tr.midi_hardware_out().unwrap();
-            debug!("{}, {:?}", ch, socket);
-            tr.set_midi_hardware_out(3, socket.into())?;
+            debug!("{:?}", tr.rec_out_mode());
             Ok(())
         },
         ActionKind::NotToggleable,

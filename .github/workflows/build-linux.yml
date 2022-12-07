@@ -1,4 +1,4 @@
-name: Rust-linux
+name: linux with tests
 
 on:
   push:

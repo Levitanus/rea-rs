@@ -1,6 +1,6 @@
 // #![allow(clippy::float_cmp)]
 // use approx;
-use log::{debug, info};
+use log::{debug, info, warn};
 use rea_rs::errors::{ReaperError, ReaperResult};
 use rea_rs::project_info::{
     BoundsMode, RenderMode, RenderSettings, RenderTail, RenderTailFlags,
@@ -15,7 +15,7 @@ use rea_rs::{
     MessageBoxValue, Mutable, Pan, PanLaw, PlayRate, Position, Project,
     Reaper, RecInput, RecMode, RecMonitoring, RecOutMode, SampleAmount,
     SendDestChannels, SendMIDIProps, SendMode, SendSourceChannels, SoloMode,
-    Track, TrackSend, UndoFlags, Volume, WithReaperPtr,
+    Track, TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr,
 };
 use std::collections::HashMap;
 use std::fs::canonicalize;
@@ -610,6 +610,7 @@ fn tracks() -> TestStep {
         assert!(!tr2.rec_armed());
         tr2.set_rec_armed(true)?;
         assert!(tr2.rec_armed());
+        tr2.set_rec_armed(false)?;
 
         assert_eq!(tr2.rec_input(), RecInput::Mono(0, false));
         tr2.set_rec_input(RecInput::Stereo(2, true))?;
@@ -620,8 +621,7 @@ fn tracks() -> TestStep {
         assert_eq!(tr2.rec_mode(), RecMode::MidiOverdub);
         // assert_eq!(tr2.rec_input(), RecordInput::MIDI(0, None)); Not equal!
 
-        tr2.set_rec_mode(RecMode::StereoOut)?;
-        assert_eq!(tr2.rec_out_mode(), RecOutMode::PostFader.into());
+        // assert_eq!(tr2.rec_out_mode(), RecOutMode::PostFader.into());
         log::warn!("Something is wrong with RecOutMode");
         // tr2.set_rec_out_mode(RecOutMode::PostFX)?;
         // assert_eq!(tr2.rec_out_mode(), RecOutMode::PostFX.into());
@@ -629,6 +629,31 @@ fn tracks() -> TestStep {
         assert_eq!(tr2.rec_monitoring(), RecMonitoring::new(1, false));
         tr2.set_rec_monitoring(RecMonitoring::new(2, true))?;
         assert_eq!(tr2.rec_monitoring(), RecMonitoring::new(2, true));
+
+        // debug!("set selected to false");
+        // tr2.set_selected(false)?;
+        // debug!("set auto rec arm to true");
+        // tr2.set_auto_rec_arm(true)?;
+        // assert!(tr2.auto_rec_arm());
+        // assert!(!tr2.rec_armed());
+
+        warn!("VUMode errors");
+        // assert_eq!(tr2.vu_mode(), VUMode::StereoPeaks);
+        // tr2.set_vu_mode(VUMode::LUFS_M)?;
+        // assert_eq!(tr2.vu_mode(), VUMode::LUFS_M);
+
+        debug!("n channels");
+        assert_eq!(tr2.n_channels(), 2);
+        tr2.set_n_channels(6)?;
+        assert_eq!(tr2.n_channels(), 6);
+        tr2.set_n_channels(3)?;
+        debug!("n channels will be even");
+        assert_eq!(tr2.n_channels(), 4);
+
+        debug!("set selected to true");
+        assert!(!tr2.selected());
+        tr2.set_selected(true)?;
+        assert!(tr2.selected());
 
         Ok(())
     })

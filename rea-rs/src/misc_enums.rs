@@ -228,13 +228,13 @@ impl VUMode {
         match self {
             Self::Disabled => 1,
             Self::LUFS_OnChannels_1_2 => 32,
-            Self::StereoPeaks => 0 | 30,
-            Self::MultichannelPeaks => 2 | 30,
-            Self::StereoRMS => 4 | 30,
-            Self::CombinedRMS => 8 | 30,
-            Self::LUFS_M => 12 | 30,
-            Self::LUFS_S_ReadoutMax => 16 | 30,
-            Self::LUFS_S_ReadoutCurrent => 20 | 30,
+            Self::StereoPeaks => 0,
+            Self::MultichannelPeaks => 2,
+            Self::StereoRMS => 4,
+            Self::CombinedRMS => 8,
+            Self::LUFS_M => 12,
+            Self::LUFS_S_ReadoutMax => 16,
+            Self::LUFS_S_ReadoutCurrent => 20,
         }
     }
 }
