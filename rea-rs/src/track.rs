@@ -16,12 +16,10 @@ use crate::{
     AudioAccessor, AutomationMode, Color, Fx, GenericSend, GetLength,
     HardwareSend, HardwareSocket, Immutable, Item, KnowsProject, Mutable, Pan,
     PanLaw, PanLawMode, Position, ProbablyMutable, Project, Reaper,
-    RecordInput, RecordMode, RecordingOutMode, SampleAmount, SendIntType,
-    TimeMode, TrackFX, TrackFolderState, TrackReceive, TrackSend, VUMode,
-    Volume, WithReaperPtr,
+    RecInput, RecMode, RecOutMode, SampleAmount, SendIntType,
+    SoloMode, TimeMode, TrackFX, TrackFolderState, TrackReceive, TrackSend,
+    VUMode, Volume, WithReaperPtr,
 };
-
-pub use reaper_medium::SoloMode;
 
 #[derive(Debug, PartialEq)]
 pub struct Track<'a, T: ProbablyMutable> {
@@ -134,7 +132,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     }
     pub fn solo(&self) -> SoloMode {
         let value = self.get_info_value("I_SOLO");
-        SoloMode::from_raw(value as i32)
+        SoloMode::from_int(value as i32).expect("Can not convert to SoloMode.")
     }
     /// when set, if anything else is soloed and this track is not muted, this
     /// track acts soloed
@@ -151,24 +149,24 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
             x => panic!("Unexpected result: {}", x),
         }
     }
-    pub fn rec_input(&self) -> RecordInput {
-        RecordInput::from_raw(self.get_info_value("I_RECINPUT"))
-            .expect("Can not convert to RecordingInput.")
+    pub fn rec_input(&self) -> RecInput {
+        RecInput::from_raw(self.get_info_value("I_RECINPUT"))
+            .expect("Can not convert to RecordInput.")
     }
-    pub fn rec_mode(&self) -> RecordMode {
-        RecordMode::from_int(self.get_info_value("I_RECMODE") as i32)
+    pub fn rec_mode(&self) -> RecMode {
+        RecMode::from_int(self.get_info_value("I_RECMODE") as i32)
             .expect("Can not convert to RecordingMode")
     }
     /// If rec_mode records output. Otherwise — None.
-    pub fn rec_out_mode(&self) -> Option<RecordingOutMode> {
-        RecordingOutMode::from_raw(
+    pub fn rec_out_mode(&self) -> Option<RecOutMode> {
+        RecOutMode::from_raw(
             self.get_info_value("I_RECMODE_FLAGS") as u32
         )
     }
-    pub fn record_monitoring(&self) -> RecordMonitoring {
+    pub fn rec_monitoring(&self) -> RecMonitoring {
         let mode = self.get_info_value("I_RECMON") as u32;
         let monitor_items = self.get_info_value("I_RECMONITEMS") != 0.0;
-        RecordMonitoring::new(mode, monitor_items)
+        RecMonitoring::new(mode, monitor_items)
     }
     /// True if automatically armed when track is selected.
     pub fn auto_rec_arm(&self) -> bool {
@@ -584,16 +582,12 @@ impl<'a> Track<'a, Mutable> {
         self.set_info_value("B_PHASE", value)
     }
     pub fn set_solo(&mut self, mode: SoloMode) -> ReaperResult<()> {
-        self.set_info_value("I_SOLO", mode.to_raw() as f64)
+        self.set_info_value("I_SOLO", mode.int_value() as f64)
     }
     /// when set, if anything else is soloed and this track is not muted, this
     /// track acts soloed
     pub fn set_solo_defeat(&mut self, state: bool) -> ReaperResult<()> {
-        let value = match state {
-            true => 1.0,
-            false => 0.0,
-        };
-        self.set_info_value("B_SOLO_DEFEAT", value)
+        self.set_info_value("B_SOLO_DEFEAT", state as i32 as f64)
     }
     pub fn set_fx_bypassed(&mut self, state: bool) -> ReaperResult<()> {
         self.set_info_value("I_FXEN", !state as i32 as f64)
@@ -607,23 +601,23 @@ impl<'a> Track<'a, Mutable> {
     }
     pub fn set_rec_input(
         &mut self,
-        rec_input: RecordInput,
+        rec_input: RecInput,
     ) -> ReaperResult<()> {
         self.set_info_value("I_RECINPUT", rec_input.to_raw() as f64)
     }
-    pub fn set_rec_mode(&mut self, rec_mode: RecordMode) -> ReaperResult<()> {
+    pub fn set_rec_mode(&mut self, rec_mode: RecMode) -> ReaperResult<()> {
         self.set_info_value("I_RECMODE", rec_mode.int_value() as f64)
     }
     /// If rec_mode records output. Otherwise — None.
     pub fn set_rec_out_mode(
         &mut self,
-        flags: RecordingOutMode,
+        flags: RecOutMode,
     ) -> ReaperResult<()> {
         self.set_info_value("I_RECMODE_FLAGS", flags.to_raw() as f64)
     }
-    pub fn set_record_monitoring(
+    pub fn set_rec_monitoring(
         &mut self,
-        value: RecordMonitoring,
+        value: RecMonitoring,
     ) -> ReaperResult<()> {
         self.set_info_value("I_RECMON", value.mode as f64)?;
         self.set_info_value("I_RECMONITEMS", value.monitor_items as i32 as f64)
@@ -809,12 +803,12 @@ impl<'a> Track<'a, Mutable> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RecordMonitoring {
+pub struct RecMonitoring {
     /// 0 → not, 1 → normal, 2 → when playing (tape)
     pub mode: u32,
     pub monitor_items: bool,
 }
-impl RecordMonitoring {
+impl RecMonitoring {
     pub fn new(mode: u32, monitor_items: bool) -> Self {
         Self {
             mode,

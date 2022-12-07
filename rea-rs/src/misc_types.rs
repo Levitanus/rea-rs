@@ -91,7 +91,7 @@ pub struct HardwareSocket {
     name: String,
 }
 impl HardwareSocket {
-    pub(crate) fn new(index: u32, name: impl Into<String>) -> Self {
+    pub fn new(index: u32, name: impl Into<String>) -> Self {
         Self {
             index,
             name: name.into(),

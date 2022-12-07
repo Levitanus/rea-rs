@@ -59,12 +59,22 @@ pub enum Direction {
     Left,
 }
 
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, IntEnum)]
+pub enum SoloMode {
+    NotSoloed = 0,
+    Soloed = 1,
+    SoloedInPlace = 2,
+    SafeSoloed = 5,
+    SafeSoloedInPlace = 6,
+}
+
 /// Track recording mode
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntEnum)]
-pub enum RecordMode {
+pub enum RecMode {
     Input = 0,
-    StereoInput = 1,
+    StereoOut = 1,
     None = 2,
     StereoOutWithLatencyComp = 3,
     MidiOut = 4,
@@ -76,7 +86,7 @@ pub enum RecordMode {
 
 /// Track recording input.
 #[derive(Debug, Clone, PartialEq)]
-pub enum RecordInput {
+pub enum RecInput {
     /// MIDI Channel (`0` → all), HardwareSocket (`None` → all).
     /// Can hold special socket: `HardwareSocket{62, "Virtual Keyboard"}`.
     MIDI(u8, Option<HardwareSocket>),
@@ -87,7 +97,7 @@ pub enum RecordInput {
     /// channel offset, is from rea_route
     Multichannel(u32, bool),
 }
-impl RecordInput {
+impl RecInput {
     fn pack_rea_route(rea_route: bool, ch: u32) -> u32 {
         match rea_route {
             true => ch + 512,
@@ -156,18 +166,15 @@ impl RecordInput {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RecordingOutMode {
+pub enum RecOutMode {
     PostFader,
     PreFX,
     /// pre-fader
     PostFX,
 }
-impl RecordingOutMode {
+impl RecOutMode {
     pub fn from_raw(mode: u32) -> Option<Self> {
-        if mode & 3 == 0 {
-            return None;
-        }
-        match mode & !3 {
+        match mode {
             0 => Self::PostFader.into(),
             1 => Self::PreFX.into(),
             2 => Self::PostFX.into(),
@@ -180,7 +187,7 @@ impl RecordingOutMode {
             Self::PreFX => 1,
             Self::PostFX => 2,
         };
-        value | 3
+        value
     }
 }
 

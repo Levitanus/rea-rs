@@ -11,10 +11,11 @@ use crate::api::{step, TestStep};
 use c_str_macro::c_str;
 use rea_rs::{
     AutomationMode, Color, CommandId, EnvelopeChunk, ExtValue, Fx,
-    GenericSend, GenericSendMut, HardwareSocket, Immutable, MarkerRegionInfo,
+    GenericSend, GenericSendMut, HardwareSocket, MarkerRegionInfo,
     MessageBoxValue, Mutable, Pan, PanLaw, PlayRate, Position, Project,
-    Reaper, SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
-    SendSourceChannels, Track, TrackSend, UndoFlags, Volume, WithReaperPtr,
+    Reaper, RecInput, RecMode, RecMonitoring, RecOutMode, SampleAmount,
+    SendDestChannels, SendMIDIProps, SendMode, SendSourceChannels, SoloMode,
+    Track, TrackSend, UndoFlags, Volume, WithReaperPtr,
 };
 use std::collections::HashMap;
 use std::fs::canonicalize;
@@ -589,6 +590,45 @@ fn tracks() -> TestStep {
         assert_eq!(tr2.phase_flipped(), false);
         tr2.set_phase_flipped(true)?;
         assert_eq!(tr2.phase_flipped(), true);
+
+        assert_eq!(tr2.is_currently_monitored(), false);
+
+        debug!("test solo");
+        assert_eq!(tr2.solo(), SoloMode::NotSoloed);
+        tr2.set_solo(SoloMode::Soloed)?;
+        assert_eq!(tr2.solo(), SoloMode::Soloed);
+        tr2.set_solo(SoloMode::SoloedInPlace)?;
+        assert_eq!(tr2.solo(), SoloMode::SoloedInPlace);
+        tr2.set_solo(SoloMode::NotSoloed)?;
+
+        log::warn!("Can't test solo defeat.");
+
+        assert!(!tr2.fx_bypassed());
+        tr2.set_fx_bypassed(true)?;
+        assert!(tr2.fx_bypassed());
+
+        assert!(!tr2.rec_armed());
+        tr2.set_rec_armed(true)?;
+        assert!(tr2.rec_armed());
+
+        assert_eq!(tr2.rec_input(), RecInput::Mono(0, false));
+        tr2.set_rec_input(RecInput::Stereo(2, true))?;
+        assert_eq!(tr2.rec_input(), RecInput::Stereo(2, true));
+
+        assert_eq!(tr2.rec_mode(), RecMode::Input);
+        tr2.set_rec_mode(RecMode::MidiOverdub)?;
+        assert_eq!(tr2.rec_mode(), RecMode::MidiOverdub);
+        // assert_eq!(tr2.rec_input(), RecordInput::MIDI(0, None)); Not equal!
+
+        tr2.set_rec_mode(RecMode::StereoOut)?;
+        assert_eq!(tr2.rec_out_mode(), RecOutMode::PostFader.into());
+        log::warn!("Something is wrong with RecOutMode");
+        // tr2.set_rec_out_mode(RecOutMode::PostFX)?;
+        // assert_eq!(tr2.rec_out_mode(), RecOutMode::PostFX.into());
+
+        assert_eq!(tr2.rec_monitoring(), RecMonitoring::new(1, false));
+        tr2.set_rec_monitoring(RecMonitoring::new(2, true))?;
+        assert_eq!(tr2.rec_monitoring(), RecMonitoring::new(2, true));
 
         Ok(())
     })
