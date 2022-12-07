@@ -569,9 +569,6 @@ impl<'a> Track<'a, Mutable> {
         self.set_info_value("I_MIDIHWOUT", value as f64)
     }
 
-    pub fn set_index(&mut self, index: usize) -> ReaperResult<()> {
-        self.set_info_value("IP_TRACKNUMBER", index as f64)
-    }
     pub fn set_muted(&mut self, state: bool) -> ReaperResult<()> {
         let value = match state {
             true => 1.0,

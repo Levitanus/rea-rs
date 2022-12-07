@@ -581,16 +581,14 @@ fn tracks() -> TestStep {
         assert_eq!(tr2, send.dest_track().expect("should return track."));
         let mut tr2 = pr.get_track_mut(1).unwrap();
         assert_eq!(tr2.index(), 1);
-        debug!("set 2nd track index to 0");
-        tr2.set_index(0)?;
-        assert_eq!(tr2.index(), 0);
-        assert_eq!(
-            Track::<Immutable>::from_name(&pr, "first")
-                .expect("Wrong track name.")
-                .index(),
-            1
-        );
-        let mut tr2 = pr.get_track_mut(0).unwrap();
+
+        assert_eq!(tr2.muted(), false);
+        tr2.set_muted(true)?;
+        assert_eq!(tr2.muted(), true);
+
+        assert_eq!(tr2.phase_flipped(), false);
+        tr2.set_phase_flipped(true)?;
+        assert_eq!(tr2.phase_flipped(), true);
 
         Ok(())
     })

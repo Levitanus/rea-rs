@@ -611,6 +611,9 @@ impl<'a> Project {
     pub fn get_master_track(&self) -> Track<Immutable> {
         Track::new(self, self.get_master_track_ptr())
     }
+    pub fn get_master_track_mut(&mut self) -> Track<Mutable> {
+        Track::new(self, self.get_master_track_ptr())
+    }
     fn get_master_track_ptr(&self) -> MediaTrack {
         unsafe {
             NonNull::new(
