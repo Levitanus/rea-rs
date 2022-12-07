@@ -521,12 +521,12 @@ fn tracks() -> TestStep {
         pr.add_track(0, "first");
         assert!(Track::<Mutable>::from_name(&pr, "first").is_some());
         let tr1 = pr.get_track(0).unwrap();
-        assert_eq!(tr1.get_name()?, "first");
+        assert_eq!(tr1.name()?, "first");
 
         debug!("add track 'second'");
         let tr2 = pr.add_track(1, "second").index();
         let tr2 = pr.get_track(tr2).unwrap();
-        assert_eq!(tr2.get_name()?, "second");
+        assert_eq!(tr2.name()?, "second");
         assert_eq!(tr2.index(), 1);
         let tr2 = tr2.get();
         let tr2 = Track::<Mutable>::new(&mut pr, tr2);
@@ -534,12 +534,12 @@ fn tracks() -> TestStep {
 
         debug!("add track 'third'");
         let mut tr3 = pr.add_track(2, "third");
-        assert_eq!(tr3.get_name()?, "third");
+        assert_eq!(tr3.name()?, "third");
         tr3.set_name("third new name")?;
 
         debug!("iter tracks mut");
         pr.iter_tracks_mut(|mut tr| {
-            if tr.get_name()? != "second" {
+            if tr.name()? != "second" {
                 return Ok(());
             }
             debug!("set track {:?} name to 'new second'", tr);
@@ -549,7 +549,7 @@ fn tracks() -> TestStep {
 
         debug!("try to find track with new name");
         assert_eq!(
-            pr.get_track(1).ok_or("no track!")?.get_name()?,
+            pr.get_track(1).ok_or("no track!")?.name()?,
             "new second"
         );
 

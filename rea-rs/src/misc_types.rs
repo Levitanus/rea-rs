@@ -1,6 +1,7 @@
 use crate::{
     errors::ReaperResult, Direction, Project, Reaper, Take, WithReaperPtr,
 };
+use int_enum::IntEnum;
 use reaper_medium::PositionInSeconds;
 use serde_derive::{Deserialize, Serialize};
 use std::{
@@ -90,8 +91,11 @@ pub struct HardwareSocket {
     name: String,
 }
 impl HardwareSocket {
-    pub(crate) fn new(index: u32, name: String) -> Self {
-        Self { index, name }
+    pub(crate) fn new(index: u32, name: impl Into<String>) -> Self {
+        Self {
+            index,
+            name: name.into(),
+        }
     }
     pub fn index(&self) -> u32 {
         self.index
@@ -264,6 +268,13 @@ impl Into<f64> for Volume {
     }
 }
 
+#[test]
+fn test_volume() {
+    assert_eq!(Volume::from(0.0).as_db(), -f64::INFINITY);
+    assert_eq!(Volume::from(0.5).as_db().trunc(), -6.0);
+    assert_eq!(Volume::from(1.0).as_db(), 0.0);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Pan {
     raw: f64,
@@ -319,6 +330,25 @@ impl Into<f64> for PanLaw {
             Self::Minus3dBCompensated => 1.414,
             Self::Minus6dBCompensated => 2.0,
         }
+    }
+}
+
+#[repr(i32)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, IntEnum)]
+pub enum PanLawMode {
+    SineTaper = 0,
+    HybridTaperDeprecated = 1,
+    LinearTaper = 2,
+    HybridTaper = 3,
+}
+impl From<i32> for PanLawMode {
+    fn from(value: i32) -> Self {
+        Self::from_int(value).expect("Can not convert to PanLawMode.")
+    }
+}
+impl Into<i32> for PanLawMode {
+    fn into(self) -> i32 {
+        self.int_value()
     }
 }
 
@@ -482,7 +512,7 @@ impl<'a> TimeRange<'a> {
 
 /// Straightforward TimeSignature, that can be used as
 /// [Project] parameter.
-/// 
+///
 /// Not sure it should be used in complex musical analysis.
 pub struct TimeSignature {
     numerator: u32,
@@ -502,7 +532,7 @@ impl TimeSignature {
 
 /// Generic mutability marker, that allows to
 /// mutate only one Reaper object at time.
-/// 
+///
 /// Used as generic parameter (usually as marker),
 /// that resolved to [Mutable] or [Immutable].
 pub trait ProbablyMutable {}

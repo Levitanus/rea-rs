@@ -1,5 +1,10 @@
 use int_enum::IntEnum;
 
+use crate::{
+    errors::{ReaperError, ReaperResult},
+    HardwareSocket, Reaper,
+};
+
 pub enum Section {
     Main,
     Id(u32),
@@ -54,9 +59,10 @@ pub enum Direction {
     Left,
 }
 
+/// Track recording mode
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntEnum)]
-pub enum RecordingMode {
+pub enum RecordMode {
     Input = 0,
     StereoInput = 1,
     None = 2,
@@ -66,6 +72,87 @@ pub enum RecordingMode {
     MonoOutWithLatencyComp = 6,
     MidiOverdub = 7,
     MidiReplace = 8,
+}
+
+/// Track recording input.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecordInput {
+    /// MIDI Channel (`0` → all), HardwareSocket (`None` → all).
+    /// Can hold special socket: `HardwareSocket{62, "Virtual Keyboard"}`.
+    MIDI(u8, Option<HardwareSocket>),
+    /// channel offset, is from rea_route
+    Mono(u32, bool),
+    /// channel offset, is from rea_route
+    Stereo(u32, bool),
+    /// channel offset, is from rea_route
+    Multichannel(u32, bool),
+}
+impl RecordInput {
+    fn pack_rea_route(rea_route: bool, ch: u32) -> u32 {
+        match rea_route {
+            true => ch + 512,
+            false => ch,
+        }
+    }
+
+    pub fn from_raw(value: f64) -> ReaperResult<Self> {
+        if value < 0.0 {
+            return Err(ReaperError::InvalidObject(
+                "Can not convert to RecordingInput",
+            )
+            .into());
+        }
+        let value = value as u32;
+        if value & 4096 > 0 {
+            let channel = value & 0b11111;
+            let hw_idx = value << 5 & 0b111111;
+            let socket = match hw_idx {
+                63 => None,
+                62 => HardwareSocket::new(62, "Virtual Keyboard").into(),
+                x => Reaper::get().get_midi_input(x as usize),
+            };
+            Ok(Self::MIDI(channel as u8, socket))
+        } else {
+            let mut offset = value & 1023;
+            let rea_route = value >= 512;
+            if rea_route {
+                offset -= 512
+            };
+            match value & 2048 > 0 {
+                true => Ok(Self::Multichannel(offset, rea_route)),
+                false => match value & 1024 > 0 {
+                    true => Ok(Self::Stereo(offset, rea_route)),
+                    false => Ok(Self::Mono(offset, rea_route)),
+                },
+            }
+        }
+    }
+    pub fn to_raw(self) -> f64 {
+        let mut is_midi = 0;
+        let mut is_stereo = 0;
+        let mut is_multichannel = 0;
+        let value: u32 = match self {
+            Self::MIDI(ch, socket) => {
+                is_midi = 4096;
+                let socket = match socket {
+                    None => 63,
+                    Some(x) => x.index(),
+                };
+                ch as u32 + socket >> 5
+            }
+            Self::Mono(ch, rea_route) => Self::pack_rea_route(rea_route, ch),
+            Self::Stereo(ch, rea_route) => {
+                is_stereo = 1024;
+                Self::pack_rea_route(rea_route, ch)
+            }
+            Self::Multichannel(ch, rea_route) => {
+                is_multichannel = 2048;
+                Self::pack_rea_route(rea_route, ch)
+            }
+        };
+        let value = value | is_midi | is_stereo | is_multichannel;
+        value as f64
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -181,4 +268,15 @@ impl TrackFolderState {
             Self::Last(depth) => (-(depth as i32), None),
         }
     }
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, IntEnum)]
+pub enum TimeMode {
+    /// Project default
+    Default = -1,
+    Time = 0,
+    /// position length rate
+    BeatsFull = 1,
+    BeatsOnlyPosition = 2,
 }
