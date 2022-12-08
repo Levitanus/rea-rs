@@ -261,7 +261,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
             ),
             6 => TrackPan::Dual(
                 self.get_info_value("D_DUALPANL").into(),
-                self.get_info_value("D_DUALPANL").into(),
+                self.get_info_value("D_DUALPANR").into(),
             ),
             _ => panic!("Can not infer pan mode!"),
         }
@@ -280,20 +280,17 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     pub fn visible_in_tcp(&self) -> bool {
         self.get_info_value("B_SHOWINTCP") != 0.0
     }
-    pub fn parent_send(&self) -> TrackParentSend {
+    /// Get channel offset of parent track. None, if no parent send.
+    pub fn parent_send(&self) -> Option<u32> {
         let is_enabled = self.get_info_value("B_MAINSEND") != 0.0;
-        let channel_offset = self.get_info_value("C_MAINSEND_OFFS") as u16;
-        let channels_amount = self.get_info_value("C_MAINSEND_NCH") as u16;
-        TrackParentSend {
-            is_enabled,
-            channel_offset,
-            channels_amount,
+        if !is_enabled {
+            return None;
         }
+        Some(self.get_info_value("C_MAINSEND_OFFS") as u32)
     }
 
-    pub fn free_item_positioning(&self) -> TrackFreeMode {
-        TrackFreeMode::from_int(self.get_info_value("I_FREEMODE") as u8)
-            .expect("Can not convert to TrackFreeMode")
+    pub fn free_item_positioning(&self) -> bool {
+        self.get_info_value("B_FREEMODE") != 0.0
     }
 
     pub fn beat_attach_mode(&self) -> TimeMode {
@@ -327,9 +324,9 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         if flag & 1 == 1 {
             None
         } else if flag & 2 == 2 {
-            TrackPlayOffset::Samples(SampleAmount::new(value as u32)).into()
+            TrackPlayOffset::Samples(value as i32).into()
         } else {
-            TrackPlayOffset::Seconds(Duration::from_secs_f64(value)).into()
+            TrackPlayOffset::Seconds(value).into()
         }
     }
 
@@ -643,18 +640,6 @@ impl<'a> Track<'a, Mutable> {
     pub fn set_selected(&mut self, selected: bool) -> ReaperResult<()> {
         self.set_info_value("I_SELECTED", selected as i32 as f64)
     }
-    pub fn set_dimensions(
-        &mut self,
-        dimensions: TrackDimensions,
-    ) -> ReaperResult<()> {
-        self.set_info_value("I_TCPH", dimensions.tcp_height as f64)?;
-        self.set_info_value("I_WNDH", dimensions.tcp_height_with_env as f64)?;
-        self.set_info_value("I_TCPY", dimensions.tcp_pos_y as f64)?;
-        self.set_info_value("I_MCPX", dimensions.mcp_pos_x as f64)?;
-        self.set_info_value("I_MCPY", dimensions.mcp_pos_y as f64)?;
-        self.set_info_value("I_MCPW", dimensions.mcp_width as f64)?;
-        self.set_info_value("I_MCPH", dimensions.mcp_height as f64)
-    }
     pub fn set_folder_state(
         &mut self,
         state: TrackFolderState,
@@ -679,9 +664,9 @@ impl<'a> Track<'a, Mutable> {
     /// If track height was overrided by script.
     pub fn set_height_override(
         &mut self,
-        height: Option<u32>,
+        height: impl Into<Option<u32>>,
     ) -> ReaperResult<()> {
-        let value = match height {
+        let value = match height.into() {
             Some(x) => x,
             None => 0,
         };
@@ -695,31 +680,27 @@ impl<'a> Track<'a, Mutable> {
         self.set_info_value("D_VOL", volume.into())
     }
     pub fn set_pan(&mut self, track_pan: TrackPan) -> ReaperResult<()> {
-        let pan_mode = match track_pan {
+        match track_pan {
             TrackPan::BalanceLegacy(pan) => {
+                self.set_info_value("I_PANMODE", 0 as f64)?;
                 self.set_info_value("D_PAN", pan.into())?;
-                0
             }
             TrackPan::Balance(pan) => {
+                self.set_info_value("I_PANMODE", 3 as f64)?;
                 self.set_info_value("D_PAN", pan.into())?;
-                3
             }
             TrackPan::Stereo(pan, width) => {
-                (
-                    self.set_info_value("D_PAN", pan.into())?,
-                    self.set_info_value("D_WIDTH", width.into())?,
-                );
-                5
+                self.set_info_value("I_PANMODE", 5 as f64)?;
+                self.set_info_value("D_PAN", pan.into())?;
+                self.set_info_value("D_WIDTH", width.into())?;
             }
             TrackPan::Dual(pan_l, pan_r) => {
-                (
-                    self.set_info_value("D_DUALPANL", pan_l.into())?,
-                    self.set_info_value("D_DUALPANL", pan_r.into())?,
-                );
-                6
+                self.set_info_value("I_PANMODE", 6 as f64)?;
+                self.set_info_value("D_DUALPANL", pan_l.into())?;
+                self.set_info_value("D_DUALPANR", pan_r.into())?;
             }
         };
-        self.set_info_value("I_PANMODE", pan_mode as f64)
+        Ok(())
     }
 
     pub fn set_pan_law(&mut self, law: PanLaw) -> ReaperResult<()> {
@@ -740,24 +721,32 @@ impl<'a> Track<'a, Mutable> {
     }
     pub fn set_parent_send(
         &mut self,
-        value: TrackParentSend,
+        parent_ch_offset: impl Into<Option<u32>>,
     ) -> ReaperResult<()> {
-        self.set_info_value("B_MAINSEND", value.is_enabled as i32 as f64)?;
-        self.set_info_value(
-            "C_MAINSEND_OFFS",
-            value.channel_offset as i32 as f64,
-        )?;
-        self.set_info_value(
-            "C_MAINSEND_NCH",
-            value.channels_amount as i32 as f64,
-        )
+        let value: Option<u32> = parent_ch_offset.into();
+        match value {
+            None => {
+                self.set_info_value("B_MAINSEND", 0.0)?;
+                Ok(())
+            }
+            Some(value) => {
+                self.set_info_value("B_MAINSEND", 1.0)?;
+                self.set_info_value("C_MAINSEND_OFFS", value as f64)?;
+                Ok(())
+            }
+        }
     }
 
     pub fn set_free_item_positioning(
         &mut self,
-        mode: TrackFreeMode,
+        free: bool,
+        update_timeline: bool,
     ) -> ReaperResult<()> {
-        self.set_info_value("I_FREEMODE", mode.int_value() as f64)
+        self.set_info_value("B_FREEMODE", free as i32 as f64)?;
+        if update_timeline {
+            Reaper::get().update_timeline()
+        };
+        Ok(())
     }
 
     pub fn set_beat_attach_mode(
@@ -798,8 +787,14 @@ impl<'a> Track<'a, Mutable> {
             None => self.set_info_value("I_PLAY_OFFSET_FLAG", 1.0),
             Some(mode) => {
                 let value = match mode {
-                    TrackPlayOffset::Samples(v) => v.get() as f64,
-                    TrackPlayOffset::Seconds(v) => v.as_secs_f64(),
+                    TrackPlayOffset::Samples(v) => {
+                        self.set_info_value("I_PLAY_OFFSET_FLAG", 2.0)?;
+                        v as f64
+                    }
+                    TrackPlayOffset::Seconds(v) => {
+                        self.set_info_value("I_PLAY_OFFSET_FLAG", 0.0)?;
+                        v
+                    }
                 };
                 self.set_info_value("D_PLAY_OFFSET", value)
             }
@@ -852,24 +847,8 @@ pub enum TrackPan {
     Dual(Pan, Pan),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TrackParentSend {
-    pub is_enabled: bool,
-    pub channel_offset: u16,
-    /// 0 → all channels
-    pub channels_amount: u16,
-}
-
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
-pub enum TrackFreeMode {
-    Disabled = 0,
-    Enabled = 1,
-    FixLanes = 2,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrackPlayOffset {
-    Samples(SampleAmount),
-    Seconds(Duration),
+    Samples(i32),
+    Seconds(f64),
 }

@@ -1,5 +1,5 @@
 // #![allow(clippy::float_cmp)]
-// use approx;
+use approx;
 use log::{debug, info, warn};
 use rea_rs::errors::{ReaperError, ReaperResult};
 use rea_rs::project_info::{
@@ -13,9 +13,10 @@ use rea_rs::{
     AutomationMode, Color, CommandId, EnvelopeChunk, ExtValue, Fx,
     GenericSend, GenericSendMut, HardwareSocket, MarkerRegionInfo,
     MessageBoxValue, Mutable, Pan, PanLaw, PlayRate, Position, Project,
-    Reaper, RecInput, RecMode, RecMonitoring, RecOutMode, SampleAmount,
-    SendDestChannels, SendMIDIProps, SendMode, SendSourceChannels, SoloMode,
-    Track, TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr,
+    Reaper, RecInput, RecMode, RecMonitoring, SampleAmount, SendDestChannels,
+    SendMIDIProps, SendMode, SendSourceChannels, SoloMode, TimeMode, Track,
+    TrackFolderState, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
+    TrackSend, UndoFlags, Volume, WithReaperPtr,
 };
 use std::collections::HashMap;
 use std::fs::canonicalize;
@@ -630,6 +631,7 @@ fn tracks() -> TestStep {
         tr2.set_rec_monitoring(RecMonitoring::new(2, true))?;
         assert_eq!(tr2.rec_monitoring(), RecMonitoring::new(2, true));
 
+        warn!("Auto Rec Arm falls");
         // debug!("set selected to false");
         // tr2.set_selected(false)?;
         // debug!("set auto rec arm to true");
@@ -654,6 +656,125 @@ fn tracks() -> TestStep {
         assert!(!tr2.selected());
         tr2.set_selected(true)?;
         assert!(tr2.selected());
+
+        debug!("let's see track dimensions: {:?}", tr2.dimensions());
+
+        debug!("folder");
+        let mut tr1 = pr.get_track_mut(0).unwrap();
+        assert_eq!(tr1.folder_state(), TrackFolderState::Normal);
+        tr1.set_folder_state(TrackFolderState::IsFolder(1))?;
+        assert_eq!(tr1.folder_state(), TrackFolderState::IsFolder(1));
+        tr1.set_folder_state(TrackFolderState::IsFolder(2))?;
+        assert_eq!(tr1.folder_state(), TrackFolderState::IsFolder(2));
+        tr1.set_folder_state(TrackFolderState::IsFolder(0))?;
+        assert_eq!(tr1.folder_state(), TrackFolderState::IsFolder(0));
+
+        let mut tr2 = pr.get_track_mut(1).unwrap();
+        assert_eq!(tr2.folder_state(), TrackFolderState::Normal);
+
+        debug!(
+            "Midi hardware was tested in a live.\
+        Automatically it will be too unstable."
+        );
+
+        debug!("perf flags");
+        assert_eq!(tr2.performance_flags(), TrackPerformanceFlags::empty());
+        tr2.set_performance_flags(TrackPerformanceFlags::NO_BUFFERING)?;
+        assert_eq!(
+            tr2.performance_flags(),
+            TrackPerformanceFlags::NO_BUFFERING
+        );
+        tr2.set_performance_flags(TrackPerformanceFlags::NO_ANTICIPATIVE_FX)?;
+        assert_eq!(
+            tr2.performance_flags(),
+            TrackPerformanceFlags::NO_ANTICIPATIVE_FX
+        );
+
+        debug!("hight override");
+        assert!(tr2.height_override().is_none());
+        tr2.set_height_override(200)?;
+        assert_eq!(tr2.height_override(), Some(200));
+        tr2.set_height_lock(true)?;
+        assert!(tr2.height_lock().expect("should be true"));
+        tr2.set_height_override(None)?;
+        assert!(tr2.height_override().is_none());
+        assert!(tr2.height_lock().is_none());
+
+        debug!("volume");
+        assert_eq!(tr2.volume(), Volume::from_db(0.0));
+        tr2.set_volume(Volume::from(0.5))?;
+        assert_eq!(tr2.volume().as_db().trunc(), -6.0);
+
+        debug!("pan");
+        assert_eq!(tr2.pan(), TrackPan::BalanceLegacy(0.0.into()));
+        let pan = TrackPan::Stereo(Pan::from(-0.5), Pan::from(-0.2));
+        tr2.set_pan(pan)?;
+        assert_eq!(tr2.pan(), pan);
+        let pan = TrackPan::Dual(Pan::from(1.0), Pan::from(-0.4));
+        tr2.set_pan(pan)?;
+        assert_eq!(tr2.pan(), pan);
+
+        debug!("pan law");
+        assert_eq!(tr2.pan_law(), PanLaw::Default);
+        tr2.set_pan_law(PanLaw::Minus6dBCompensated)?;
+        assert_eq!(tr2.pan_law(), PanLaw::Minus6dBCompensated);
+
+        assert!(tr2.visible_in_mcp());
+        assert!(tr2.visible_in_tcp());
+        tr2.set_visible_in_mcp(false)?;
+        tr2.set_visible_in_tcp(false)?;
+        assert!(!tr2.visible_in_mcp());
+        assert!(!tr2.visible_in_tcp());
+        tr2.set_visible_in_mcp(true)?;
+        tr2.set_visible_in_tcp(true)?;
+        assert!(tr2.visible_in_mcp());
+        assert!(tr2.visible_in_tcp());
+
+        debug!("parent send");
+        assert_eq!(tr2.parent_send(), Some(0));
+        let psend = 2;
+        tr2.set_parent_send(psend)?;
+        assert_eq!(tr2.parent_send(), psend.into());
+        let psend = 0;
+        tr2.set_parent_send(psend)?;
+        assert_eq!(tr2.parent_send(), psend.into());
+        tr2.set_parent_send(None)?;
+        assert!(tr2.parent_send().is_none());
+
+        debug!("free positioning");
+        assert_eq!(tr2.free_item_positioning(), false);
+        tr2.set_free_item_positioning(true, true)?;
+        assert_eq!(tr2.free_item_positioning(), true);
+        tr2.set_free_item_positioning(false, true)?;
+        assert_eq!(tr2.free_item_positioning(), false);
+
+        debug!("beat attach mode");
+        assert_eq!(tr2.beat_attach_mode(), TimeMode::Default);
+        tr2.set_beat_attach_mode(TimeMode::BeatsFull)?;
+        assert_eq!(tr2.beat_attach_mode(), TimeMode::BeatsFull);
+        tr2.set_beat_attach_mode(TimeMode::BeatsOnlyPosition)?;
+        assert_eq!(tr2.beat_attach_mode(), TimeMode::BeatsOnlyPosition);
+        tr2.set_beat_attach_mode(TimeMode::Time)?;
+        assert_eq!(tr2.beat_attach_mode(), TimeMode::Time);
+
+        debug!(
+            "Let's see scales: {:?}",
+            (
+                tr2.mcp_fx_param_scale(),
+                tr2.mcp_fx_send_region_scale(),
+                tr2.mcp_fx_send_scale(),
+                tr2.tcp_fx_param_scale()
+            )
+        );
+        tr2.set_mcp_fx_send_region_scale(0.7)?;
+        approx::abs_diff_eq!(tr2.mcp_fx_send_region_scale(), 0.7);
+
+        debug!("play offset");
+        assert_eq!(tr2.play_offset(), None);
+        tr2.set_play_offset(Some(TrackPlayOffset::Samples(-300)))?;
+        assert_eq!(tr2.play_offset(), Some(TrackPlayOffset::Samples(-300)));
+        tr2.set_play_offset(Some(TrackPlayOffset::Seconds(-0.4)))?;
+        assert_eq!(tr2.play_offset(), Some(TrackPlayOffset::Seconds(-0.4)));
 
         Ok(())
     })
