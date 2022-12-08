@@ -841,8 +841,8 @@ impl<'a> Track<'a, Mutable> {
 
     /// Set track membership for specified parameter in track groups.
     /// 
-    /// If masks are None — corresponding true bits of groups will be used.
-    /// For complete rewrite of values use u32::MAX.
+    /// If masks are `None` — corresponding true bits of groups will be used.
+    /// For complete rewrite of values use [u32::MAX].
     /// 
     /// # Example
     /// 
