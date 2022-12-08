@@ -2,9 +2,13 @@ use crate::{
     utils::{as_c_str, make_c_string_buf, WithNull},
     Project, Reaper,
 };
+use log::debug;
 use serde::de::DeserializeOwned;
 pub use serde::{Deserialize, Serialize};
-use std::ffi::{CStr, CString};
+use std::{
+    ffi::{CStr, CString},
+    ptr::null,
+};
 
 /// Serializes extension data.
 ///
@@ -32,9 +36,18 @@ use std::ffi::{CStr, CString};
 /// # Usage
 ///
 /// ```no_run
-/// # use rea_rs::ExtValue;
+/// use rea_rs::{ExtValue, HasExtState, Reaper, Project};
+/// let rpr = Reaper::get();
 /// let mut state =
-///     ExtValue::new("test section", "first", Some(10), true, None);
+///     ExtValue::new("test section", "first", Some(10), true, rpr);
+/// assert_eq!(state.get().expect("can not get value"), 10);
+/// state.set(56);
+/// assert_eq!(state.get().expect("can not get value"), 56);
+/// state.delete();
+/// assert!(state.get().is_none());
+/// let pr = rpr.current_project();
+/// let mut state: ExtValue<u32, Project> =
+///     ExtValue::new("test section", "first", None, true, &pr);
 /// assert_eq!(state.get().expect("can not get value"), 10);
 /// state.set(56);
 /// assert_eq!(state.get().expect("can not get value"), 56);
@@ -45,16 +58,20 @@ use std::ffi::{CStr, CString};
 pub struct ExtValue<
     'a,
     T: Serialize + DeserializeOwned + Clone + std::fmt::Debug,
+    O: HasExtState,
 > {
     section: String,
     key: String,
     value: Option<T>,
     persist: bool,
-    project: Option<&'a Project>,
+    object: &'a O,
     buf_size: usize,
 }
-impl<'a, T: Serialize + DeserializeOwned + Clone + std::fmt::Debug>
-    ExtValue<'a, T>
+impl<
+        'a,
+        T: Serialize + DeserializeOwned + Clone + std::fmt::Debug,
+        O: HasExtState,
+    > ExtValue<'a, T, O>
 {
     /// Create ext state object.
     ///
@@ -66,24 +83,31 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + std::fmt::Debug>
         key: impl Into<String>,
         value: Option<T>,
         persist: bool,
-        project: Option<&'a Project>,
+        object: &'a O,
     ) -> Self {
-        let is_some = value.is_some();
         let mut obj = Self {
             section: section.into(),
             key: key.into(),
             value,
             persist,
-            project,
+            object: object,
             buf_size: 4096,
         };
-        if is_some {
-            if persist && obj.get().is_none() || !persist {
-                obj.set(obj.value.as_ref().unwrap().clone());
+        match obj.value.as_ref() {
+            None => {
+                if persist {
+                    match obj.get() {
+                        None => (),
+                        Some(val) => obj.set(val),
+                    }
+                } else {
+                    obj.delete()
+                }
             }
-        } else {
-            if !persist {
-                obj.delete();
+            Some(val) => {
+                if persist && obj.get().is_none() || !persist {
+                    obj.set(val.clone())
+                }
             }
         }
         obj
@@ -105,86 +129,25 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + std::fmt::Debug>
     /// If value of the wrong type stored in the
     /// same section/key.
     pub fn get(&self) -> Option<T> {
-        let result = match &self.project {
-            None => self.value_from_reaper(),
-            Some(pr) => self.value_from_project(pr),
-        };
-        result
-    }
-
-    fn value_from_reaper(&self) -> Option<T> {
-        let low = Reaper::get().low();
-        unsafe {
-            match low.HasExtState(
-                as_c_str(&self.section()).as_ptr(),
-                as_c_str(&self.key()).as_ptr(),
-            ) {
-                false => None,
-                true => {
-                    let value = low.GetExtState(
-                        as_c_str(&self.section()).as_ptr(),
-                        as_c_str(&self.key()).as_ptr(),
-                    );
-                    let value: &[u8] = CStr::from_ptr(value).to_bytes();
-                    let value: T = rmp_serde::decode::from_slice(value)
-                        .expect("This value was not serialized by ExtState");
-                    Some(value)
-                }
-            }
-        }
-    }
-
-    fn value_from_project<'b>(&self, project: &Project) -> Option<T> {
-        let low = Reaper::get().low();
         let (section_str, key_str) = (self.section(), self.key());
         let (section, key) = (as_c_str(&section_str), as_c_str(&key_str));
-        // let mut buf = vec![0_i8; self.buf_size];
-        let buf = make_c_string_buf(self.buf_size);
-        let ptr = buf.into_raw();
-        let status = unsafe {
-            low.GetProjExtState(
-                project.context().to_raw(),
-                section.as_ptr(),
-                key.as_ptr(),
-                ptr,
-                self.buf_size as i32,
-            )
+        debug!("get ext value");
+        let result = self.object.get_ext_value(section, key, self.buf_size);
+        debug!("match value: {:?}", result);
+        let value_obj = match result {
+            None => return None,
+            Some(value) => value,
         };
-        if status <= 0 {
-            return None;
-        }
-        let value = unsafe { CString::from_raw(ptr) };
-        let value = value.as_bytes();
+        let value = value_obj.as_bytes();
+        debug!("deserialize value: {:?}", value);
         let value: T = rmp_serde::decode::from_slice(value)
             .expect("This value was not serialized by ExtState");
+        debug!("deserialized value: {:?}", value);
         Some(value)
     }
 
     /// Set the value to ext state.
     pub fn set(&mut self, value: T) {
-        match self.project {
-            None => self.value_to_reaper(value),
-            Some(pr) => self.value_to_project(pr, value),
-        }
-    }
-
-    fn value_to_reaper(&self, value: T) {
-        let low = Reaper::get().low();
-        unsafe {
-            let value = rmp_serde::encode::to_vec(&value)
-                .expect("can not serialize value");
-            let value = CString::from_vec_unchecked(value);
-            low.SetExtState(
-                as_c_str(&self.section()).as_ptr(),
-                as_c_str(&self.key()).as_ptr(),
-                value.into_raw(),
-                self.persist,
-            )
-        }
-    }
-
-    fn value_to_project(&self, project: &Project, value: T) {
-        let low = Reaper::get().low();
         let (section_str, key_str) = (self.section(), self.key());
         let (section, key) = (as_c_str(&section_str), as_c_str(&key_str));
         let mut value = rmp_serde::encode::to_vec(&value)
@@ -192,71 +155,79 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + std::fmt::Debug>
         value.push(0);
         let value = CString::from_vec_with_nul(value)
             .expect("can not serialize to string");
-        let _result = unsafe {
-            low.SetProjExtState(
-                project.context().to_raw(),
-                section.as_ptr(),
-                key.as_ptr(),
-                value.into_raw(),
-            )
-        };
+        self.object.set_ext_value(section, key, value.into_raw())
     }
 
     /// Erase ext value, but keep the object.
     pub fn delete(&mut self) {
-        match &self.project {
-            None => unsafe {
-                Reaper::get().low().DeleteExtState(
-                    as_c_str(&self.section()).as_ptr(),
-                    as_c_str(&self.key()).as_ptr(),
-                    true,
-                )
-            },
-            Some(pr) => unsafe {
-                Reaper::get().low().SetProjExtState(
-                    pr.context().to_raw(),
-                    as_c_str(&self.section()).as_ptr(),
-                    as_c_str(&self.key()).as_ptr(),
-                    CStr::from_bytes_with_nul_unchecked(&[0_u8]).as_ptr(),
-                );
-            },
-        }
+        let (section_str, key_str) = (self.section(), self.key());
+        let (section, key) = (as_c_str(&section_str), as_c_str(&key_str));
+        self.object.delete_ext_value(section, key)
     }
 }
 
 pub trait HasExtState {
-    fn set_value(
-        &mut self,
-        section: *const i8,
-        key: *const i8,
-        value: *mut i8,
-    );
-    fn get_value(
+    fn set_ext_value(&self, section: &CStr, key: &CStr, value: *mut i8);
+    fn get_ext_value(
         &self,
-        section: *const i8,
-        key: *const i8,
+        section: &CStr,
+        key: &CStr,
         buf_size: usize,
     ) -> Option<CString>;
-    fn delete(&mut self, section: *const i8, key: *const i8);
+    fn delete_ext_value(&self, section: &CStr, key: &CStr);
+}
+
+impl HasExtState for Reaper {
+    fn set_ext_value(&self, section: &CStr, key: &CStr, value: *mut i8) {
+        let low = Reaper::get().low();
+        unsafe { low.SetExtState(section.as_ptr(), key.as_ptr(), value, true) }
+    }
+
+    fn get_ext_value(
+        &self,
+        section: &CStr,
+        key: &CStr,
+        _buf_size: usize,
+    ) -> Option<CString> {
+        let low = self.low();
+        let has_state =
+            unsafe { low.HasExtState(section.as_ptr(), key.as_ptr()) };
+        match has_state {
+            false => None,
+            true => {
+                let value =
+                    unsafe { low.GetExtState(section.as_ptr(), key.as_ptr()) };
+                let c_str = unsafe { CStr::from_ptr(value) };
+                Some(CString::from(c_str))
+            }
+        }
+    }
+
+    fn delete_ext_value(&self, section: &CStr, key: &CStr) {
+        unsafe {
+            self.low()
+                .DeleteExtState(section.as_ptr(), key.as_ptr(), true)
+        }
+    }
 }
 
 impl HasExtState for Project {
-    fn set_value(
-        &mut self,
-        section: *const i8,
-        key: *const i8,
-        value: *mut i8,
-    ) {
+    fn set_ext_value(&self, section: &CStr, key: &CStr, value: *mut i8) {
         let low = Reaper::get().low();
         let _result = unsafe {
-            low.SetProjExtState(self.context().to_raw(), section, key, value)
+            low.SetProjExtState(
+                self.context().to_raw(),
+                section.as_ptr(),
+                key.as_ptr(),
+                value,
+            )
         };
     }
 
-    fn get_value(
+    fn get_ext_value(
         &self,
-        section: *const i8,
-        key: *const i8,
+        section: &CStr,
+        key: &CStr,
         buf_size: usize,
     ) -> Option<CString> {
         let low = Reaper::get().low();
@@ -265,8 +236,8 @@ impl HasExtState for Project {
         let status = unsafe {
             low.GetProjExtState(
                 self.context().to_raw(),
-                section,
-                key,
+                section.as_ptr(),
+                key.as_ptr(),
                 ptr,
                 buf_size as i32,
             )
@@ -277,13 +248,13 @@ impl HasExtState for Project {
         unsafe { Some(CString::from_raw(ptr)) }
     }
 
-    fn delete(&mut self, section: *const i8, key: *const i8) {
+    fn delete_ext_value(&self, section: &CStr, key: &CStr) {
         unsafe {
             Reaper::get().low().SetProjExtState(
                 self.context().to_raw(),
-                section,
-                key,
-                CStr::from_bytes_with_nul_unchecked(&[0_u8]).as_ptr(),
+                section.as_ptr(),
+                key.as_ptr(),
+                null(),
             );
         }
     }

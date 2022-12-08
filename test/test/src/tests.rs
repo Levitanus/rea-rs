@@ -14,10 +14,11 @@ use rea_rs::{
     AutomationMode, Color, CommandId, EnvelopeChunk, ExtValue, Fx,
     GenericSend, GenericSendMut, HardwareSocket, MarkerRegionInfo,
     MessageBoxValue, Mutable, Pan, PanLaw, PlayRate, Position, Project,
-    Reaper, RecInput, RecMode, RecMonitoring, SampleAmount, SendDestChannels,
-    SendMIDIProps, SendMode, SendSourceChannels, SoloMode, TimeMode, Track,
-    TrackFolderState, TrackGroupParam, TrackPan, TrackPerformanceFlags,
-    TrackPlayOffset, TrackSend, UndoFlags, Volume, WithReaperPtr, VUMode, RecOutMode,
+    Reaper, RecInput, RecMode, RecMonitoring, RecOutMode, SampleAmount,
+    SendDestChannels, SendMIDIProps, SendMode, SendSourceChannels, SoloMode,
+    TimeMode, Track, TrackFolderState, TrackGroupParam, TrackPan,
+    TrackPerformanceFlags, TrackPlayOffset, TrackSend, UndoFlags, VUMode,
+    Volume, WithReaperPtr,
 };
 use std::collections::HashMap;
 use std::fs::canonicalize;
@@ -85,7 +86,8 @@ fn global_instances() -> TestStep {
 
         // Medium-level REAPER
         reaper_medium::Reaper::make_available_globally(medium_reaper.clone());
-        // reaper_medium::Reaper::make_available_globally(medium_reaper.clone());
+        // reaper_medium::Reaper::make_available_globally(medium_reaper.
+        // clone());
         medium_reaper.show_console_msg("- Hello from medium-level API\n");
         Ok(())
     })
@@ -417,8 +419,9 @@ fn ext_state() -> TestStep {
     step(AllVersions, "ExtState", |_, _| {
         info!("ExtState keep persistence between test sessions.");
         debug!("test on integer and in reaper");
+        let rpr = Reaper::get();
         let mut state =
-            ExtValue::new("test section", "first", Some(10), false, None);
+            ExtValue::new("test section", "first", Some(10), false, rpr);
         assert_eq!(state.get().expect("can not get value"), 10);
         state.set(56);
         assert_eq!(state.get().expect("can not get value"), 56);
@@ -427,8 +430,8 @@ fn ext_state() -> TestStep {
         state.set(56);
 
         debug!("test on struct and in reaper");
-        let mut state: ExtValue<SampleAmount> =
-            ExtValue::new("test section", "second", None, false, None);
+        let mut state: ExtValue<SampleAmount, Reaper> =
+            ExtValue::new("test section", "second", None, false, rpr);
         assert_eq!(state.get(), None);
         state.set(SampleAmount::new(35896));
         assert_eq!(state.get().expect("can not get value").get(), 35896);
@@ -437,10 +440,9 @@ fn ext_state() -> TestStep {
         state.set(SampleAmount::new(35896));
 
         debug!("test on struct and in project");
-        let rpr = Reaper::get();
         let pr = rpr.current_project();
-        let mut state: ExtValue<SampleAmount> =
-            ExtValue::new("test section", "third", None, true, Some(&pr));
+        let mut state: ExtValue<SampleAmount, Project> =
+            ExtValue::new("test section", "third", None, true, &pr);
         state.delete();
         assert!(state.get().is_none());
         state.set(SampleAmount::new(3344));
@@ -798,7 +800,7 @@ fn tracks() -> TestStep {
             low.load(),
             high.load(),
             None,
-            None
+            None,
         );
         let (low_u32, high_u32) =
             tr.group_membership(TrackGroupParam::MuteLead);
