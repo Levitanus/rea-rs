@@ -2,9 +2,9 @@ name: linux with tests
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,11 +13,12 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - name: Build
-      run: cargo build --workspace --verbose
+      - uses: actions/checkout@v3
+      - name: Build
+        run: cargo build --workspace --verbose
   test-linux:
     runs-on: ubuntu-latest
-    - uses: actions/checkout@v3
-    - name: Run tests
-      run: RUST_LOG=debug cargo test --verbose
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run tests
+        run: RUST_LOG=debug cargo test --verbose
