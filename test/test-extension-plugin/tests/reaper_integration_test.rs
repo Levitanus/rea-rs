@@ -99,14 +99,15 @@ fn run_integration_test_in_reaper(reaper_executable: &Path) -> Result<()> {
 /// Returns path of REAPER home
 fn setup_reaper_for_linux(reaper_download_dir_path: &Path) -> Result<PathBuf> {
     let reaper_home_path = reaper_download_dir_path.join("reaper_linux_x86_64/REAPER");
-    if reaper_home_path.exists() {
+    let reaper_check_path = reaper_download_dir_path.join("/reaper");
+    if reaper_check_path.exists() {
         return Ok(reaper_home_path);
     }
     let reaper_tarball_path = reaper_download_dir_path.join("reaper-linux.tar.xz");
     if !reaper_tarball_path.exists() {
         println!("Downloading REAPER to ({:?})...", &reaper_tarball_path);
         download(
-            "https://www.reaper.fm/files/6.x/reaper611_linux_x86_64.tar.xz",
+            "https://www.reaper.fm/files/6.x/reaper661_linux_x86_64.tar.xz",
             &reaper_tarball_path,
         )?;
     }
@@ -127,7 +128,7 @@ fn setup_reaper_for_macos(reaper_download_dir_path: &Path) -> Result<PathBuf> {
     if !reaper_dmg_path.exists() {
         println!("Downloading REAPER to ({:?})...", &reaper_dmg_path);
         download(
-            "https://www.reaper.fm/files/6.x/reaper611_x86_64.dmg",
+            "https://www.reaper.fm/files/6.x/reaper661_x86_64.dmg",
             &reaper_dmg_path,
         )?;
     }

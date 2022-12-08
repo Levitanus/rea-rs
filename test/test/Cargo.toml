@@ -6,7 +6,8 @@ publish = false
 version = "0.1.0"
 
 [dependencies]
-approx = "0.3.2"
+approx = "0.5.1"
+bitvec = {workspace = true}
 c_str_macro = "1.0.2"
 crossbeam-channel = "0.5"
 env_logger = {workspace = true}

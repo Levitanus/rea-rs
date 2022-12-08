@@ -1,6 +1,6 @@
 // #![allow(clippy::float_cmp)]
 use approx;
-use log::{debug, info, warn};
+use log::{debug, info};
 use rea_rs::errors::{ReaperError, ReaperResult};
 use rea_rs::project_info::{
     BoundsMode, RenderMode, RenderSettings, RenderTail, RenderTailFlags,
@@ -8,6 +8,7 @@ use rea_rs::project_info::{
 
 use crate::api::VersionRestriction::AllVersions;
 use crate::api::{step, TestStep};
+use bitvec::prelude::*;
 use c_str_macro::c_str;
 use rea_rs::{
     AutomationMode, Color, CommandId, EnvelopeChunk, ExtValue, Fx,
@@ -15,8 +16,8 @@ use rea_rs::{
     MessageBoxValue, Mutable, Pan, PanLaw, PlayRate, Position, Project,
     Reaper, RecInput, RecMode, RecMonitoring, SampleAmount, SendDestChannels,
     SendMIDIProps, SendMode, SendSourceChannels, SoloMode, TimeMode, Track,
-    TrackFolderState, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
-    TrackSend, UndoFlags, Volume, WithReaperPtr,
+    TrackFolderState, TrackGroupParam, TrackPan, TrackPerformanceFlags,
+    TrackPlayOffset, TrackSend, UndoFlags, Volume, WithReaperPtr, VUMode, RecOutMode,
 };
 use std::collections::HashMap;
 use std::fs::canonicalize;
@@ -33,7 +34,7 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
     // In theory all steps could be declared inline. But that makes the IDE
     // become terribly slow.
     let steps_a = vec![
-        // global_instances(),
+        global_instances(),
         action(),
         projects(),
         misc(),
@@ -73,7 +74,7 @@ fn global_instances() -> TestStep {
         ));
         // Low-level REAPER
         reaper_low::Reaper::make_available_globally(*medium_reaper.low());
-        reaper_low::Reaper::make_available_globally(*medium_reaper.low());
+        // reaper_low::Reaper::make_available_globally(*medium_reaper.low());
         let low = reaper_low::Reaper::get();
         println!("reaper_low::Reaper {:?}", &low);
         unsafe {
@@ -84,7 +85,7 @@ fn global_instances() -> TestStep {
 
         // Medium-level REAPER
         reaper_medium::Reaper::make_available_globally(medium_reaper.clone());
-        reaper_medium::Reaper::make_available_globally(medium_reaper.clone());
+        // reaper_medium::Reaper::make_available_globally(medium_reaper.clone());
         medium_reaper.show_console_msg("- Hello from medium-level API\n");
         Ok(())
     })
@@ -622,27 +623,27 @@ fn tracks() -> TestStep {
         assert_eq!(tr2.rec_mode(), RecMode::MidiOverdub);
         // assert_eq!(tr2.rec_input(), RecordInput::MIDI(0, None)); Not equal!
 
-        // assert_eq!(tr2.rec_out_mode(), RecOutMode::PostFader.into());
+        assert_eq!(tr2.rec_out_mode(), RecOutMode::PostFader.into());
         log::warn!("Something is wrong with RecOutMode");
-        // tr2.set_rec_out_mode(RecOutMode::PostFX)?;
-        // assert_eq!(tr2.rec_out_mode(), RecOutMode::PostFX.into());
+        tr2.set_rec_out_mode(RecOutMode::PostFX)?;
+        assert_eq!(tr2.rec_out_mode(), RecOutMode::PostFX.into());
 
         assert_eq!(tr2.rec_monitoring(), RecMonitoring::new(1, false));
         tr2.set_rec_monitoring(RecMonitoring::new(2, true))?;
         assert_eq!(tr2.rec_monitoring(), RecMonitoring::new(2, true));
 
-        warn!("Auto Rec Arm falls");
-        // debug!("set selected to false");
-        // tr2.set_selected(false)?;
-        // debug!("set auto rec arm to true");
-        // tr2.set_auto_rec_arm(true)?;
-        // assert!(tr2.auto_rec_arm());
-        // assert!(!tr2.rec_armed());
+        debug!("Auto Rec Arm");
+        debug!("set selected to false");
+        tr2.set_selected(false)?;
+        debug!("set auto rec arm to true");
+        tr2.set_auto_rec_arm(true)?;
+        assert!(tr2.auto_rec_arm());
+        assert!(!tr2.rec_armed());
 
-        warn!("VUMode errors");
-        // assert_eq!(tr2.vu_mode(), VUMode::StereoPeaks);
-        // tr2.set_vu_mode(VUMode::LUFS_M)?;
-        // assert_eq!(tr2.vu_mode(), VUMode::LUFS_M);
+        debug!("VUMode");
+        assert_eq!(tr2.vu_mode(), VUMode::MultichannelPeaks);
+        tr2.set_vu_mode(VUMode::LUFS_M)?;
+        assert_eq!(tr2.vu_mode(), VUMode::LUFS_M);
 
         debug!("n channels");
         assert_eq!(tr2.n_channels(), 2);
@@ -767,7 +768,11 @@ fn tracks() -> TestStep {
             )
         );
         tr2.set_mcp_fx_send_region_scale(0.7)?;
-        approx::abs_diff_eq!(tr2.mcp_fx_send_region_scale(), 0.7);
+        assert!(approx::relative_eq!(
+            tr2.mcp_fx_send_region_scale(),
+            0.7,
+            max_relative = 0.1
+        ));
 
         debug!("play offset");
         assert_eq!(tr2.play_offset(), None);
@@ -775,6 +780,33 @@ fn tracks() -> TestStep {
         assert_eq!(tr2.play_offset(), Some(TrackPlayOffset::Samples(-300)));
         tr2.set_play_offset(Some(TrackPlayOffset::Seconds(-0.4)))?;
         assert_eq!(tr2.play_offset(), Some(TrackPlayOffset::Seconds(-0.4)));
+
+        let mut tr = tr2.get_parent_track().expect("Should be folder track");
+        assert_eq!(tr.index(), 0);
+
+        let (mut low_u32, mut high_u32) =
+            tr.group_membership(TrackGroupParam::MuteLead);
+        let (low, high) = (
+            low_u32.view_bits_mut::<Lsb0>(),
+            high_u32.view_bits_mut::<Lsb0>(),
+        );
+        low.set(3, true);
+        low.set(5, true);
+        high.set(6, true);
+        tr.set_group_membership(
+            TrackGroupParam::MuteLead,
+            low.load(),
+            high.load(),
+            None,
+            None
+        );
+        let (low_u32, high_u32) =
+            tr.group_membership(TrackGroupParam::MuteLead);
+        debug!("{:#b}, {:#b}", low_u32, high_u32);
+        assert!(low_u32 & 0b1000 > 0);
+        assert!(low_u32 & 0b100000 > 0);
+        assert!(low_u32 & 0b1000000 == 0);
+        assert!(high_u32 & 0b1000000 > 0);
 
         Ok(())
     })

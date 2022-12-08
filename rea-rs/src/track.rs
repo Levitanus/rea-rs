@@ -1,8 +1,8 @@
 use std::{
+    ffi::CString,
     marker::PhantomData,
     mem::MaybeUninit,
     ptr::{null_mut, NonNull},
-    time::Duration,
 };
 
 use bitflags::bitflags;
@@ -16,9 +16,8 @@ use crate::{
     AudioAccessor, AutomationMode, Color, Fx, GenericSend, GetLength,
     HardwareSend, HardwareSocket, Immutable, Item, KnowsProject, Mutable, Pan,
     PanLaw, PanLawMode, Position, ProbablyMutable, Project, Reaper, RecInput,
-    RecMode, RecOutMode, SampleAmount, SendIntType, SoloMode, TimeMode,
-    TrackFX, TrackFolderState, TrackReceive, TrackSend, VUMode, Volume,
-    WithReaperPtr,
+    RecMode, RecOutMode, SendIntType, SoloMode, TimeMode, TrackFX,
+    TrackFolderState, TrackReceive, TrackSend, VUMode, Volume, WithReaperPtr,
 };
 
 #[derive(Debug, PartialEq)]
@@ -159,8 +158,6 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
             .expect("Can not convert to RecordingMode")
     }
 
-    #[deprecated = "This function probably, doesn't work: \
-        Can not found GUI for the setting."]
     /// If rec_mode records output. Otherwise — None.
     pub fn rec_out_mode(&self) -> Option<RecOutMode> {
         RecOutMode::from_raw(self.get_info_value("I_RECMODE_FLAGS") as u32)
@@ -170,12 +167,10 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         let monitor_items = self.get_info_value("I_RECMONITEMS") != 0.0;
         RecMonitoring::new(mode, monitor_items)
     }
-    #[deprecated = "This function fails in tests."]
     /// True if automatically armed when track is selected.
     pub fn auto_rec_arm(&self) -> bool {
         self.get_info_value("B_AUTO_RECARM") != 0.0
     }
-    #[deprecated = "Can not find function in GUI, can not set value."]
     pub fn vu_mode(&self) -> VUMode {
         VUMode::from_raw(self.get_info_value("I_VUMODE") as u32)
     }
@@ -377,8 +372,54 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
             )
         }
     }
+
+    /// Get status of all track groups for specified parameter as bits.
+    /// 
+    /// Returns 2 u32 values, each representing 32 track groups.
+    /// 
+    /// See [Track::set_group_membership] for example.
+    pub fn group_membership(&self, group: TrackGroupParam) -> (u32, u32) {
+        let rpr_low = Reaper::get().low();
+        let ptr = self.get().as_ptr();
+        let group_name = CString::new(group.as_str())
+            .expect("Can not convert group to CString");
+        let low = unsafe {
+            rpr_low.GetSetTrackGroupMembership(ptr, group_name.as_ptr(), 0, 0)
+        };
+        let high = unsafe {
+            rpr_low.GetSetTrackGroupMembershipHigh(
+                ptr,
+                group_name.as_ptr(),
+                0,
+                0,
+            )
+        };
+        (low, high)
+    }
+}
+impl<'a> Track<'a, Immutable> {
+    pub fn get_parent_track(&self) -> Option<Track<Immutable>> {
+        let ptr =
+            unsafe { Reaper::get().low().GetParentTrack(self.get().as_ptr()) };
+        match MediaTrack::new(ptr) {
+            None => None,
+            Some(ptr) => Track::new(self.project(), ptr).into(),
+        }
+    }
 }
 impl<'a> Track<'a, Mutable> {
+    pub fn get_parent_track(mut self) -> Option<Track<'a, Mutable>> {
+        let ptr =
+            unsafe { Reaper::get().low().GetParentTrack(self.get().as_ptr()) };
+        match MediaTrack::new(ptr) {
+            None => None,
+            Some(ptr) => {
+                self.ptr = ptr;
+                Some(self)
+            }
+        }
+    }
+
     fn set_info_string(
         &mut self,
         category: impl Into<String>,
@@ -607,7 +648,6 @@ impl<'a> Track<'a, Mutable> {
         self.set_info_value("I_RECMODE", rec_mode.int_value() as f64)
     }
 
-    #[deprecated = "This function fails in tests."]
     /// If rec_mode records output. Otherwise — None.
     pub fn set_rec_out_mode(&mut self, flags: RecOutMode) -> ReaperResult<()> {
         self.set_info_value("I_RECMODE_FLAGS", flags.to_raw() as f64)
@@ -620,7 +660,6 @@ impl<'a> Track<'a, Mutable> {
         self.set_info_value("I_RECMONITEMS", value.monitor_items as i32 as f64)
     }
 
-    #[deprecated = "This function fails in tests."]
     /// True if automatically armed when track is selected.
     ///
     /// If track is already selected and not rec armed — it will not
@@ -629,7 +668,6 @@ impl<'a> Track<'a, Mutable> {
         self.set_info_value("B_AUTO_RECARM", value as i32 as f64)
     }
 
-    #[deprecated = "Can not find function in GUI, can not set value."]
     pub fn set_vu_mode(&mut self, value: VUMode) -> ReaperResult<()> {
         debug!("{:?}", value.to_raw());
         self.set_info_value("I_VUMODE", value.to_raw() as f64)
@@ -800,6 +838,72 @@ impl<'a> Track<'a, Mutable> {
             }
         }
     }
+
+    /// Set track membership for specified parameter in track groups.
+    /// 
+    /// If masks are None — corresponding true bits of groups will be used.
+    /// For complete rewrite of values use u32::MAX.
+    /// 
+    /// # Example
+    /// 
+    /// ```no_run
+    /// use rea_rs::{TrackGroupParam, Reaper};
+    /// use bitvec::prelude::*;
+    /// 
+    /// let mut pr = Reaper::get().current_project();
+    /// let mut tr = pr.get_track_mut(0).unwrap();
+    /// assert_eq!(tr.index(), 0);
+    /// 
+    /// let (mut low_u32, mut high_u32) =
+    ///     tr.group_membership(TrackGroupParam::MuteLead);
+    /// let (low, high) = (
+    ///     low_u32.view_bits_mut::<Lsb0>(),
+    ///     high_u32.view_bits_mut::<Lsb0>(),
+    /// );
+    /// low.set(3, true);
+    /// low.set(5, true);
+    /// high.set(6, true);
+    /// tr.set_group_membership(
+    ///     TrackGroupParam::MuteLead,
+    ///     low.load(),
+    ///     high.load(),
+    ///     None,
+    ///     None
+    /// );
+    /// let (low_u32, high_u32) =
+    ///     tr.group_membership(TrackGroupParam::MuteLead);
+    /// assert!(low_u32 & 0b1000 > 0);
+    /// assert!(low_u32 & 0b100000 > 0);
+    /// assert!(low_u32 & 0b1000000 == 0);
+    /// assert!(high_u32 & 0b1000000 > 0);
+    /// ```
+    pub fn set_group_membership(
+        &mut self,
+        group: TrackGroupParam,
+        low_groups: u32,
+        high_groups: u32,
+        low_groups_set_mask: impl Into<Option<u32>>,
+        high_groups_set_mask: impl Into<Option<u32>>,
+    ) {
+        let rpr_low = Reaper::get().low();
+        let ptr = self.get().as_ptr();
+        let group_name = CString::new(group.as_str())
+            .expect("Can not convert group to CString");
+        unsafe {
+            rpr_low.GetSetTrackGroupMembership(
+                ptr,
+                group_name.as_ptr(),
+                low_groups_set_mask.into().unwrap_or(low_groups),
+                low_groups,
+            );
+            rpr_low.GetSetTrackGroupMembershipHigh(
+                ptr,
+                group_name.as_ptr(),
+                high_groups_set_mask.into().unwrap_or(high_groups),
+                high_groups,
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -851,4 +955,60 @@ pub enum TrackPan {
 pub enum TrackPlayOffset {
     Samples(i32),
     Seconds(f64),
+}
+
+pub enum TrackGroupParam {
+    VolumeLead,
+    VolumeFollow,
+    VolumeVcaLead,
+    VolumeVcaFollow,
+    PanLead,
+    PanFollow,
+    WidthLead,
+    WidthFollow,
+    MuteLead,
+    MuteFollow,
+    SoloLead,
+    SoloFollow,
+    RecarmLead,
+    RecarmFollow,
+    PolarityLead,
+    PolarityFollow,
+    AutomodeLead,
+    AutomodeFollow,
+    VolumeReverse,
+    PanReverse,
+    WidthReverse,
+    NoLeadWhenFollow,
+    VolumeVcaFollowIsprefx,
+}
+
+impl TrackGroupParam {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::VolumeLead => "VOLUME_LEAD",
+            Self::VolumeFollow => "VOLUME_FOLLOW",
+            Self::VolumeVcaLead => "VOLUME_VCA_LEAD",
+            Self::VolumeVcaFollow => "VOLUME_VCA_FOLLOW",
+            Self::PanLead => "PAN_LEAD",
+            Self::PanFollow => "PAN_FOLLOW",
+            Self::WidthLead => "WIDTH_LEAD",
+            Self::WidthFollow => "WIDTH_FOLLOW",
+            Self::MuteLead => "MUTE_LEAD",
+            Self::MuteFollow => "MUTE_FOLLOW",
+            Self::SoloLead => "SOLO_LEAD",
+            Self::SoloFollow => "SOLO_FOLLOW",
+            Self::RecarmLead => "RECARM_LEAD",
+            Self::RecarmFollow => "RECARM_FOLLOW",
+            Self::PolarityLead => "POLARITY_LEAD",
+            Self::PolarityFollow => "POLARITY_FOLLOW",
+            Self::AutomodeLead => "AUTOMODE_LEAD",
+            Self::AutomodeFollow => "AUTOMODE_FOLLOW",
+            Self::VolumeReverse => "VOLUME_REVERSE",
+            Self::PanReverse => "PAN_REVERSE",
+            Self::WidthReverse => "WIDTH_REVERSE",
+            Self::NoLeadWhenFollow => "NO_LEAD_WHEN_FOLLOW",
+            Self::VolumeVcaFollowIsprefx => "VOLUME_VCA_FOLLOW_ISPREFX",
+        }
+    }
 }
