@@ -223,3 +223,68 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + std::fmt::Debug>
         }
     }
 }
+
+pub trait HasExtState {
+    fn set_value(
+        &mut self,
+        section: *const i8,
+        key: *const i8,
+        value: *mut i8,
+    );
+    fn get_value(
+        &self,
+        section: *const i8,
+        key: *const i8,
+        buf_size: usize,
+    ) -> Option<CString>;
+    fn delete(&mut self, section: *const i8, key: *const i8);
+}
+
+impl HasExtState for Project {
+    fn set_value(
+        &mut self,
+        section: *const i8,
+        key: *const i8,
+        value: *mut i8,
+    ) {
+        let low = Reaper::get().low();
+        let _result = unsafe {
+            low.SetProjExtState(self.context().to_raw(), section, key, value)
+        };
+    }
+
+    fn get_value(
+        &self,
+        section: *const i8,
+        key: *const i8,
+        buf_size: usize,
+    ) -> Option<CString> {
+        let low = Reaper::get().low();
+        let buf = make_c_string_buf(buf_size);
+        let ptr = buf.into_raw();
+        let status = unsafe {
+            low.GetProjExtState(
+                self.context().to_raw(),
+                section,
+                key,
+                ptr,
+                buf_size as i32,
+            )
+        };
+        if status <= 0 {
+            return None;
+        }
+        unsafe { Some(CString::from_raw(ptr)) }
+    }
+
+    fn delete(&mut self, section: *const i8, key: *const i8) {
+        unsafe {
+            Reaper::get().low().SetProjExtState(
+                self.context().to_raw(),
+                section,
+                key,
+                CStr::from_bytes_with_nul_unchecked(&[0_u8]).as_ptr(),
+            );
+        }
+    }
+}
