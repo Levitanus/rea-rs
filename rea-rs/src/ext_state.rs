@@ -1,5 +1,5 @@
 use crate::{
-    utils::{as_c_str, as_c_string, as_string, make_c_string_buf, WithNull},
+    utils::{as_c_str, as_string, make_c_string_buf, WithNull},
     Mutable, ProbablyMutable, Project, Reaper, Track, WithReaperPtr,
 };
 use log::debug;
@@ -7,7 +7,8 @@ use serde::de::DeserializeOwned;
 pub use serde::{Deserialize, Serialize};
 use std::{
     ffi::{CStr, CString},
-    ptr::{null, null_mut},
+    fmt::Debug,
+    ptr::null,
 };
 
 /// Serializes extension data.
@@ -19,7 +20,8 @@ use std::{
 /// - It serializes not strings, but anything, can be serialized
 /// by [serde] crate.
 /// - It provides the similar interface as for global ext state values,
-/// as well as to project ext data.
+/// as well as to project or other objects ext data.
+/// Currently supported: [Project], [Track]
 /// - it erases data, if in process of development
 /// you decided to turn the persistence off.
 /// - it can be initialized with value, but only once, if
@@ -45,7 +47,8 @@ use std::{
 /// assert_eq!(state.get().expect("can not get value"), 56);
 /// state.delete();
 /// assert!(state.get().is_none());
-/// let pr = rpr.current_project();
+///
+/// let mut pr = rpr.current_project();
 /// let mut state: ExtValue<u32, Project> =
 ///     ExtValue::new("test section", "first", None, true, &pr);
 /// assert_eq!(state.get().expect("can not get value"), 10);
@@ -53,11 +56,22 @@ use std::{
 /// assert_eq!(state.get().expect("can not get value"), 56);
 /// state.delete();
 /// assert!(state.get().is_none());
+/// // We need drop here, as state should drop the value
+/// // if persistence is false. This will borrow pr on the drop.
+/// drop(state);
+///
+/// let tr = pr.get_track_mut(0).unwrap();
+/// let mut state = ExtValue::new("testsection", "first", 45, false, &tr);
+/// assert_eq!(state.get().expect("can not get value"), 45);
+/// state.set(15);
+/// assert_eq!(state.get().expect("can not get value"), 15);
+/// state.delete();
+/// assert_eq!(state.get(), None);
 /// ```
 #[derive(Debug, PartialEq)]
 pub struct ExtValue<
     'a,
-    T: Serialize + DeserializeOwned + Clone + std::fmt::Debug,
+    T: Serialize + DeserializeOwned + Clone + Debug,
     O: HasExtState,
 > {
     section: String,
@@ -67,11 +81,8 @@ pub struct ExtValue<
     object: &'a O,
     buf_size: usize,
 }
-impl<
-        'a,
-        T: Serialize + DeserializeOwned + Clone + std::fmt::Debug,
-        O: HasExtState,
-    > ExtValue<'a, T, O>
+impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
+    ExtValue<'a, T, O>
 {
     /// Create ext state object.
     ///
@@ -164,6 +175,15 @@ impl<
         let (section_str, key_str) = (self.section(), self.key());
         let (section, key) = (as_c_str(&section_str), as_c_str(&key_str));
         self.object.delete_ext_value(section, key)
+    }
+}
+impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState> Drop
+    for ExtValue<'a, T, O>
+{
+    fn drop(&mut self) {
+        if !self.persist {
+            self.delete();
+        }
     }
 }
 
