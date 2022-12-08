@@ -25,7 +25,9 @@ pub struct Track<'a, T: ProbablyMutable> {
     ptr: MediaTrack,
     should_check: bool,
     project: &'a Project,
-    info_buf_size: usize,
+    /// Used to get string info about the track.
+    /// default is 512
+    pub info_buf_size: usize,
     phantom_mut: PhantomData<T>,
 }
 impl<'a, T: ProbablyMutable> WithReaperPtr<'a> for Track<'a, T> {
@@ -78,7 +80,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         Self::from_index(project, index)
     }
 
-    fn get_info_string(
+    pub fn get_info_string(
         &self,
         category: impl Into<String>,
     ) -> ReaperResult<String> {
@@ -374,9 +376,9 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     }
 
     /// Get status of all track groups for specified parameter as bits.
-    /// 
+    ///
     /// Returns 2 u32 values, each representing 32 track groups.
-    /// 
+    ///
     /// See [Track::set_group_membership] for example.
     pub fn group_membership(&self, group: TrackGroupParam) -> (u32, u32) {
         let rpr_low = Reaper::get().low();
@@ -840,20 +842,20 @@ impl<'a> Track<'a, Mutable> {
     }
 
     /// Set track membership for specified parameter in track groups.
-    /// 
+    ///
     /// If masks are `None` — corresponding true bits of groups will be used.
     /// For complete rewrite of values use [u32::MAX].
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```no_run
     /// use rea_rs::{TrackGroupParam, Reaper};
     /// use bitvec::prelude::*;
-    /// 
+    ///
     /// let mut pr = Reaper::get().current_project();
     /// let mut tr = pr.get_track_mut(0).unwrap();
     /// assert_eq!(tr.index(), 0);
-    /// 
+    ///
     /// let (mut low_u32, mut high_u32) =
     ///     tr.group_membership(TrackGroupParam::MuteLead);
     /// let (low, high) = (

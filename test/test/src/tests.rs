@@ -440,7 +440,7 @@ fn ext_state() -> TestStep {
         state.set(SampleAmount::new(35896));
 
         debug!("test on struct and in project");
-        let pr = rpr.current_project();
+        let mut pr = rpr.current_project();
         let mut state: ExtValue<SampleAmount, Project> =
             ExtValue::new("test section", "third", None, true, &pr);
         state.delete();
@@ -450,6 +450,16 @@ fn ext_state() -> TestStep {
         assert_eq!(state.get().expect("can not get value").get(), 3344);
         state.delete();
         assert!(state.get().is_none());
+
+        debug!("test on int and track");
+        let tr = pr.get_track_mut(0).unwrap();
+        let mut state = ExtValue::new("testsection", "first", 45, false, &tr);
+        assert_eq!(state.get().expect("can not get value"), 45);
+        state.set(15);
+        assert_eq!(state.get().expect("can not get value"), 15);
+        state.delete();
+        assert_eq!(state.get(), None);
+
         Ok(())
     })
 }
