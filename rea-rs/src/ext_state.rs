@@ -1,8 +1,8 @@
 use crate::{
     utils::{as_c_str, as_string, make_c_string_buf, WithNull},
-    Mutable, ProbablyMutable, Project, Reaper, Track, WithReaperPtr,
+    GenericSend, Mutable, ProbablyMutable, Project, Reaper, SendIntType,
+    Track, TrackSend, WithReaperPtr,
 };
-use log::debug;
 use serde::de::DeserializeOwned;
 pub use serde::{Deserialize, Serialize};
 use std::{
@@ -21,7 +21,7 @@ use std::{
 /// by [serde] crate.
 /// - It provides the similar interface as for global ext state values,
 /// as well as to project or other objects ext data.
-/// Currently supported: [Project], [Track]
+/// Currently supported: [Project], [Track], [TrackSend]
 /// - it erases data, if in process of development
 /// you decided to turn the persistence off.
 /// - it can be initialized with value, but only once, if
@@ -143,18 +143,14 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
     pub fn get(&self) -> Option<T> {
         let (section_str, key_str) = (self.section(), self.key());
         let (section, key) = (as_c_str(&section_str), as_c_str(&key_str));
-        debug!("get ext value");
         let result = self.object.get_ext_value(section, key, self.buf_size);
-        debug!("match value: {:?}", result);
         let value_obj = match result {
             None => return None,
             Some(value) => value,
         };
         let value = value_obj.as_bytes();
-        debug!("deserialize value: {:?}", value);
         let value: T = rmp_serde::decode::from_slice(value)
             .expect("This value was not serialized by ExtState");
-        debug!("deserialized value: {:?}", value);
         Some(value)
     }
 
@@ -287,8 +283,7 @@ fn get_track_ext_state<'a, T: ProbablyMutable>(
     key: &CStr,
     buf_size: usize,
 ) -> Option<CString> {
-    let mut category = section_key_to_track_category(section, key);
-    debug!("category is: {}", category);
+    let mut category = section_key_to_one_category(section, key);
     let buf = make_c_string_buf(buf_size).into_raw();
     let result = unsafe {
         Reaper::get().low().GetSetMediaTrackInfo_String(
@@ -304,21 +299,20 @@ fn get_track_ext_state<'a, T: ProbablyMutable>(
     }
 }
 
-fn section_key_to_track_category(section: &CStr, key: &CStr) -> String {
+fn section_key_to_one_category(section: &CStr, key: &CStr) -> String {
     let mut category = String::from("P_EXT:");
     let section =
         as_string(section.as_ptr()).expect("Can not convert to string");
     let key = as_string(key.as_ptr()).expect("Can not convert to string");
     category += &section;
     category += &key;
-    // category
-    String::from("P_EXT:xyz")
+    category
+    // String::from("P_EXT:xyz")
 }
 
 impl<'a> HasExtState for Track<'a, Mutable> {
     fn set_ext_value(&self, section: &CStr, key: &CStr, value: *mut i8) {
-        let mut category = section_key_to_track_category(section, key);
-        debug!("category is: {}", category);
+        let mut category = section_key_to_one_category(section, key);
         unsafe {
             Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get().as_ptr(),
@@ -339,10 +333,64 @@ impl<'a> HasExtState for Track<'a, Mutable> {
     }
 
     fn delete_ext_value(&self, section: &CStr, key: &CStr) {
-        let mut category = section_key_to_track_category(section, key);
+        let mut category = section_key_to_one_category(section, key);
         unsafe {
             Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get().as_ptr(),
+                as_c_str(category.with_null()).as_ptr(),
+                CString::new("").unwrap().into_raw(),
+                true,
+            )
+        };
+    }
+}
+
+impl<'a> HasExtState for TrackSend<'a, Mutable> {
+    fn set_ext_value(&self, section: &CStr, key: &CStr, value: *mut i8) {
+        let mut category = section_key_to_one_category(section, key);
+        unsafe {
+            Reaper::get().low().GetSetTrackSendInfo_String(
+                self.parent_track().get().as_ptr(),
+                self.as_int(),
+                self.index() as i32,
+                as_c_str(category.with_null()).as_ptr(),
+                value,
+                true,
+            );
+        }
+    }
+
+    fn get_ext_value(
+        &self,
+        section: &CStr,
+        key: &CStr,
+        buf_size: usize,
+    ) -> Option<CString> {
+        let mut category = section_key_to_one_category(section, key);
+        let buf = make_c_string_buf(buf_size).into_raw();
+        let result = unsafe {
+            Reaper::get().low().GetSetTrackSendInfo_String(
+                self.parent_track().get().as_ptr(),
+                self.as_int(),
+                self.index() as i32,
+                as_c_str(category.with_null()).as_ptr(),
+                buf,
+                false,
+            )
+        };
+        match result {
+            false => None,
+            true => Some(unsafe { CString::from_raw(buf) }),
+        }
+    }
+
+    fn delete_ext_value(&self, section: &CStr, key: &CStr) {
+        let mut category = section_key_to_one_category(section, key);
+        unsafe {
+            Reaper::get().low().GetSetTrackSendInfo_String(
+                self.parent_track().get().as_ptr(),
+                self.as_int(),
+                self.index() as i32,
                 as_c_str(category.with_null()).as_ptr(),
                 CString::new("").unwrap().into_raw(),
                 true,

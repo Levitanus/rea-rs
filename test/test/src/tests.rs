@@ -460,6 +460,20 @@ fn ext_state() -> TestStep {
         assert_eq!(state.get().expect("can not get value"), 15);
         state.delete();
         assert_eq!(state.get(), None);
+        drop(state);
+
+        debug!("test on int and send");
+        pr.add_track(1, "second");
+        let source = pr.get_track(0).unwrap();
+        let destination = pr.get_track(1).unwrap();
+        let send = TrackSend::create_new(&source, &destination);
+        let mut state = ExtValue::new("test section", "first", 45, false, &send);
+        assert_eq!(state.get().expect("can not get value"), 45);
+        state.set(15);
+        assert_eq!(state.get().expect("can not get value"), 15);
+        state.delete();
+        assert_eq!(state.get(), None);
+        drop(state);
 
         Ok(())
     })
