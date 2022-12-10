@@ -1,13 +1,11 @@
-use std::{
-    ffi::{c_char, CStr, CString},
-    str::Utf8Error,
-};
-
-use reaper_medium::ReaperPointer;
-
 use crate::{
     errors::{ReaperError, ReaperResult},
     Project, Reaper,
+};
+use reaper_medium::ReaperPointer;
+use std::{
+    ffi::{c_char, CStr, CString},
+    str::Utf8Error,
 };
 
 pub trait WithNull: Clone {
@@ -24,12 +22,10 @@ impl WithNull for String {
 
 /// Convert string to CString pointer for using with low-level.
 pub fn as_mut_i8<'a>(value: impl Into<&'a str>) -> *mut i8 {
-    unsafe {
-        let value: &str = value.into();
-        let vec: Vec<u8> = value.chars().map(|val| val as u8).collect();
-        let string: CString = CString::from_vec_unchecked(vec);
-        string.into_raw()
-    }
+    let value: &str = value.into();
+    let vec: Vec<u8> = value.chars().map(|val| val as u8).collect();
+    let string: CString = unsafe { CString::from_vec_unchecked(vec) };
+    string.into_raw()
 }
 
 /// Convert string to CStr pointer for using with low-level.

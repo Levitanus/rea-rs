@@ -1,24 +1,23 @@
 // #![allow(clippy::float_cmp)]
 use approx;
-use log::{debug, info};
+use log::{debug, info, warn};
 use rea_rs::errors::{ReaperError, ReaperResult};
 use rea_rs::project_info::{
     BoundsMode, RenderMode, RenderSettings, RenderTail, RenderTailFlags,
 };
 
-use crate::api::VersionRestriction::AllVersions;
-use crate::api::{step, TestStep};
+use crate::{step, TestStep};
 use bitvec::prelude::*;
 use c_str_macro::c_str;
 use rea_rs::{
-    AutomationMode, Color, CommandId, EnvelopeChunk, ExtValue, Fx,
-    GenericSend, GenericSendMut, HardwareSocket, MarkerRegionInfo,
+    AutomationMode, Color, CommandId, EnvelopeChunk, EnvelopePoint, ExtValue,
+    Fx, GenericSend, GenericSendMut, HardwareSocket, MarkerRegionInfo,
     MessageBoxValue, Mutable, Pan, PanLaw, PlayRate, Position, Project,
-    Reaper, RecInput, RecMode, RecMonitoring, RecOutMode, SampleAmount,
-    SendDestChannels, SendMIDIProps, SendMode, SendSourceChannels, SoloMode,
-    TimeMode, Track, TrackFolderState, TrackGroupParam, TrackPan,
-    TrackPerformanceFlags, TrackPlayOffset, TrackSend, UndoFlags, VUMode,
-    Volume, WithReaperPtr,
+    RazorEdit, Reaper, RecInput, RecMode, RecMonitoring, RecOutMode,
+    SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
+    SendSourceChannels, SoloMode, TimeMode, Track, TrackFolderState,
+    TrackGroupParam, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
+    TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr,
 };
 use std::collections::HashMap;
 use std::fs::canonicalize;
@@ -43,6 +42,7 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
         ext_state(),
         markers(),
         tracks(),
+        razor_edits(),
         sends(),
     ]
     .into_iter();
@@ -55,7 +55,7 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
 }
 
 fn global_instances() -> TestStep {
-    step(AllVersions, "Global instances", |_, _| {
+    step("Global instances", || {
         // Sizes
         use std::mem::size_of_val;
         let medium_session = Reaper::get().medium_session();
@@ -94,7 +94,7 @@ fn global_instances() -> TestStep {
 }
 
 fn action() -> TestStep {
-    step(AllVersions, "Actions", |_, _| {
+    step("Actions", || {
         let rpr = Reaper::get_mut();
         let (send, receive) = mpsc::channel::<bool>();
         let action = rpr.register_action(
@@ -136,7 +136,7 @@ fn action() -> TestStep {
 }
 
 fn projects() -> TestStep {
-    step(AllVersions, "Projects", |_, _| {
+    step("Projects", || {
         let rpr = Reaper::get();
         // closes all projects.
         rpr.perform_action(CommandId::new(40886), 0, None);
@@ -193,14 +193,14 @@ fn projects() -> TestStep {
         assert_eq!(pr.is_stopped(), true);
         assert_eq!(pr.is_playing(), false);
 
-        // debug!("Test group index");
-        // pr.set_track_group_name(0, "first group")?;
-        // pr.set_track_group_name(5, "sixth group")?;
-        // pr.set_track_group_name(62, "63th group")?;
+        debug!("Test group index");
+        pr.set_track_group_name(0, "first group")?;
+        pr.set_track_group_name(5, "sixth group")?;
+        pr.set_track_group_name(62, "63th group")?;
 
-        // assert_eq!(pr.get_track_group_name(62)?, "63th group");
-        // assert_eq!(pr.get_track_group_name(0)?, "first group");
-        // assert_eq!(pr.get_track_group_name(5)?, "sixth group");
+        assert_eq!(pr.get_track_group_name(62)?, "63th group");
+        assert_eq!(pr.get_track_group_name(0)?, "first group");
+        assert_eq!(pr.get_track_group_name(5)?, "sixth group");
 
         //
         debug!("Test Info Value");
@@ -254,7 +254,7 @@ fn projects() -> TestStep {
 }
 
 fn browse_for_file() -> TestStep {
-    step(AllVersions, "Browse for file", |_, _| {
+    step("Browse for file", || {
         let rpr = Reaper::get();
         let result = rpr.browse_for_file("close this window!", "txt");
         assert_eq!(
@@ -273,7 +273,7 @@ fn browse_for_file() -> TestStep {
 }
 
 fn get_user_inputs() -> TestStep {
-    step(AllVersions, "Get user inputs.", |_, _| {
+    step("Get user inputs.", || {
         let rpr = Reaper::get();
         let captions =
             vec!["age(18)", "name(user)", "leave blank", "fate(atheist)"];
@@ -294,7 +294,7 @@ fn get_user_inputs() -> TestStep {
 }
 
 fn show_message_box() -> TestStep {
-    step(AllVersions, "Get user inputs.", |_, _| {
+    step("Get user inputs.", || {
         let rpr = Reaper::get();
         let result = rpr.show_message_box(
             "close message box",
@@ -313,7 +313,7 @@ fn show_message_box() -> TestStep {
 }
 
 fn misc() -> TestStep {
-    step(AllVersions, "Misc little functions", |_, _| {
+    step("Misc little functions", || {
         let rpr = Reaper::get();
         debug!("Console message");
         rpr.show_console_msg("Hello from misc functions.");
@@ -381,7 +381,7 @@ fn misc() -> TestStep {
 }
 
 fn misc_types() -> TestStep {
-    step(AllVersions, "Misc little types", |_, _| {
+    step("Misc little types", || {
         let _rpr = Reaper::get();
         debug!("Color");
         let yellow = Color::new(255, 255, 0);
@@ -416,7 +416,7 @@ fn misc_types() -> TestStep {
 }
 
 fn ext_state() -> TestStep {
-    step(AllVersions, "ExtState", |_, _| {
+    step("ExtState", || {
         info!("ExtState keep persistence between test sessions.");
         debug!("test on integer and in reaper");
         let rpr = Reaper::get();
@@ -467,7 +467,8 @@ fn ext_state() -> TestStep {
         let source = pr.get_track(0).unwrap();
         let destination = pr.get_track(1).unwrap();
         let send = TrackSend::create_new(&source, &destination);
-        let mut state = ExtValue::new("test section", "first", 45, false, &send);
+        let mut state =
+            ExtValue::new("test section", "first", 45, false, &send);
         assert_eq!(state.get().expect("can not get value"), 45);
         state.set(15);
         assert_eq!(state.get().expect("can not get value"), 15);
@@ -480,7 +481,7 @@ fn ext_state() -> TestStep {
 }
 
 fn markers() -> TestStep {
-    step(AllVersions, "Markers", |_, _| {
+    step("Markers", || {
         let rpr = Reaper::get();
         let mut project = rpr.current_project();
         let idx1 = project.add_marker(
@@ -539,7 +540,7 @@ fn markers() -> TestStep {
     })
 }
 fn tracks() -> TestStep {
-    step(AllVersions, "Tracks", |_, _| {
+    step("Tracks", || {
         let rpr = Reaper::get();
         let mut pr = rpr.current_project();
         debug!("add track 'first'");
@@ -834,13 +835,65 @@ fn tracks() -> TestStep {
         assert!(low_u32 & 0b100000 > 0);
         assert!(low_u32 & 0b1000000 == 0);
         assert!(high_u32 & 0b1000000 > 0);
+        Ok(())
+    })
+}
+fn razor_edits() -> TestStep {
+    step("Razor Edits", || {
+        let rpr = Reaper::get();
+        let mut pr = rpr.current_project();
+        pr.add_track(0, "");
+        pr.add_track(1, "");
+        let tr1 = pr.get_track(0).unwrap();
+        let tr2 = pr.get_track(1).unwrap();
+        debug!("razor edits");
+        let send = TrackSend::create_new(&tr1, &tr2);
+        let mut env = send
+            .get_envelope(EnvelopeChunk::Vol)
+            .expect("Can't find envelope by chunk");
+        env.insert_point(
+            0.5.into(),
+            EnvelopePoint::new(
+                0.5,
+                rea_rs::EnvelopePointShape::FastEnd,
+                0.0,
+                true,
+            ),
+            true,
+        )?;
+        let _env_guid = env.guid();
+
+        let mut tr = pr.get_track_mut(0).unwrap();
+        let mut edits: Vec<RazorEdit> = Vec::new();
+        edits.push(RazorEdit {
+            start: 0.5.into(),
+            end: 1.0.into(),
+            envelope_guid: None,
+            top_y_pos: 0.0,
+            bot_y_pos: 1.0,
+        });
+        warn!("Can not test with envelope GUID.");
+        edits.push(RazorEdit {
+            start: 1.5.into(),
+            end: 3.0.into(),
+            envelope_guid: None,
+            top_y_pos: 0.0,
+            bot_y_pos: 1.0,
+        });
+        debug!("set razor edit");
+        let edits_bkp = edits.clone();
+        tr.set_razor_edits(edits)?;
+        rpr.update_arrange();
+        rpr.update_timeline();
+        debug!("get razor edit");
+        assert_eq!(tr.razor_edits()?, edits_bkp);
 
         Ok(())
     })
 }
 
 fn sends() -> TestStep {
-    step(AllVersions, "Sends", |_, _| {
+    step("Sends", || {
         let rpr = Reaper::get();
         // rpr.perform_action(40886, 0, None);
         let mut pr = rpr.current_project();

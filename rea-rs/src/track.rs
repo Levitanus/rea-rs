@@ -1,23 +1,27 @@
+use core::panic;
 use std::{
     ffi::CString,
     marker::PhantomData,
     mem::MaybeUninit,
+    path::PathBuf,
     ptr::{null_mut, NonNull},
 };
 
 use bitflags::bitflags;
 use int_enum::IntEnum;
-use log::debug;
 use reaper_medium::{MediaItem, MediaTrack};
 
 use crate::{
-    errors::{ReaperError, ReaperResult},
-    utils::{as_c_str, as_mut_i8, as_string_mut, make_c_string_buf, WithNull},
+    errors::{ReaperError, ReaperResult, ReaperStaticResult},
+    utils::{
+        as_c_str, as_c_string, as_string_mut, make_c_string_buf, WithNull,
+    },
     AudioAccessor, AutomationMode, Color, Fx, GenericSend, GetLength,
     HardwareSend, HardwareSocket, Immutable, Item, KnowsProject, Mutable, Pan,
     PanLaw, PanLawMode, Position, ProbablyMutable, Project, Reaper, RecInput,
-    RecMode, RecOutMode, SendIntType, SoloMode, TimeMode, TrackFX,
+    RecMode, RecOutMode, RectPixel, SendIntType, SoloMode, TimeMode, TrackFX,
     TrackFolderState, TrackReceive, TrackSend, VUMode, Volume, WithReaperPtr,
+    GUID,
 };
 
 #[derive(Debug, PartialEq)]
@@ -104,6 +108,47 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
 
     pub fn name(&self) -> ReaperResult<String> {
         self.get_info_string("P_NAME")
+    }
+    pub fn icon(&self) -> ReaperResult<PathBuf> {
+        Ok(PathBuf::from(self.get_info_string("P_ICON")?))
+    }
+    pub fn mcp_layout(&self) -> ReaperResult<String> {
+        self.get_info_string("P_MCP_LAYOUT")
+    }
+    pub fn tcp_layout(&self) -> ReaperResult<String> {
+        self.get_info_string("P_TCP_LAYOUT")
+    }
+    /// allows querying screen position + size of track WALTER elements
+    /// (tcp.size queries screen position and size of entire TCP, etc).
+    pub fn ui_element_rect(
+        &self,
+        element: impl Into<String>,
+    ) -> ReaperResult<RectPixel> {
+        let mut category = String::from("P_UI_RECT:");
+        category += &element.into();
+        let result = self.get_info_string(category)?;
+        let mut tokens = result.split(" ");
+        let x: u32 = tokens.next().unwrap().parse().unwrap();
+        let y: u32 = tokens.next().unwrap().parse().unwrap();
+        let width: u32 = tokens.next().unwrap().parse().unwrap();
+        let height: u32 = tokens.next().unwrap().parse().unwrap();
+        Ok(RectPixel::new(x, y, width, height))
+    }
+
+    /// Get Vec of RazorEdit areas.
+    ///
+    /// Can be empty.
+    ///
+    /// For every envelope selected will be returned dedicated
+    /// [RazorEdit] with envelope GUID. RazorEdit without GUID
+    /// corresponding to [Track]
+    pub fn razor_edits(&self) -> ReaperResult<Vec<RazorEdit>> {
+        let result = self.get_info_string("P_RAZOREDITS_EXT")?;
+        Ok(result
+            .split(",")
+            .filter(|v| !v.is_empty())
+            .map(|item| RazorEdit::from_str(item))
+            .collect())
     }
 
     fn get_info_value(&self, category: impl Into<String>) -> f64 {
@@ -216,12 +261,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         }
         let channel = value & 0b11111;
         let out_idx = value >> 5;
-        debug!(
-            "value: {}, channel: {}, out_idx: {}",
-            value, channel, out_idx
-        );
         let socket = Reaper::get().get_midi_output(out_idx as usize)?;
-        debug!("socket: {:?}", socket);
         (channel as u8, socket).into()
     }
 
@@ -426,26 +466,70 @@ impl<'a> Track<'a, Mutable> {
         &mut self,
         category: impl Into<String>,
         value: impl Into<String>,
-    ) -> ReaperResult<()> {
-        unsafe {
-            let result = Reaper::get().low().GetSetMediaTrackInfo_String(
+    ) -> ReaperStaticResult<()> {
+        let mut category = category.into();
+        let value = value.into();
+        let result = unsafe {
+            Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get().as_ptr(),
-                as_c_str(&category.into().with_null()).as_ptr(),
-                as_mut_i8(value.into().as_str()),
+                as_c_str(&category.with_null()).as_ptr(),
+                as_c_string(&value).into_raw(),
                 true,
-            );
-            match result {
-                false => Err(ReaperError::UnsuccessfulOperation(
-                    "Can not set info string.",
-                )
-                .into()),
-                true => Ok(()),
-            }
+            )
+        };
+        match result {
+            false => Err(ReaperError::UnsuccessfulOperation(
+                "Can not set info string.",
+            )),
+            true => Ok(()),
         }
     }
 
-    pub fn set_name(&mut self, name: impl Into<String>) -> ReaperResult<()> {
+    /// Set Vec of RazorEdit areas.
+    ///
+    /// Can be empty.
+    ///
+    /// For every envelope selected should be provided dedicated
+    /// [RazorEdit] with envelope GUID. RazorEdit without GUID
+    /// corresponding to [Track]
+    pub fn set_razor_edits(
+        &mut self,
+        edits: Vec<RazorEdit>,
+    ) -> ReaperStaticResult<()> {
+        let edits: Vec<String> =
+            edits.into_iter().map(|e| e.to_string()).collect();
+        let edits = edits.join(",");
+        self.set_info_string("P_RAZOREDITS_EXT", edits)?;
+        Ok(())
+    }
+
+    pub fn set_name(
+        &mut self,
+        name: impl Into<String>,
+    ) -> ReaperStaticResult<()> {
         self.set_info_string("P_NAME", name)
+    }
+
+    pub fn set_icon(&mut self, path: PathBuf) -> ReaperStaticResult<()> {
+        self.set_info_string(
+            "P_ICON",
+            path.to_str().ok_or(ReaperError::InvalidObject(
+                "can not convert path to string",
+            ))?,
+        )
+    }
+
+    pub fn set_mcp_layout(
+        &mut self,
+        layout: String,
+    ) -> ReaperStaticResult<()> {
+        self.set_info_string("P_MCP_LAYOUT", layout)
+    }
+    pub fn set_tcp_layout(
+        &mut self,
+        layout: String,
+    ) -> ReaperStaticResult<()> {
+        self.set_info_string("P_TCP_LAYOUT", layout)
     }
 
     pub fn add_audio_accessor(
@@ -671,7 +755,6 @@ impl<'a> Track<'a, Mutable> {
     }
 
     pub fn set_vu_mode(&mut self, value: VUMode) -> ReaperResult<()> {
-        debug!("{:?}", value.to_raw());
         self.set_info_value("I_VUMODE", value.to_raw() as f64)
     }
     pub fn set_n_channels(&mut self, amount: usize) -> ReaperResult<()> {
@@ -1012,5 +1095,67 @@ impl TrackGroupParam {
             Self::NoLeadWhenFollow => "NO_LEAD_WHEN_FOLLOW",
             Self::VolumeVcaFollowIsprefx => "VOLUME_VCA_FOLLOW_ISPREFX",
         }
+    }
+}
+
+/// Represents RazorEdit area of [Track]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RazorEdit {
+    /// start time
+    pub start: Position,
+    /// end time
+    pub end: Position,
+    /// If `None` → it's track selection,
+    /// if Some([GUID]) → it's envelope selection.
+    pub envelope_guid: Option<GUID>,
+    /// probably, can be considered as visible envelope index.
+    pub top_y_pos: f64,
+    /// probably, can be considered as visible envelope index.
+    pub bot_y_pos: f64,
+}
+impl RazorEdit {
+    pub(crate) fn from_str(data: &str) -> Self {
+        let mut tokens = data.split(" ");
+        let start: f64 = tokens.next().unwrap().parse().unwrap();
+        let end: f64 = tokens.next().unwrap().parse().unwrap();
+        let guid = tokens
+            .next()
+            .unwrap()
+            .strip_prefix("\"")
+            .unwrap()
+            .strip_suffix("\"")
+            .unwrap();
+        let guid = match guid.is_empty() {
+            true => None,
+            false => Some(String::from(guid)),
+        };
+        let top_y_pos: f64 = tokens.next().unwrap().parse().unwrap();
+        let bot_y_pos: f64 = tokens.next().unwrap().parse().unwrap();
+        let start = Position::from(start);
+        let end = Position::from(end);
+        let guid = match guid {
+            Some(v) => Some(GUID::from_string(v).unwrap()),
+            None => None,
+        };
+        Self {
+            start,
+            end,
+            envelope_guid: guid,
+            top_y_pos,
+            bot_y_pos,
+        }
+    }
+    pub(crate) fn to_string(&self) -> String {
+        let guid = match self.envelope_guid {
+            None => String::from(""),
+            Some(guid) => guid.to_string(),
+        };
+        let start: f64 = self.start.into();
+        let end: f64 = self.end.into();
+        let line = format!(
+            "{:?} {:?} \"{}\" {:?} {:?}",
+            start, end, guid, self.top_y_pos, self.bot_y_pos
+        );
+        line
     }
 }

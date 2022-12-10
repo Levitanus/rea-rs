@@ -1,7 +1,7 @@
 use reaper_low::{
     raw::gaccel_register_t, register_plugin_destroy_hook, PluginContext,
 };
-use reaper_medium::{HookCommand, OwnedGaccelRegister};
+use reaper_medium::{ControlSurface, HookCommand, OwnedGaccelRegister};
 use std::{error::Error, ptr::NonNull};
 
 static mut INSTANCE: Option<Reaper> = None;
@@ -51,6 +51,7 @@ pub struct Reaper {
     medium_session: reaper_medium::ReaperSession,
     medium: reaper_medium::Reaper,
     action_hook: Option<ActionHook>,
+    pub control_surfaces: Vec<Box<dyn ControlSurface>>,
 }
 impl Reaper {
     /// Makes the given instance available globally.
@@ -79,6 +80,7 @@ impl Reaper {
             medium_session,
             medium,
             action_hook: None,
+            control_surfaces: Vec::new(),
         };
         Self::make_available_globally(instance);
     }
@@ -87,6 +89,9 @@ impl Reaper {
     }
     pub fn medium_session(&self) -> &reaper_medium::ReaperSession {
         &self.medium_session
+    }
+    pub fn medium_session_mut(&mut self) -> &mut reaper_medium::ReaperSession {
+        &mut self.medium_session
     }
     pub fn medium(&self) -> &reaper_medium::Reaper {
         &self.medium
@@ -193,7 +198,7 @@ impl Into<u32> for CommandId {
         self.id
     }
 }
-
+#[derive(Debug)]
 pub struct RegisteredAction {
     // For identifying the registered command (= the functions to be executed)
     pub command_id: CommandId,

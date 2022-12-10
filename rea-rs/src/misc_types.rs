@@ -1,5 +1,7 @@
 use crate::{
-    errors::ReaperResult, Direction, Project, Reaper, Take, WithReaperPtr,
+    errors::ReaperResult,
+    utils::{as_string_mut, make_c_string_buf},
+    Direction, Project, Reaper, Take, WithReaperPtr,
 };
 use int_enum::IntEnum;
 use reaper_medium::PositionInSeconds;
@@ -556,15 +558,14 @@ pub struct GUID {
 }
 impl Into<String> for GUID {
     fn into(self) -> String {
-        Reaper::get()
-            .medium()
-            .guid_to_string(&self.raw)
-            .into_string()
+        self.to_string()
     }
 }
 impl ToString for GUID {
     fn to_string(&self) -> String {
-        self.clone().into()
+        let buf = make_c_string_buf(50).into_raw();
+        unsafe { Reaper::get().low().guidToString(&self.raw, buf) };
+        as_string_mut(buf).expect("Can not convert guid to string")
     }
 }
 impl GUID {
@@ -575,5 +576,59 @@ impl GUID {
     pub fn new() -> Self {
         let ptr = Reaper::get().medium().gen_guid();
         Self { raw: ptr }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Copy, PartialOrd, Ord, Hash)]
+pub struct PositionPixel {
+    pub x: u32,
+    pub y: u32,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Copy, PartialOrd, Ord, Hash)]
+pub struct DimensionsPixel {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Copy, PartialOrd, Ord, Hash)]
+pub struct RectPixel {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+impl RectPixel {
+    pub fn new(x: u32, y: u32, width: u32, height: u32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+    pub fn left(&self) -> u32 {
+        self.x
+    }
+    pub fn top(&self) -> u32 {
+        self.y
+    }
+    pub fn right(&self) -> u32 {
+        self.x + self.width
+    }
+    pub fn bot(&self) -> u32 {
+        self.y + self.height
+    }
+    pub fn position(&self) -> PositionPixel {
+        PositionPixel {
+            x: self.x,
+            y: self.y,
+        }
+    }
+    pub fn dimensions(&self) -> DimensionsPixel {
+        DimensionsPixel {
+            width: self.width,
+            height: self.height,
+        }
     }
 }

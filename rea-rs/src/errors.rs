@@ -24,3 +24,4 @@ impl Display for ReaperError {
 }
 
 pub type ReaperResult<T> = Result<T, Box<dyn Error>>;
+pub type ReaperStaticResult<T> = Result<T, ReaperError>;

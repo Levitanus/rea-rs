@@ -14,9 +14,7 @@ run-reaper-integration-test = []
 
 [dependencies]
 c_str_macro = "1.0.2"
-reaper-high = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
 reaper-macros = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
-
 reaper-low = {workspace = true}
 reaper-medium = {workspace = true}
 # slog = "2.5.2"

@@ -552,7 +552,10 @@ impl<'a> Project {
         .unwrap();
         let mut track =
             self.get_track_mut(index).expect("should have valid track");
-        track.set_name(name).expect("Can not set track name.");
+        let name: String = name.into();
+        if !name.is_empty() {
+            track.set_name(name).expect("Can not set track name.")
+        }
         track
     }
 
