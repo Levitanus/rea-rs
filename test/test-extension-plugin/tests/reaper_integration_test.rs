@@ -14,10 +14,13 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 #[test]
 fn run_reaper_integration_test() {
     if cfg!(target_family = "windows") {
-        println!("REAPER integration tests currently not supported on Windows");
+        println!(
+            "REAPER integration tests currently not supported on Windows"
+        );
         return;
     }
-    let target_dir_path = std::env::current_dir().unwrap().join("../../target");
+    let target_dir_path =
+        std::env::current_dir().unwrap().join("../../target");
     let reaper_download_dir_path = target_dir_path.join("reaper");
     let result = if cfg!(target_os = "macos") {
         run_on_macos(&target_dir_path, &reaper_download_dir_path)
@@ -27,7 +30,10 @@ fn run_reaper_integration_test() {
     result.expect("Running the integration test in REAPER failed");
 }
 
-fn run_on_linux(target_dir_path: &Path, reaper_download_dir_path: &Path) -> Result<()> {
+fn run_on_linux(
+    target_dir_path: &Path,
+    reaper_download_dir_path: &Path,
+) -> Result<()> {
     let reaper_home_path = setup_reaper_for_linux(reaper_download_dir_path)?;
     install_plugin(&target_dir_path, &reaper_home_path)?;
     let reaper_executable = reaper_home_path.join("reaper");
@@ -35,15 +41,22 @@ fn run_on_linux(target_dir_path: &Path, reaper_download_dir_path: &Path) -> Resu
     Ok(())
 }
 
-fn run_on_macos(target_dir_path: &Path, reaper_download_dir_path: &Path) -> Result<()> {
+fn run_on_macos(
+    target_dir_path: &Path,
+    reaper_download_dir_path: &Path,
+) -> Result<()> {
     let reaper_home_path = setup_reaper_for_macos(reaper_download_dir_path)?;
     install_plugin(&target_dir_path, &reaper_home_path)?;
-    let reaper_executable = reaper_home_path.join("REAPER64.app/Contents/MacOS/REAPER");
+    let reaper_executable =
+        reaper_home_path.join("REAPER64.app/Contents/MacOS/REAPER");
     run_integration_test_in_reaper(&reaper_executable)?;
     Ok(())
 }
 
-fn install_plugin(target_dir_path: &Path, reaper_home_path: &Path) -> Result<()> {
+fn install_plugin(
+    target_dir_path: &Path,
+    reaper_home_path: &Path,
+) -> Result<()> {
     let extension = if cfg!(target_os = "macos") {
         "dylib"
     } else {
@@ -98,12 +111,14 @@ fn run_integration_test_in_reaper(reaper_executable: &Path) -> Result<()> {
 
 /// Returns path of REAPER home
 fn setup_reaper_for_linux(reaper_download_dir_path: &Path) -> Result<PathBuf> {
-    let reaper_home_path = reaper_download_dir_path.join("reaper_linux_x86_64/REAPER");
+    let reaper_home_path =
+        reaper_download_dir_path.join("reaper_linux_x86_64/REAPER");
     let reaper_check_path = reaper_download_dir_path.join("/reaper");
     if reaper_check_path.exists() {
         return Ok(reaper_home_path);
     }
-    let reaper_tarball_path = reaper_download_dir_path.join("reaper-linux.tar.xz");
+    let reaper_tarball_path =
+        reaper_download_dir_path.join("reaper-linux.tar.xz");
     if !reaper_tarball_path.exists() {
         println!("Downloading REAPER to ({:?})...", &reaper_tarball_path);
         download(
@@ -120,7 +135,8 @@ fn setup_reaper_for_linux(reaper_download_dir_path: &Path) -> Result<PathBuf> {
 
 /// Returns path of REAPER home
 fn setup_reaper_for_macos(reaper_download_dir_path: &Path) -> Result<PathBuf> {
-    let reaper_home_path = reaper_download_dir_path.join("reaper_macos_x86_64");
+    let reaper_home_path =
+        reaper_download_dir_path.join("reaper_macos_x86_64");
     if reaper_home_path.exists() {
         return Ok(reaper_home_path);
     }
@@ -136,6 +152,13 @@ fn setup_reaper_for_macos(reaper_download_dir_path: &Path) -> Result<PathBuf> {
     mount_dmg(&reaper_dmg_path)?;
     println!("Copying from mount...");
     fs::create_dir_all(&reaper_home_path)?;
+
+    let paths =
+        fs::read_dir("/Volumes/REAPER_INSTALL_INTEL64/REAPER64.app").unwrap();
+    for path in paths {
+        println!("Name: {}", path.unwrap().path().display())
+    }
+
     fs_extra::dir::copy(
         "/Volumes/REAPER_INSTALL_INTEL64/REAPER64.app",
         &reaper_home_path,
@@ -175,7 +198,9 @@ coreaudiooutdevnew=<none>
 
 fn remove_rewire_plugin_macos_bundle(reaper_home_path: &Path) -> Result<()> {
     println!("Removing Rewire plug-in (because it makes REAPER get stuck on headless macOS)...");
-    fs::remove_dir_all(reaper_home_path.join("REAPER64.app/Contents/Plugins/ReWire.bundle"))?;
+    fs::remove_dir_all(
+        reaper_home_path.join("REAPER64.app/Contents/Plugins/ReWire.bundle"),
+    )?;
     Ok(())
 }
 
