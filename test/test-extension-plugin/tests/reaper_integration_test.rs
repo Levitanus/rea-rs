@@ -160,7 +160,7 @@ fn setup_reaper_for_macos(reaper_download_dir_path: &Path) -> Result<PathBuf> {
     }
 
     fs_extra::dir::copy(
-        "/Volumes/REAPER_INSTALL_INTEL64/REAPER64.app",
+        "/Volumes/REAPER_INSTALL_INTEL64/REAPER.app",
         &reaper_home_path,
         &CopyOptions {
             overwrite: false,
