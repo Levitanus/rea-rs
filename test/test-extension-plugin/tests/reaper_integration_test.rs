@@ -48,7 +48,7 @@ fn run_on_macos(
     let reaper_home_path = setup_reaper_for_macos(reaper_download_dir_path)?;
     install_plugin(&target_dir_path, &reaper_home_path)?;
     let reaper_executable =
-        reaper_home_path.join("REAPER64.app/Contents/MacOS/REAPER");
+        reaper_home_path.join("REAPER.app/Contents/MacOS/REAPER");
     run_integration_test_in_reaper(&reaper_executable)?;
     Ok(())
 }
