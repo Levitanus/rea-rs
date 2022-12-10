@@ -153,11 +153,11 @@ fn setup_reaper_for_macos(reaper_download_dir_path: &Path) -> Result<PathBuf> {
     println!("Copying from mount...");
     fs::create_dir_all(&reaper_home_path)?;
 
-    let paths =
-        fs::read_dir("/Volumes/REAPER_INSTALL_INTEL64").unwrap();
-    for path in paths {
-        println!("Name: {}", path.unwrap().path().display())
-    }
+    // let paths =
+    //     fs::read_dir("/Volumes/REAPER_INSTALL_INTEL64").unwrap();
+    // for path in paths {
+    //     println!("Name: {}", path.unwrap().path().display())
+    // }
 
     fs_extra::dir::copy(
         "/Volumes/REAPER_INSTALL_INTEL64/REAPER.app",
@@ -199,7 +199,7 @@ coreaudiooutdevnew=<none>
 fn remove_rewire_plugin_macos_bundle(reaper_home_path: &Path) -> Result<()> {
     println!("Removing Rewire plug-in (because it makes REAPER get stuck on headless macOS)...");
     fs::remove_dir_all(
-        reaper_home_path.join("REAPER64.app/Contents/Plugins/ReWire.bundle"),
+        reaper_home_path.join("REAPER.app/Contents/Plugins/ReWire.bundle"),
     )?;
     Ok(())
 }
