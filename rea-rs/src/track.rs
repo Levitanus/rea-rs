@@ -109,8 +109,12 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     pub fn name(&self) -> ReaperResult<String> {
         self.get_info_string("P_NAME")
     }
-    pub fn icon(&self) -> ReaperResult<PathBuf> {
-        Ok(PathBuf::from(self.get_info_string("P_ICON")?))
+    pub fn icon(&self) -> ReaperResult<Option<PathBuf>> {
+        let string = self.get_info_string("P_ICON")?;
+        match string.is_empty() {
+            true => Ok(None),
+            false => Ok(Some(PathBuf::from(string))),
+        }
     }
     pub fn mcp_layout(&self) -> ReaperResult<String> {
         self.get_info_string("P_MCP_LAYOUT")

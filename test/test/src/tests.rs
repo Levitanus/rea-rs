@@ -10,8 +10,8 @@ use crate::{step, TestStep};
 use bitvec::prelude::*;
 use c_str_macro::c_str;
 use rea_rs::{
-    AutomationMode, Color, CommandId, EnvelopeChunk, EnvelopePoint, ExtValue,
-    Fx, GenericSend, GenericSendMut, HardwareSocket, MarkerRegionInfo,
+    AutomationMode, Color, CommandId, EnvelopeChunk, ExtValue, Fx,
+    GenericSend, GenericSendMut, HardwareSocket, MarkerRegionInfo,
     MessageBoxValue, Mutable, Pan, PanLaw, PlayRate, Position, Project,
     RazorEdit, Reaper, RecInput, RecMode, RecMonitoring, RecOutMode,
     SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
@@ -22,7 +22,7 @@ use rea_rs::{
 use std::collections::HashMap;
 use std::fs::canonicalize;
 use std::iter;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -42,7 +42,6 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
         ext_state(),
         markers(),
         tracks(),
-        razor_edits(),
         sends(),
     ]
     .into_iter();
@@ -835,35 +834,8 @@ fn tracks() -> TestStep {
         assert!(low_u32 & 0b100000 > 0);
         assert!(low_u32 & 0b1000000 == 0);
         assert!(high_u32 & 0b1000000 > 0);
-        Ok(())
-    })
-}
-fn razor_edits() -> TestStep {
-    step("Razor Edits", || {
-        let rpr = Reaper::get();
-        let mut pr = rpr.current_project();
-        pr.add_track(0, "");
-        pr.add_track(1, "");
-        let tr1 = pr.get_track(0).unwrap();
-        let tr2 = pr.get_track(1).unwrap();
-        debug!("razor edits");
-        let send = TrackSend::create_new(&tr1, &tr2);
-        let mut env = send
-            .get_envelope(EnvelopeChunk::Vol)
-            .expect("Can't find envelope by chunk");
-        env.insert_point(
-            0.5.into(),
-            EnvelopePoint::new(
-                0.5,
-                rea_rs::EnvelopePointShape::FastEnd,
-                0.0,
-                true,
-            ),
-            true,
-        )?;
-        let _env_guid = env.guid();
 
-        let mut tr = pr.get_track_mut(0).unwrap();
+        debug!("Razor Edits");
         let mut edits: Vec<RazorEdit> = Vec::new();
         edits.push(RazorEdit {
             start: 0.5.into(),
@@ -887,6 +859,13 @@ fn razor_edits() -> TestStep {
         rpr.update_timeline();
         debug!("get razor edit");
         assert_eq!(tr.razor_edits()?, edits_bkp);
+
+        debug!("icon");
+        assert_eq!(tr.icon()?, None);
+        let path = PathBuf::from("track_icon.png").canonicalize()?;
+        debug!("path {:?}", path);
+        tr.set_icon(path.clone())?;
+        assert_eq!(tr.icon()?, Some(path));
 
         Ok(())
     })
