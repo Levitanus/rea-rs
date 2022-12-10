@@ -77,14 +77,12 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         name: impl Into<String>,
     ) -> Option<Self> {
         let name = name.into();
-        let track = project.iter_tracks().find(|tr| {
-            tr.name().expect("Can not retrieve track name") == name
-        })?;
+        let track = project.iter_tracks().find(|tr| tr.name() == name)?;
         let index = track.index();
         Self::from_index(project, index)
     }
 
-    pub fn get_info_string(
+    fn get_info_string(
         &self,
         category: impl Into<String>,
     ) -> ReaperResult<String> {
@@ -106,21 +104,36 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         }
     }
 
-    pub fn name(&self) -> ReaperResult<String> {
+    pub fn name(&self) -> String {
         self.get_info_string("P_NAME")
+            .expect("Can not get track name")
     }
-    pub fn icon(&self) -> ReaperResult<Option<PathBuf>> {
-        let string = self.get_info_string("P_ICON")?;
+    pub fn icon(&self) -> Option<PathBuf> {
+        let string = self
+            .get_info_string("P_ICON")
+            .expect("Can not get track icon");
         match string.is_empty() {
-            true => Ok(None),
-            false => Ok(Some(PathBuf::from(string))),
+            true => None,
+            false => Some(PathBuf::from(string)),
         }
     }
-    pub fn mcp_layout(&self) -> ReaperResult<String> {
-        self.get_info_string("P_MCP_LAYOUT")
+    pub fn mcp_layout(&self) -> Option<String> {
+        let string = self
+            .get_info_string("P_MCP_LAYOUT")
+            .expect("Can not get layout");
+        match string.is_empty() {
+            true => None,
+            false => Some(string),
+        }
     }
-    pub fn tcp_layout(&self) -> ReaperResult<String> {
-        self.get_info_string("P_TCP_LAYOUT")
+    pub fn tcp_layout(&self) -> Option<String> {
+        let string = self
+            .get_info_string("P_TCP_LAYOUT")
+            .expect("Can not get layout");
+        match string.is_empty() {
+            true => None,
+            false => Some(string),
+        }
     }
     /// allows querying screen position + size of track WALTER elements
     /// (tcp.size queries screen position and size of entire TCP, etc).
@@ -146,13 +159,23 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     /// For every envelope selected will be returned dedicated
     /// [RazorEdit] with envelope GUID. RazorEdit without GUID
     /// corresponding to [Track]
-    pub fn razor_edits(&self) -> ReaperResult<Vec<RazorEdit>> {
-        let result = self.get_info_string("P_RAZOREDITS_EXT")?;
-        Ok(result
+    pub fn razor_edits(&self) -> Vec<RazorEdit> {
+        let result = self
+            .get_info_string("P_RAZOREDITS_EXT")
+            .expect("Can not get razor edits");
+        result
             .split(",")
             .filter(|v| !v.is_empty())
             .map(|item| RazorEdit::from_str(item))
-            .collect())
+            .collect()
+    }
+
+    pub fn guid(&self) -> GUID {
+        GUID::from_string(
+            self.get_info_string("GUID")
+                .expect("Can not retrieve guid string"),
+        )
+        .expect("Can not get GUID from guid string")
     }
 
     fn get_info_value(&self, category: impl Into<String>) -> f64 {
@@ -507,6 +530,11 @@ impl<'a> Track<'a, Mutable> {
         Ok(())
     }
 
+    pub fn set_guid(&mut self, guid: GUID) {
+        self.set_info_string("GUID", guid.to_string())
+            .expect("Can not set GUID");
+    }
+
     pub fn set_name(
         &mut self,
         name: impl Into<String>,
@@ -525,13 +553,13 @@ impl<'a> Track<'a, Mutable> {
 
     pub fn set_mcp_layout(
         &mut self,
-        layout: String,
+        layout: impl Into<String>,
     ) -> ReaperStaticResult<()> {
         self.set_info_string("P_MCP_LAYOUT", layout)
     }
     pub fn set_tcp_layout(
         &mut self,
-        layout: String,
+        layout: impl Into<String>,
     ) -> ReaperStaticResult<()> {
         self.set_info_string("P_TCP_LAYOUT", layout)
     }
@@ -1022,6 +1050,7 @@ pub struct TrackDimensions {
 }
 
 bitflags! {
+    /// Flags for optimization.
     pub struct TrackPerformanceFlags:u8{
         const NO_BUFFERING = 1;
         const NO_ANTICIPATIVE_FX = 2;
@@ -1040,12 +1069,17 @@ pub enum TrackPan {
     Dual(Pan, Pan),
 }
 
+/// Represent latency of track sound.
+///
+/// Can be negative.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrackPlayOffset {
     Samples(i32),
+    /// 1.0 == 1 second
     Seconds(f64),
 }
 
+/// Keeps parameters of track groups.
 pub enum TrackGroupParam {
     VolumeLead,
     VolumeFollow,

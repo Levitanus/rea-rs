@@ -154,7 +154,7 @@ fn setup_reaper_for_macos(reaper_download_dir_path: &Path) -> Result<PathBuf> {
     fs::create_dir_all(&reaper_home_path)?;
 
     let paths =
-        fs::read_dir("/Volumes/REAPER_INSTALL_INTEL64/REAPER64.app").unwrap();
+        fs::read_dir("/Volumes/REAPER_INSTALL_INTEL64").unwrap();
     for path in paths {
         println!("Name: {}", path.unwrap().path().display())
     }

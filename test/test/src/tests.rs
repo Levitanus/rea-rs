@@ -17,7 +17,7 @@ use rea_rs::{
     SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
     SendSourceChannels, SoloMode, TimeMode, Track, TrackFolderState,
     TrackGroupParam, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
-    TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr,
+    TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, GUID,
 };
 use std::collections::HashMap;
 use std::fs::canonicalize;
@@ -546,12 +546,12 @@ fn tracks() -> TestStep {
         pr.add_track(0, "first");
         assert!(Track::<Mutable>::from_name(&pr, "first").is_some());
         let tr1 = pr.get_track(0).unwrap();
-        assert_eq!(tr1.name()?, "first");
+        assert_eq!(tr1.name(), "first");
 
         debug!("add track 'second'");
         let tr2 = pr.add_track(1, "second").index();
         let tr2 = pr.get_track(tr2).unwrap();
-        assert_eq!(tr2.name()?, "second");
+        assert_eq!(tr2.name(), "second");
         assert_eq!(tr2.index(), 1);
         let tr2 = tr2.get();
         let tr2 = Track::<Mutable>::new(&mut pr, tr2);
@@ -559,12 +559,12 @@ fn tracks() -> TestStep {
 
         debug!("add track 'third'");
         let mut tr3 = pr.add_track(2, "third");
-        assert_eq!(tr3.name()?, "third");
+        assert_eq!(tr3.name(), "third");
         tr3.set_name("third new name")?;
 
         debug!("iter tracks mut");
         pr.iter_tracks_mut(|mut tr| {
-            if tr.name()? != "second" {
+            if tr.name() != "second" {
                 return Ok(());
             }
             debug!("set track {:?} name to 'new second'", tr);
@@ -573,7 +573,7 @@ fn tracks() -> TestStep {
         })?;
 
         debug!("try to find track with new name");
-        assert_eq!(pr.get_track(1).ok_or("no track!")?.name()?, "new second");
+        assert_eq!(pr.get_track(1).ok_or("no track!")?.name(), "new second");
 
         let pos = Position::from_quarters(4.0, &pr);
 
@@ -858,14 +858,29 @@ fn tracks() -> TestStep {
         rpr.update_arrange();
         rpr.update_timeline();
         debug!("get razor edit");
-        assert_eq!(tr.razor_edits()?, edits_bkp);
+        assert_eq!(tr.razor_edits(), edits_bkp);
 
         debug!("icon");
-        assert_eq!(tr.icon()?, None);
+        assert_eq!(tr.icon(), None);
         let path = PathBuf::from("track_icon.png").canonicalize()?;
         debug!("path {:?}", path);
         tr.set_icon(path.clone())?;
-        assert_eq!(tr.icon()?, Some(path));
+        assert_eq!(tr.icon(), Some(path));
+
+        debug!("layouts");
+        assert_eq!(tr.mcp_layout(), None);
+        tr.set_mcp_layout("B")?;
+        assert_eq!(tr.mcp_layout().unwrap(), "B");
+
+        assert_eq!(tr.tcp_layout(), None);
+        tr.set_tcp_layout("B")?;
+        assert_eq!(tr.tcp_layout().unwrap(), "B");
+
+        let old_guid = tr.guid();
+        debug!("old_guid: {:?}", old_guid);
+        let new_guid = GUID::new();
+        tr.set_guid(new_guid);
+        assert_eq!(tr.guid(), new_guid);
 
         Ok(())
     })
