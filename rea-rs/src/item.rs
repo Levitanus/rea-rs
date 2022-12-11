@@ -2,8 +2,8 @@ use crate::{
     errors::{ReaperError, ReaperStaticResult},
     utils::{as_c_str, as_c_string, as_string_mut},
     utils::{make_c_string_buf, WithNull},
-    Color, Immutable, Mutable, Position, ProbablyMutable, Project, Reaper,
-    Take, TimeMode, Track, Volume, WithReaperPtr, GUID,
+    Color, Immutable, KnowsProject, Mutable, Position, ProbablyMutable,
+    Project, Reaper, Take, TimeMode, Track, Volume, WithReaperPtr, GUID,
 };
 use int_enum::IntEnum;
 use reaper_medium::{MediaItem, MediaItemTake, MediaTrack};
@@ -35,6 +35,11 @@ impl<'a, T: ProbablyMutable> WithReaperPtr<'a> for Item<'a, T> {
         self.should_check
     }
 }
+impl<'a, T: ProbablyMutable> KnowsProject for Item<'a, T> {
+    fn project(&self) -> &'a Project {
+        self.project
+    }
+}
 impl<'a, T: ProbablyMutable> Item<'a, T> {
     pub fn new(project: &'a Project, ptr: MediaItem) -> Self {
         Self {
@@ -53,9 +58,9 @@ impl<'a, T: ProbablyMutable> Item<'a, T> {
             Some(ptr) => Track::new(self.project, ptr),
         }
     }
-    pub fn get_take(&'a self, index: usize) -> Option<Take<'a, T>> {
+    pub fn get_take(&'a self, index: usize) -> Option<Take<'a, Immutable>> {
         let ptr = self.get_take_ptr(index)?;
-        Some(Take::new(ptr, self))
+        Some(Take::new(ptr, unsafe { std::mem::transmute(self) }))
     }
     fn get_take_ptr(&self, index: usize) -> Option<MediaItemTake> {
         let ptr = unsafe {
@@ -69,11 +74,11 @@ impl<'a, T: ProbablyMutable> Item<'a, T> {
             x => x,
         }
     }
-    pub fn active_take(&'a self) -> Take<'a, T> {
+    pub fn active_take(&'a self) -> Take<'a, Immutable> {
         let ptr = self
             .active_take_ptr()
             .expect("NullPtr, probably, item is deleted");
-        Take::new(ptr, self)
+        Take::<Immutable>::new(ptr, unsafe { std::mem::transmute(self) })
     }
     fn active_take_ptr(&self) -> Option<MediaItemTake> {
         let ptr =
@@ -85,9 +90,6 @@ impl<'a, T: ProbablyMutable> Item<'a, T> {
         }
     }
 
-    pub fn project(&self) -> &Project {
-        self.project
-    }
     pub fn is_selected(&self) -> bool {
         unsafe { Reaper::get().low().IsMediaItemSelected(self.get().as_ptr()) }
     }
@@ -194,6 +196,7 @@ impl<'a, T: ProbablyMutable> Item<'a, T> {
     pub fn y_pos_free_mode(&self) -> f64 {
         self.get_info_value("F_FREEMODE_Y")
     }
+    /// if None → default.
     pub fn color(&self) -> Option<Color> {
         let raw = self.get_info_value("I_CUSTOMCOLOR") as i32;
         if raw == 0 {
@@ -276,9 +279,9 @@ impl<'a> Item<'a, Mutable> {
         let ptr = self.get_take_ptr(index)?;
         Some(Take::new(ptr, self))
     }
-    pub fn active_take_mut(&'a mut self) -> Option<Take<'a, Mutable>> {
-        let ptr = self.active_take_ptr()?;
-        Some(Take::new(ptr, self))
+    pub fn active_take_mut(&'a mut self) -> Take<'a, Mutable> {
+        let ptr = self.active_take_ptr().unwrap();
+        Take::new(ptr, self)
     }
 
     pub fn set_position(&mut self, position: impl Into<Position>) {
@@ -360,15 +363,17 @@ impl<'a> Item<'a, Mutable> {
         unsafe { Reaper::get().low().UpdateItemInProject(self.get().as_ptr()) }
     }
 
-    pub fn move_to_track(
-        &self,
-        track: &mut Track<Mutable>,
-    ) -> ReaperStaticResult<()> {
+    pub fn move_to_track(&self, track_index: usize) -> ReaperStaticResult<()> {
+        let track =
+            Track::<Immutable>::from_index(self.project(), track_index)
+                .ok_or(ReaperError::InvalidObject(
+                    "No track with given index!",
+                ))?;
+        let track_ptr = track.get().as_ptr();
         let result = unsafe {
-            Reaper::get().low().MoveMediaItemToTrack(
-                self.get().as_ptr(),
-                track.get().as_ptr(),
-            )
+            Reaper::get()
+                .low()
+                .MoveMediaItemToTrack(self.get().as_ptr(), track_ptr)
         };
         match result {
             false => {
@@ -484,6 +489,7 @@ impl<'a> Item<'a, Mutable> {
         assert!((0.0..1.0).contains(&height));
         self.set_info_value("F_FREEMODE_H", height).unwrap()
     }
+    /// if None → default.
     pub fn set_color(&mut self, color: Option<Color>) {
         let color = match color {
             None => 0,
@@ -536,18 +542,21 @@ pub struct ItemSplit<'a> {
     project: &'a Project,
 }
 impl<'a> ItemSplit<'a> {
-    pub fn left(&mut self) -> Item<'a, Mutable> {
+    fn left(&mut self) -> Item<'a, Mutable> {
         Item::new(self.project, self.left_ptr)
     }
-    pub fn right(&mut self) -> Item<'a, Mutable> {
+    fn right(&mut self) -> Item<'a, Mutable> {
         Item::new(self.project, self.right_ptr)
+    }
+    pub fn get(mut self) -> (Item<'a, Mutable>, Item<'a, Mutable>) {
+        (self.left(), self.right())
     }
 }
 
 /// Item personal solo state.
 ///
 /// If soloed → other items and tracks will be not
-/// soloed
+/// overrided
 #[repr(i32)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, IntEnum)]
 pub enum ItemSoloOverride {
@@ -581,6 +590,11 @@ impl ItemFade {
     }
 }
 
+/// Item fade-in\fade-out shape.
+///
+/// # Note
+///
+/// Shape affects curve attribute of [ItemFade]
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
 pub enum ItemFadeShape {

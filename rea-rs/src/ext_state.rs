@@ -21,7 +21,7 @@ use std::{
 /// by [serde] crate.
 /// - It provides the similar interface as for global ext state values,
 /// as well as to project or other objects ext data.
-/// Currently supported: [Project], [Track], [TrackSend], [Envelope]
+/// Currently supported: [Project], [Track], [TrackSend], [Envelope], [Item]
 /// - it erases data, if in process of development
 /// you decided to turn the persistence off.
 /// - it can be initialized with value, but only once, if

@@ -488,6 +488,18 @@ fn ext_state() -> TestStep {
         state.delete();
         assert_eq!(state.get(), None);
 
+        debug!("test on int and item");
+        pr.add_track(1, "second");
+        let mut tr = pr.get_track_mut(0).unwrap();
+        let item = tr.add_item(0.0, Duration::from_secs(3));
+        let mut state =
+            ExtValue::new("test section", "first", 45, false, &item);
+        assert_eq!(state.get().expect("can not get value"), 45);
+        state.set(15);
+        assert_eq!(state.get().expect("can not get value"), 15);
+        state.delete();
+        assert_eq!(state.get(), None);
+
         Ok(())
     })
 }
@@ -1288,6 +1300,7 @@ fn items() -> TestStep {
                 Some(tr) => tr.delete(),
             };
         }
+        pr.add_track(0, "second");
         let mut tr = pr.add_track(0, "first");
         let mut item = tr.add_item(0.5, Duration::from_secs(3));
         item.add_take();
@@ -1397,6 +1410,14 @@ fn items() -> TestStep {
         let color = Color::new(255, 60, 100);
         item.set_color(Some(color));
         assert_eq!(item.color(), Some(color));
+
+        item.move_to_track(1)?;
+        let (left, right) = item.split(3.0)?.get();
+        assert_eq!(left.end_position(), Position::from(3.0));
+        assert_eq!(right.position(), Position::from(3.0));
+        assert_eq!(left.track().n_items(), 2);
+        left.delete();
+        assert_eq!(right.track().n_items(), 1);
 
         Ok(())
     })

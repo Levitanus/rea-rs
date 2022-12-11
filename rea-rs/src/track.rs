@@ -436,6 +436,16 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         fx
     }
 
+    /// Get first instrument FX on track, if any.
+    pub fn get_fx_instrument(&self) -> Option<TrackFX<T>> {
+        let index = unsafe {
+            Reaper::get()
+                .low()
+                .TrackFX_GetInstrument(self.get().as_ptr())
+        };
+        TrackFX::from_index(self, index as usize)
+    }
+
     pub fn n_sends(&self) -> usize {
         unsafe {
             Reaper::get().low().GetTrackNumSends(
