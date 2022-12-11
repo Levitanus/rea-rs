@@ -68,6 +68,43 @@ impl<'a, P: KnowsProject, T: ProbablyMutable> Envelope<'a, P, T> {
             as_string_mut(ptr).expect("Can't convert ptr to String!");
         GUID::from_string(guid_string).expect("Can't convert string to GUID!")
     }
+
+    pub fn name(&self) -> String {
+        let size = 100;
+        let buf = make_c_string_buf(size).into_raw();
+        let result = unsafe {
+            Reaper::get().low().GetEnvelopeName(
+                self.get().as_ptr(),
+                buf,
+                size as i32,
+            )
+        };
+        match result {
+            false => panic!("Can not get envelope name!"),
+            true => {
+                as_string_mut(buf).expect("Can not convert name to string")
+            }
+        }
+    }
+
+    pub fn state_chunk(&self) -> String {
+        let size = i32::MAX;
+        let buf = make_c_string_buf(size as usize).into_raw();
+        let result = unsafe {
+            Reaper::get().low().GetEnvelopeStateChunk(
+                self.get().as_ptr(),
+                buf,
+                size as i32,
+                false,
+            )
+        };
+        match result {
+            false => panic!("Can not get envelope name!"),
+            true => {
+                as_string_mut(buf).expect("Can not convert name to string")
+            }
+        }
+    }
 }
 impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
     pub fn insert_point(

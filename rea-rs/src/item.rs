@@ -3,7 +3,8 @@ use std::{marker::PhantomData, ptr::NonNull, time::Duration};
 use reaper_medium::{MediaItem, MediaItemTake};
 
 use crate::{
-    Mutable, Position, ProbablyMutable, Project, Reaper, Take, WithReaperPtr,
+    utils::as_c_str, utils::WithNull, Mutable, Position, ProbablyMutable,
+    Project, Reaper, Take, WithReaperPtr,
 };
 
 #[derive(Debug, PartialEq)]
@@ -62,6 +63,26 @@ impl<'a, T: ProbablyMutable> Item<'a, T> {
     }
     pub fn is_selected(&self) -> bool {
         unsafe { Reaper::get().low().IsMediaItemSelected(self.get().as_ptr()) }
+    }
+
+    fn get_info_value(&self, category: impl Into<String>) -> f64 {
+        let mut category = category.into();
+        unsafe {
+            Reaper::get().low().GetMediaItemInfo_Value(
+                self.get().as_ptr(),
+                as_c_str(&category.with_null()).as_ptr(),
+            )
+        }
+    }
+
+    pub fn position(&self) -> Position {
+        self.get_info_value("D_POSITION").into()
+    }
+    pub fn length(&self) -> Duration {
+        Duration::from_secs_f64(self.get_info_value("D_LENGTH"))
+    }
+    pub fn end_position(&self) -> Position {
+        self.position() + self.length().into()
     }
 }
 impl<'a> Item<'a, Mutable> {

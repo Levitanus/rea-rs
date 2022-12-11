@@ -377,10 +377,9 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
         channels: SendDestChannels,
     ) -> ReaperResult<()> {
         {
-            self.source_channels()
-                .ok_or(ReaperError::InvalidObject(
-                    "source channels are None. set them at first.",
-                ))?;
+            self.source_channels().ok_or(ReaperError::InvalidObject(
+                "source channels are None. set them at first.",
+            ))?;
         }
         self.set_info_value("I_DSTCHAN", channels.into())
     }
@@ -401,16 +400,26 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
 }
 
 pub enum EnvelopeChunk {
-    Vol,
+    Volume,
     Pan,
     Mute,
+    VolumePreFx,
+    PanPreFx,
+    WidthPreFx,
+    With,
+    TrimVolume,
 }
 impl ToString for EnvelopeChunk {
     fn to_string(&self) -> String {
         match self {
-            Self::Vol => "<VOLENV".into(),
-            Self::Pan => "<PANENV".into(),
-            Self::Mute => "<MUTENV".into(),
+            Self::VolumePreFx => "<VOLENV".into(),
+            Self::PanPreFx => "<PANENV".into(),
+            Self::Mute => "<MUTEENV".into(),
+            Self::Volume => "<VOLENV2".into(),
+            Self::Pan => "<PANENV2".into(),
+            Self::WidthPreFx => "<WIDTHENV".into(),
+            Self::With => "<WIDTHENV2".into(),
+            Self::TrimVolume => "<VOLENV3".into(),
         }
     }
 }

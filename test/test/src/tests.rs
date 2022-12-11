@@ -10,11 +10,11 @@ use crate::{step, TestStep};
 use bitvec::prelude::*;
 use c_str_macro::c_str;
 use rea_rs::{
-    AutomationMode, Color, CommandId, EnvelopeChunk, ExtValue, Fx,
-    GenericSend, GenericSendMut, HardwareSocket, MarkerRegionInfo,
-    MessageBoxValue, Mutable, Pan, PanLaw, PlayRate, Position, Project,
-    RazorEdit, Reaper, RecInput, RecMode, RecMonitoring, RecOutMode,
-    SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
+    AutomationMode, Color, CommandId, EnvelopeChunk, EnvelopeSelector,
+    ExtValue, Fx, GenericSend, GenericSendMut, HardwareSocket,
+    MarkerRegionInfo, MessageBoxValue, Mutable, Pan, PanLaw, PlayRate,
+    Position, Project, RazorEdit, Reaper, RecInput, RecMode, RecMonitoring,
+    RecOutMode, SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
     SendSourceChannels, SoloMode, TimeMode, Track, TrackFolderState,
     TrackGroupParam, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
     TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, GUID,
@@ -876,11 +876,55 @@ fn tracks() -> TestStep {
         tr.set_tcp_layout("B")?;
         assert_eq!(tr.tcp_layout().unwrap(), "B");
 
+        debug!("GUID");
         let old_guid = tr.guid();
         debug!("old_guid: {:?}", old_guid);
         let new_guid = GUID::new();
         tr.set_guid(new_guid);
         assert_eq!(tr.guid(), new_guid);
+
+        debug!("get item");
+        tr.add_item(0.0, Duration::from_secs_f64(3.2));
+        let item = tr.get_item(0).expect("Can not get item");
+        assert_eq!(item.position(), Position::from(0.0));
+        assert_eq!(item.length(), Duration::from_secs_f64(3.2));
+        assert_eq!(tr.n_items(), 1);
+
+        debug!("note names");
+
+        tr.set_note_name(0, 60, "C3")?;
+        tr.set_note_name(5, 60, "C3 ch5")?;
+        tr.set_note_name(2, 129, "My favorite CC!")?;
+
+        debug!("Get note names");
+        assert_eq!(tr.note_name(0, 60).unwrap(), "C3");
+        assert_eq!(tr.note_name(5, 60).unwrap(), "C3 ch5");
+        assert_eq!(tr.note_name(2, 129).unwrap(), "My favorite CC!");
+        assert_eq!(tr.note_name(1, 60), None);
+        assert_eq!(tr.note_name(0, 129), None);
+        assert_eq!(tr.note_name(0, 128), None);
+
+        debug!("chunk");
+        let chunk = tr.chunk()?;
+        let mut tr = pr.add_track(1, "test chunk");
+        tr.set_chunk(chunk, true)?;
+        assert_eq!(tr.note_name(0, 60).unwrap(), "C3");
+        assert_eq!(tr.n_items(), 1);
+
+        debug!("midi hash");
+        assert!(tr.midi_hash(false).is_none());
+
+        debug!("peak");
+        assert_eq!(tr.peak(0), Volume::from(0.0));
+
+        debug!("envelope by chunk");
+        let env = tr.get_envelope_by_chunk(EnvelopeSelector::Chunk(
+            EnvelopeChunk::Mute,
+        ));
+        assert!(env.is_some());
+        let name = env.unwrap().name();
+        debug!("envelope by name: {}", name);
+        warn!("Somehow, can't get envelope by name. Probably, needed to be armed");
 
         Ok(())
     })

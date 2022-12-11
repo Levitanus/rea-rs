@@ -9,19 +9,20 @@ use std::{
 
 use bitflags::bitflags;
 use int_enum::IntEnum;
-use reaper_medium::{MediaItem, MediaTrack};
+use reaper_medium::{MediaItem, MediaTrack, TrackEnvelope};
 
 use crate::{
     errors::{ReaperError, ReaperResult, ReaperStaticResult},
     utils::{
-        as_c_str, as_c_string, as_string_mut, make_c_string_buf, WithNull,
+        as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
+        WithNull,
     },
-    AudioAccessor, AutomationMode, Color, Fx, GenericSend, GetLength,
-    HardwareSend, HardwareSocket, Immutable, Item, KnowsProject, Mutable, Pan,
-    PanLaw, PanLawMode, Position, ProbablyMutable, Project, Reaper, RecInput,
-    RecMode, RecOutMode, RectPixel, SendIntType, SoloMode, TimeMode, TrackFX,
-    TrackFolderState, TrackReceive, TrackSend, VUMode, Volume, WithReaperPtr,
-    GUID,
+    AudioAccessor, AutomationMode, Color, Envelope, EnvelopeSelector, Fx,
+    GenericSend, GetLength, HardwareSend, HardwareSocket, Immutable, Item,
+    KnowsProject, Mutable, Pan, PanLaw, PanLawMode, Position, PositionPixel,
+    ProbablyMutable, Project, Reaper, RecInput, RecMode, RecOutMode,
+    RectPixel, SendIntType, SoloMode, TimeMode, TrackFX, TrackFolderState,
+    TrackReceive, TrackSend, VUMode, Volume, WithReaperPtr, GUID,
 };
 
 #[derive(Debug, PartialEq)]
@@ -80,6 +81,23 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         let track = project.iter_tracks().find(|tr| tr.name() == name)?;
         let index = track.index();
         Self::from_index(project, index)
+    }
+    pub fn from_point(
+        project: &'a Project,
+        point: PositionPixel,
+    ) -> Option<Self> {
+        let mut info_out = MaybeUninit::zeroed();
+        let ptr = unsafe {
+            Reaper::get().low().GetTrackFromPoint(
+                point.x as i32,
+                point.y as i32,
+                info_out.as_mut_ptr(),
+            )
+        };
+        match MediaTrack::new(ptr) {
+            None => None,
+            Some(ptr) => Some(Self::new(project, ptr)),
+        }
     }
 
     fn get_info_string(
@@ -250,6 +268,14 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     }
     pub fn n_channels(&self) -> usize {
         self.get_info_value("I_NCHAN") as usize
+    }
+    pub fn n_items(&self) -> usize {
+        unsafe {
+            Reaper::get()
+                .low()
+                .GetTrackNumMediaItems(self.get().as_ptr())
+                as usize
+        }
     }
     pub fn selected(&self) -> bool {
         self.get_info_value("I_SELECTED") != 0.0
@@ -465,6 +491,143 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         };
         (low, high)
     }
+
+    fn get_item_parametrized(&self, index: usize) -> Option<Item<T>> {
+        let ptr = unsafe {
+            Reaper::get()
+                .low()
+                .GetTrackMediaItem(self.get().as_ptr(), index as i32)
+        };
+        match MediaItem::new(ptr) {
+            None => None,
+            Some(ptr) => Item::new(self.project(), ptr).into(),
+        }
+    }
+
+    /// pitch 128 for CC0, 129 for CC1 etc.
+    pub fn note_name(&self, channel: u8, pitch: u16) -> Option<String> {
+        let raw = unsafe {
+            Reaper::get().low().GetTrackMIDINoteNameEx(
+                self.project().context().to_raw(),
+                self.get().as_ptr(),
+                pitch as i32,
+                channel as i32,
+            )
+        };
+        match raw.is_null() {
+            true => None,
+            false => {
+                Some(as_string(raw).expect("Can not receive note name string"))
+            }
+        }
+    }
+
+    pub fn chunk(&self) -> ReaperStaticResult<String> {
+        let size = i32::MAX;
+        let buf = make_c_string_buf(size as usize).into_raw();
+        let result = unsafe {
+            Reaper::get().low().GetTrackStateChunk(
+                self.get().as_ptr(),
+                buf,
+                size as i32,
+                false,
+            )
+        };
+        match result {
+            false => {
+                Err(ReaperError::UnsuccessfulOperation("Can not get chunk"))
+            }
+            true => {
+                Ok(as_string_mut(buf)
+                    .expect("Can not convert chunk to string"))
+            }
+        }
+    }
+
+    /// Get string, that will differ only if midi changed.
+    pub fn midi_hash(&self, notes_only: bool) -> Option<String> {
+        let size = 100;
+        let buf = make_c_string_buf(size).into_raw();
+        let result = unsafe {
+            Reaper::get().low().MIDI_GetTrackHash(
+                self.get().as_ptr(),
+                notes_only,
+                buf,
+                size as i32,
+            )
+        };
+        match result {
+            false => None,
+            true => Some(
+                as_string_mut(buf).expect("Can not convert hash to string"),
+            ),
+        }
+    }
+
+    /// Get peak value for the channel.
+    ///
+    /// If Channel == 1024 || 1025 -> loudness will be returned.
+    /// Only if master track, or track in vu mode.
+    pub fn peak(&self, channel: u32) -> Volume {
+        let result = unsafe {
+            Reaper::get()
+                .low()
+                .Track_GetPeakInfo(self.get().as_ptr(), channel as i32)
+        };
+        Volume::from(result)
+    }
+
+    fn get_envelope_parametrized(
+        &self,
+        index: usize,
+    ) -> Option<Envelope<Self, T>> {
+        let ptr = unsafe {
+            Reaper::get()
+                .low()
+                .GetTrackEnvelope(self.get().as_ptr(), index as i32)
+        };
+        match TrackEnvelope::new(ptr) {
+            None => None,
+            Some(ptr) => Some(Envelope::new(ptr, self)),
+        }
+    }
+
+    fn get_envelope_by_chunk_parametrized(
+        &self,
+        selector: EnvelopeSelector,
+    ) -> Option<Envelope<Self, T>> {
+        let mut chunk = match selector {
+            EnvelopeSelector::Chunk(chunk) => chunk.to_string(),
+            EnvelopeSelector::Guid(guid) => guid.to_string(),
+        };
+        let ptr = unsafe {
+            Reaper::get().low().GetTrackEnvelopeByChunkName(
+                self.get().as_ptr(),
+                as_c_str(chunk.with_null()).as_ptr(),
+            )
+        };
+        match TrackEnvelope::new(ptr) {
+            None => None,
+            Some(ptr) => Some(Envelope::new(ptr, self)),
+        }
+    }
+
+    fn get_envelope_by_name_parametrized(
+        &self,
+        name: impl Into<String>,
+    ) -> Option<Envelope<Self, T>> {
+        let mut name = name.into();
+        let ptr = unsafe {
+            Reaper::get().low().GetTrackEnvelopeByName(
+                self.get().as_ptr(),
+                as_c_str(name.with_null()).as_ptr(),
+            )
+        };
+        match TrackEnvelope::new(ptr) {
+            None => None,
+            Some(ptr) => Some(Envelope::new(ptr, self)),
+        }
+    }
 }
 impl<'a> Track<'a, Immutable> {
     pub fn get_parent_track(&self) -> Option<Track<Immutable>> {
@@ -474,6 +637,30 @@ impl<'a> Track<'a, Immutable> {
             None => None,
             Some(ptr) => Track::new(self.project(), ptr).into(),
         }
+    }
+
+    pub fn get_item(&self, index: usize) -> Option<Item<Immutable>> {
+        self.get_item_parametrized(index)
+    }
+
+    pub fn get_envelope(
+        &self,
+        index: usize,
+    ) -> Option<Envelope<Self, Immutable>> {
+        self.get_envelope_parametrized(index)
+    }
+
+    pub fn get_envelope_by_chunk(
+        &self,
+        selector: EnvelopeSelector,
+    ) -> Option<Envelope<Self, Immutable>> {
+        self.get_envelope_by_chunk_parametrized(selector)
+    }
+    pub fn get_envelope_by_name(
+        &self,
+        name: impl Into<String>,
+    ) -> Option<Envelope<Self, Immutable>> {
+        self.get_envelope_by_name_parametrized(name)
     }
 }
 impl<'a> Track<'a, Mutable> {
@@ -486,6 +673,76 @@ impl<'a> Track<'a, Mutable> {
                 self.ptr = ptr;
                 Some(self)
             }
+        }
+    }
+
+    pub fn get_item(&mut self, index: usize) -> Option<Item<Mutable>> {
+        self.get_item_parametrized(index)
+    }
+
+    pub fn get_envelope(
+        &mut self,
+        index: usize,
+    ) -> Option<Envelope<Self, Mutable>> {
+        self.get_envelope_parametrized(index)
+    }
+
+    pub fn get_envelope_by_chunk(
+        &mut self,
+        selector: EnvelopeSelector,
+    ) -> Option<Envelope<Self, Mutable>> {
+        self.get_envelope_by_chunk_parametrized(selector)
+    }
+    pub fn get_envelope_by_name(
+        &mut self,
+        name: impl Into<String>,
+    ) -> Option<Envelope<Self, Mutable>> {
+        self.get_envelope_by_name_parametrized(name)
+    }
+
+    pub fn set_chunk(
+        &mut self,
+        chunk: impl Into<String>,
+        need_undo: bool,
+    ) -> ReaperStaticResult<()> {
+        let mut chunk = chunk.into();
+        let result = unsafe {
+            Reaper::get().low().SetTrackStateChunk(
+                self.get().as_ptr(),
+                as_c_str(chunk.with_null()).as_ptr(),
+                need_undo,
+            )
+        };
+        match result {
+            true => Ok(()),
+            false => {
+                Err(ReaperError::UnsuccessfulOperation("Can not set chunk!"))
+            }
+        }
+    }
+
+    /// pitch 128-255 for CC. 128=CC0, 129=CC1 etc.
+    pub fn set_note_name(
+        &mut self,
+        channel: u8,
+        pitch: u16,
+        note_name: impl Into<String>,
+    ) -> ReaperStaticResult<()> {
+        let mut note_name = note_name.into();
+        let result = unsafe {
+            Reaper::get().low().SetTrackMIDINoteNameEx(
+                self.project().context().to_raw(),
+                self.get().as_ptr(),
+                pitch as i32,
+                channel as i32,
+                as_c_str(note_name.with_null()).as_ptr(),
+            )
+        };
+        match result {
+            true => Ok(()),
+            false => Err(ReaperError::UnsuccessfulOperation(
+                "Can not set note name.",
+            )),
         }
     }
 
@@ -614,9 +871,10 @@ impl<'a> Track<'a, Mutable> {
 
     pub fn add_item(
         &mut self,
-        start: Position,
+        start: impl Into<Position>,
         length: impl GetLength,
     ) -> Item<Mutable> {
+        let start = start.into();
         let ptr = unsafe {
             Reaper::get().low().AddMediaItemToTrack(self.get().as_ptr())
         };

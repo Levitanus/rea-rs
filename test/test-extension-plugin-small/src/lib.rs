@@ -26,8 +26,6 @@ fn main(context: PluginContext) -> Result<(), Box<dyn Error>> {
             ));
             // let mut pr = rpr.current_project();
             // let mut tr = pr.get_track_mut(0).unwrap();
-            // debug!("{:#?}", tr.razor_edits());
-            // debug!("{:#?}", tr.ui_element_rect("tcp.mute"));
             Ok(())
         },
         ActionKind::NotToggleable,

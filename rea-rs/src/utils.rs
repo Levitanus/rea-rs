@@ -52,12 +52,10 @@ pub fn as_c_str<'a>(value: &'a String) -> &'a CStr {
 
 /// Convert pointer to CStr to String.
 pub fn as_string(ptr: *const i8) -> Result<String, Utf8Error> {
-    unsafe {
-        let value: &CStr = CStr::from_ptr(ptr);
-        let value = value.to_str()?;
-        let value = String::from(value);
-        Ok(value)
-    }
+    let value: &CStr = unsafe { CStr::from_ptr(ptr) };
+    let value = value.to_str()?;
+    let value = String::from(value);
+    Ok(value)
 }
 
 /// Convert pointer to CString to String.
