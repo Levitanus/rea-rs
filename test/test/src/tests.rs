@@ -32,15 +32,15 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
     // In theory all steps could be declared inline. But that makes the IDE
     // become terribly slow.
     let steps_a = vec![
-        // global_instances(),
-        // action(),
-        // projects(),
-        // misc(),
-        // misc_types(),
-        // ext_state(),
-        // markers(),
-        // tracks(),
-        // sends(),
+        global_instances(),
+        action(),
+        projects(),
+        misc(),
+        misc_types(),
+        ext_state(),
+        markers(),
+        tracks(),
+        sends(),
         envelopes(),
     ]
     .into_iter();
