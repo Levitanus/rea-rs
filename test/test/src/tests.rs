@@ -11,10 +11,10 @@ use rea_rs::project_info::{
 use rea_rs::{
     AutomationMode, Color, CommandId, EnvelopeChunk, EnvelopePoint,
     EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo, ExtValue, Fx,
-    GenericSend, GenericSendMut, HardwareSocket, Immutable, MarkerRegionInfo,
-    MessageBoxValue, Mutable, Pan, PanLaw, PlayRate, Position, Project,
-    RazorEdit, Reaper, RecInput, RecMode, RecMonitoring, RecOutMode,
-    SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
+    GenericSend, GenericSendMut, HardwareSocket, Immutable, ItemFade,
+    MarkerRegionInfo, MessageBoxValue, Mutable, Pan, PanLaw, PlayRate,
+    Position, Project, RazorEdit, Reaper, RecInput, RecMode, RecMonitoring,
+    RecOutMode, SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
     SendSourceChannels, SoloMode, TimeMode, Track, TrackFolderState,
     TrackGroupParam, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
     TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, GUID,
@@ -42,6 +42,7 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
         tracks(),
         sends(),
         envelopes(),
+        items(),
     ]
     .into_iter();
     let user_interaction =
@@ -794,13 +795,13 @@ fn tracks() -> TestStep {
         assert_eq!(tr2.free_item_positioning(), false);
 
         debug!("beat attach mode");
-        assert_eq!(tr2.beat_attach_mode(), TimeMode::Default);
-        tr2.set_beat_attach_mode(TimeMode::BeatsFull)?;
-        assert_eq!(tr2.beat_attach_mode(), TimeMode::BeatsFull);
-        tr2.set_beat_attach_mode(TimeMode::BeatsOnlyPosition)?;
-        assert_eq!(tr2.beat_attach_mode(), TimeMode::BeatsOnlyPosition);
-        tr2.set_beat_attach_mode(TimeMode::Time)?;
-        assert_eq!(tr2.beat_attach_mode(), TimeMode::Time);
+        assert_eq!(tr2.time_base(), TimeMode::Default);
+        tr2.set_time_base(TimeMode::BeatsFull)?;
+        assert_eq!(tr2.time_base(), TimeMode::BeatsFull);
+        tr2.set_time_base(TimeMode::BeatsOnlyPosition)?;
+        assert_eq!(tr2.time_base(), TimeMode::BeatsOnlyPosition);
+        tr2.set_time_base(TimeMode::Time)?;
+        assert_eq!(tr2.time_base(), TimeMode::Time);
 
         debug!(
             "Let's see scales: {:?}",
@@ -1268,6 +1269,134 @@ fn envelopes() -> TestStep {
             ))
             .expect("no envelope");
         assert_eq!(env.n_points(), 2);
+
+        Ok(())
+    })
+}
+fn items() -> TestStep {
+    step("Items", || {
+        let rpr = Reaper::get();
+        // rpr.perform_action(40886, 0, None);
+        let mut pr = rpr.current_project();
+        for idx in pr.n_tracks()..1 {
+            if idx == 0 {
+                break;
+            }
+            let tr = pr.get_track_mut(idx - 1);
+            match tr {
+                None => continue,
+                Some(tr) => tr.delete(),
+            };
+        }
+        let mut tr = pr.add_track(0, "first");
+        let mut item = tr.add_item(0.5, Duration::from_secs(3));
+        item.add_take();
+        assert_eq!(item.get_take(0).unwrap().get(), item.active_take().get());
+
+        assert!(!item.is_selected());
+        item.set_selected(true);
+        assert!(item.is_selected());
+
+        assert_eq!(item.position(), Position::from(0.5));
+        item.set_position(Position::from(2.0));
+        assert_eq!(item.position(), Position::from(2.0));
+
+        assert_eq!(item.length(), Duration::from_secs(3));
+        item.set_length(Duration::from_secs(1));
+        assert_eq!(item.length(), Duration::from_secs(1));
+        assert_eq!(item.end_position(), Position::from(3.0));
+        item.set_end_position(Position::from(4.0));
+        assert_eq!(item.length(), Duration::from_secs(2));
+
+        assert!(!item.is_muted());
+        item.set_muted(true);
+        assert!(item.is_muted());
+        item.set_muted(false);
+
+        assert!(!item.mute_actual());
+        item.set_mute_actual(true);
+        assert!(item.mute_actual());
+        item.set_mute_actual(false);
+
+        assert!(item.is_looped());
+        item.set_looped(false);
+        assert!(!item.is_looped());
+
+        assert!(!item.all_takes_play());
+        item.set_all_takes_play(true);
+        assert!(item.all_takes_play());
+
+        assert_eq!(item.time_base(), TimeMode::Default);
+        assert!(!item.auto_stretch());
+        item.set_time_base(TimeMode::BeatsFull);
+        assert_eq!(item.time_base(), TimeMode::BeatsFull);
+        assert!(!item.auto_stretch());
+        item.set_auto_stretch(true);
+        assert!(item.auto_stretch());
+
+        assert!(!item.locked());
+        item.set_locked(true);
+        assert!(item.locked());
+        item.set_locked(false);
+        assert!(!item.locked());
+
+        assert_eq!(item.volume(), Volume::from(1.0));
+        item.set_volume(Volume::from(0.5));
+        assert_eq!(item.volume(), Volume::from(0.5));
+
+        assert_eq!(item.snap_offset().as_millis(), 0);
+        item.set_snap_offset(Duration::from_secs_f64(0.5))?;
+        assert_float_eq!(item.snap_offset().as_secs_f64(), 0.5, r2nd <= 0.5);
+
+        assert_eq!(item.fade_in().length.as_millis(), 10);
+        let mut fade_in = ItemFade::new(
+            Duration::from_millis(500),
+            0.0,
+            rea_rs::ItemFadeShape::Beizer,
+            false,
+        );
+        item.set_fade_in(fade_in)?;
+        assert_eq!(item.fade_in(), fade_in);
+        fade_in.curve = 1.0;
+        fade_in.shape = rea_rs::ItemFadeShape::FastEnd;
+        item.set_fade_out(fade_in)?;
+        assert_eq!(item.fade_out(), fade_in);
+        warn!(
+            "Here could be more precise fade test, \
+            included two items, where curve will matter."
+        );
+
+        assert_eq!(item.group_id(), 0);
+        item.set_group_id(1)?;
+        assert_eq!(item.group_id(), 1);
+
+        assert_eq!(item.y_pos_relative(), 0);
+        debug!("Let's print item height in pixels: {}", item.height());
+        assert_eq!(item.y_pos_free_mode(), 0.0);
+        item.set_y_pos_free_mode(0.4)?;
+        tr.set_free_item_positioning(true, true)?;
+        let mut item = tr.get_item(0).unwrap();
+        assert_float_eq!(item.y_pos_free_mode(), 0.4, r2nd <= 0.5);
+        assert_float_eq!(item.height_free_mode(), 0.6, r2nd <= 0.5);
+        item.set_height_free_mode(0.2);
+        assert_float_eq!(item.height_free_mode(), 0.2, r2nd <= 0.5);
+
+        assert_eq!(item.notes(50)?, "");
+        item.set_notes("My text for my item!")?;
+        assert_eq!(item.notes(50)?, "My text for my item!");
+
+        let guid = GUID::new();
+        item.set_guid(guid)?;
+        assert_eq!(item.guid(), guid);
+
+        assert!(item.color().is_none());
+        item.set_color(Some(Color::new(0, 0, 0)));
+        assert_eq!(item.color(), Some(Color::new(0, 0, 0)));
+        item.set_color(None);
+        assert!(item.color().is_none());
+        let color = Color::new(255, 60, 100);
+        item.set_color(Some(color));
+        assert_eq!(item.color(), Some(color));
 
         Ok(())
     })

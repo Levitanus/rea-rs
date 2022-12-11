@@ -12,7 +12,7 @@ pub struct Take<'a, T: ProbablyMutable> {
 }
 impl<'a, T: ProbablyMutable> KnowsProject for Take<'a, T> {
     fn project(&self) -> &Project {
-        self.item.parent_project()
+        self.item.project()
     }
 }
 impl<'a, T: ProbablyMutable> WithReaperPtr<'a> for Take<'a, T> {
@@ -21,8 +21,7 @@ impl<'a, T: ProbablyMutable> WithReaperPtr<'a> for Take<'a, T> {
         self.ptr
     }
     fn get(&self) -> Self::Ptr {
-        self.require_valid_2(self.parent_item().parent_project())
-            .unwrap();
+        self.require_valid_2(self.parent_item().project()).unwrap();
         self.ptr
     }
     fn make_unchecked(&mut self) {

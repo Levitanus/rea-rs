@@ -394,7 +394,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         self.get_info_value("B_FREEMODE") != 0.0
     }
 
-    pub fn beat_attach_mode(&self) -> TimeMode {
+    pub fn time_base(&self) -> TimeMode {
         let value = self.get_info_value("C_BEATATTACHMODE") as i32;
         TimeMode::from_int(value).expect("Can not convert to TimeMode.")
     }
@@ -893,6 +893,9 @@ impl<'a> Track<'a, Mutable> {
         TrackFX::<Mutable>::from_index(self, index as usize)
     }
 
+    /// Add an empty [Item] to Track.
+    ///
+    /// Item will not have any takes.
     pub fn add_item(
         &mut self,
         start: impl Into<Position>,
@@ -1186,10 +1189,7 @@ impl<'a> Track<'a, Mutable> {
         Ok(())
     }
 
-    pub fn set_beat_attach_mode(
-        &mut self,
-        mode: TimeMode,
-    ) -> ReaperResult<()> {
+    pub fn set_time_base(&mut self, mode: TimeMode) -> ReaperResult<()> {
         self.set_info_value("C_BEATATTACHMODE", mode.int_value() as f64)
     }
 

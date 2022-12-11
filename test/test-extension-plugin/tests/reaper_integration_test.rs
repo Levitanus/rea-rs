@@ -96,9 +96,7 @@ fn run_integration_test_in_reaper(reaper_executable: &Path) -> Result<()> {
     if exit_status.success() {
         return Ok(());
     }
-    let exit_code = exit_status
-        .code()
-        .ok_or("REAPER exited because of signal")?;
+    let exit_code = exit_status.code().unwrap_or(101);
     if exit_code == 172 {
         Err("Integration test failed")?
     } else if exit_code == 101 {
