@@ -1,20 +1,20 @@
 // #![allow(clippy::float_cmp)]
-use approx;
+use crate::{step, TestStep};
+use bitvec::prelude::*;
+use c_str_macro::c_str;
+use float_eq::assert_float_eq;
 use log::{debug, info, warn};
 use rea_rs::errors::{ReaperError, ReaperResult};
 use rea_rs::project_info::{
     BoundsMode, RenderMode, RenderSettings, RenderTail, RenderTailFlags,
 };
-
-use crate::{step, TestStep};
-use bitvec::prelude::*;
-use c_str_macro::c_str;
 use rea_rs::{
-    AutomationMode, Color, CommandId, EnvelopeChunk, EnvelopeSelector,
-    ExtValue, Fx, GenericSend, GenericSendMut, HardwareSocket,
-    MarkerRegionInfo, MessageBoxValue, Mutable, Pan, PanLaw, PlayRate,
-    Position, Project, RazorEdit, Reaper, RecInput, RecMode, RecMonitoring,
-    RecOutMode, SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
+    AutomationMode, Color, CommandId, EnvelopeChunk, EnvelopePoint,
+    EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo, ExtValue, Fx,
+    GenericSend, GenericSendMut, HardwareSocket, Immutable, MarkerRegionInfo,
+    MessageBoxValue, Mutable, Pan, PanLaw, PlayRate, Position, Project,
+    RazorEdit, Reaper, RecInput, RecMode, RecMonitoring, RecOutMode,
+    SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
     SendSourceChannels, SoloMode, TimeMode, Track, TrackFolderState,
     TrackGroupParam, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
     TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, GUID,
@@ -27,22 +27,21 @@ use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::Duration;
 
-const _EPSILON: f64 = 0.000_000_1;
-
 /// Creates all integration test steps to be executed. The order matters!
 pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
     // In theory all steps could be declared inline. But that makes the IDE
     // become terribly slow.
     let steps_a = vec![
-        global_instances(),
-        action(),
-        projects(),
-        misc(),
-        misc_types(),
-        ext_state(),
-        markers(),
-        tracks(),
-        sends(),
+        // global_instances(),
+        // action(),
+        // projects(),
+        // misc(),
+        // misc_types(),
+        // ext_state(),
+        // markers(),
+        // tracks(),
+        // sends(),
+        envelopes(),
     ]
     .into_iter();
     let user_interaction =
@@ -449,7 +448,6 @@ fn ext_state() -> TestStep {
         assert_eq!(state.get().expect("can not get value").get(), 3344);
         state.delete();
         assert!(state.get().is_none());
-        drop(state);
 
         debug!("test on int and track");
         let tr = pr.get_track_mut(0).unwrap();
@@ -459,7 +457,6 @@ fn ext_state() -> TestStep {
         assert_eq!(state.get().expect("can not get value"), 15);
         state.delete();
         assert_eq!(state.get(), None);
-        drop(state);
 
         debug!("test on int and send");
         pr.add_track(1, "second");
@@ -473,7 +470,22 @@ fn ext_state() -> TestStep {
         assert_eq!(state.get().expect("can not get value"), 15);
         state.delete();
         assert_eq!(state.get(), None);
-        drop(state);
+
+        debug!("test on int and envelope");
+        pr.add_track(1, "second");
+        let mut tr = pr.get_track_mut(0).unwrap();
+        let env = tr
+            .get_envelope_by_chunk(EnvelopeSelector::Chunk(
+                EnvelopeChunk::VolumePreFx,
+            ))
+            .expect("expect envelope");
+        let mut state =
+            ExtValue::new("test section", "first", 45, false, &env);
+        assert_eq!(state.get().expect("can not get value"), 45);
+        state.set(15);
+        assert_eq!(state.get().expect("can not get value"), 15);
+        state.delete();
+        assert_eq!(state.get(), None);
 
         Ok(())
     })
@@ -574,6 +586,11 @@ fn tracks() -> TestStep {
 
         debug!("try to find track with new name");
         assert_eq!(pr.get_track(1).ok_or("no track!")?.name(), "new second");
+
+        debug!("from guid");
+        let guid = pr.get_track(1).ok_or("no track!")?.guid();
+        let tr = Track::<Immutable>::from_guid(&pr, guid).expect("no track!");
+        assert_eq!(tr.index(), 1);
 
         let pos = Position::from_quarters(4.0, &pr);
 
@@ -795,11 +812,7 @@ fn tracks() -> TestStep {
             )
         );
         tr2.set_mcp_fx_send_region_scale(0.7)?;
-        assert!(approx::relative_eq!(
-            tr2.mcp_fx_send_region_scale(),
-            0.7,
-            max_relative = 0.1
-        ));
+        assert_float_eq!(tr2.mcp_fx_send_region_scale(), 0.7, r2nd <= 0.01);
 
         debug!("play offset");
         assert_eq!(tr2.play_offset(), None);
@@ -1022,6 +1035,239 @@ fn sends() -> TestStep {
 
         assert_eq!(tr1.n_sends(), 0);
         assert_eq!(tr2.n_receives(), 0);
+
+        Ok(())
+    })
+}
+
+fn envelopes() -> TestStep {
+    step("Envelopes", || {
+        let rpr = Reaper::get();
+        // rpr.perform_action(40886, 0, None);
+        let mut pr = rpr.current_project();
+        for idx in pr.n_tracks()..1 {
+            if idx == 0 {
+                break;
+            }
+            let tr = pr.get_track_mut(idx - 1);
+            match tr {
+                None => continue,
+                Some(tr) => tr.delete(),
+            };
+        }
+        let mut tr = pr.add_track(0, "first");
+
+        let mut env = tr
+            .get_envelope_by_chunk(EnvelopeSelector::Chunk(
+                EnvelopeChunk::Volume,
+            ))
+            .expect("no envelope");
+        assert_eq!(env.name(), "Volume");
+        let guid = env.guid();
+        debug!("guid is: {:?}", guid);
+        // let mut env = tr
+        //     .get_envelope_by_chunk(EnvelopeSelector::Guid(guid))
+        //     .expect("no envelope");
+        let values = [0.1, 0.56, 0.80, 1.2];
+        let times = [1.1, 1.12, 1.5, 2.0];
+        for (v, t) in values.iter().zip(times.iter()) {
+            env.insert_point(
+                Position::from(*t),
+                EnvelopePoint::new(
+                    *v,
+                    rea_rs::EnvelopePointShape::SlowStartEnd,
+                    0.0,
+                    false,
+                ),
+                false,
+            )?;
+        }
+        env.sort_points();
+        assert_float_eq!(
+            env.get_point(0).expect("no point").value,
+            0.1,
+            r2nd <= 0.01
+        );
+        assert_float_eq!(
+            env.get_point(1).expect("no point").value,
+            0.56,
+            r2nd <= 0.01
+        );
+        assert_float_eq!(
+            env.get_point(2).expect("no point").value,
+            0.8,
+            r2nd <= 0.01
+        );
+        assert_float_eq!(
+            env.get_point_by_time(2.0).expect("no point").value,
+            1.2,
+            r2nd <= 0.01
+        );
+        assert_float_eq!(
+            env.get_point(3).expect("no point").value,
+            1.2,
+            r2nd <= 0.01
+        );
+        assert_float_eq!(
+            env.get_point_by_time(1.12).expect("no point").value,
+            0.56,
+            r2nd <= 0.01
+        );
+        assert_float_eq!(
+            env.get_point_by_time(1.13).expect("no point").value,
+            0.56,
+            r2nd <= 0.01
+        );
+
+        debug!("evaluate");
+        let mut point = env.get_point(0).unwrap();
+        point.shape = EnvelopePointShape::Linear;
+        point.value = 0.2;
+        env.set_point(0, Some(1.2.into()), point, false)?;
+        let mut point = env.get_point(1).unwrap();
+        point.shape = EnvelopePointShape::Linear;
+        point.value = 0.4;
+        env.set_point(1, Some(1.4.into()), point, true)?;
+        assert_eq!(env.n_points(), 4);
+
+        assert_float_eq!(
+            env.get_point_by_time(1.2).unwrap().value,
+            0.2,
+            r2nd <= 0.01
+        );
+        assert_float_eq!(
+            env.get_point_by_time(1.4).unwrap().value,
+            0.4,
+            r2nd <= 0.01
+        );
+
+        let result = env.evaluate(1.31.into(), 44100, 512);
+        assert_float_eq!(result.value, 0.3, r2nd <= 0.05);
+        assert_float_eq!(result.first_derivative, 0.01, r2nd <= 0.5);
+        assert_float_eq!(result.second_derivative, 0.0, r2nd <= 0.5);
+        assert_float_eq!(result.third_derivative, 0.0, r2nd <= 0.5);
+        assert_eq!(result.valid_for, 0);
+
+        let mut point = env.get_point(1).unwrap();
+        point.value = 0.2;
+        env.set_point(1, Some(1.4.into()), point, true)?;
+        assert_float_eq!(
+            env.get_point_by_time(1.2).unwrap().value,
+            0.2,
+            r2nd <= 0.01
+        );
+        assert_float_eq!(
+            env.get_point_by_time(1.4).unwrap().value,
+            0.2,
+            r2nd <= 0.01
+        );
+
+        let result = env.evaluate(1.31.into(), 44100, 512);
+        assert_float_eq!(result.value, 0.2, r2nd <= 0.05);
+        assert_float_eq!(result.first_derivative, 0.0, r2nd <= 0.5);
+        assert_float_eq!(result.second_derivative, 0.0, r2nd <= 0.5);
+        assert_float_eq!(result.third_derivative, 0.0, r2nd <= 0.5);
+        warn!(
+            "still valid for equals to 0. \
+            Maybe, it should be retrieved from audio thread?"
+        );
+        assert_eq!(result.valid_for, 0);
+
+        debug!("send info");
+        assert!(env.send_info().is_none());
+
+        let mut pr = rpr.current_project();
+        pr.add_track(1, "second");
+        let tr1 = pr.get_track(0).unwrap();
+        let tr2 = pr.get_track(1).unwrap();
+        let send = TrackSend::create_new(&tr1, &tr2);
+        let env = send
+            .get_envelope(EnvelopeSelector::Chunk(EnvelopeChunk::VolumePreFx))
+            .unwrap();
+        assert_eq!(env.send_info().unwrap(), EnvelopeSendInfo::TrackSend(0));
+
+        assert_eq!(env.tcp_y_offset(), 0);
+        assert_eq!(env.tcp_height(), 0);
+
+        debug!("automation item");
+        let mut env = tr
+            .get_envelope_by_chunk(EnvelopeSelector::Chunk(
+                EnvelopeChunk::Volume,
+            ))
+            .expect("no envelope");
+        let mut itm = env.add_automation_item(
+            0,
+            0.0.into(),
+            Duration::from_secs_f64(1.6),
+        );
+        assert_eq!(itm.n_points(true), 5);
+        assert_float_eq!(
+            itm.get_point(true, 0).unwrap().value,
+            0.2,
+            r2nd <= 0.5
+        );
+        assert_float_eq!(
+            itm.get_point_by_time(true, Position::from(1.5))
+                .unwrap()
+                .value,
+            1.2,
+            r2nd <= 0.5
+        );
+        itm.set_position(1.0.into());
+        assert_eq!(itm.position(), Position::from(1.0));
+        assert_float_eq!(
+            itm.get_point_by_time(true, Position::from(1.6))
+                .unwrap()
+                .value,
+            0.2,
+            r2nd <= 0.5
+        );
+        itm.set_play_rate(2.0);
+        assert_eq!(itm.play_rate(), 2.0);
+        assert_float_eq!(
+            itm.get_point_by_time(true, Position::from(1.77))
+                .unwrap()
+                .value,
+            1.2,
+            r2nd <= 0.5
+        );
+
+        itm.set_base_line(0.5);
+        assert_float_eq!(itm.base_line(), 0.5, abs <= 0.1);
+        warn!("base line seems to work from API. But it is not set in interface,\
+            and didn't affected to points.");
+        itm.set_amplitude(0.5);
+        assert_float_eq!(itm.base_line(), 0.5, abs <= 0.1);
+        assert_float_eq!(
+            itm.get_point_by_time(true, Position::from(1.77))
+                .unwrap()
+                .value,
+            0.7,
+            r2nd <= 0.5
+        );
+        itm.set_play_rate(1.0);
+        itm.set_start_offset(Duration::from_secs_f64(0.5));
+        assert_float_eq!(itm.start_offset().as_secs_f64(), 0.5, abs <= 0.001);
+        assert_float_eq!(
+            itm.get_point_by_time(true, Position::from(2.0))
+                .unwrap()
+                .value,
+            0.7,
+            r2nd <= 0.5
+        );
+        assert!(itm.is_looped());
+        itm.set_looped(false);
+        assert!(!itm.is_looped());
+        assert!(itm.is_selected());
+        itm.set_selected(false);
+        assert!(!itm.is_selected());
+
+        let env = tr
+            .get_envelope_by_chunk(EnvelopeSelector::Chunk(
+                EnvelopeChunk::Volume,
+            ))
+            .expect("no envelope");
+        assert_eq!(env.n_points(), 2);
 
         Ok(())
     })

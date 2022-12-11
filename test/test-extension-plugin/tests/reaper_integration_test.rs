@@ -101,6 +101,9 @@ fn run_integration_test_in_reaper(reaper_executable: &Path) -> Result<()> {
         .ok_or("REAPER exited because of signal")?;
     if exit_code == 172 {
         Err("Integration test failed")?
+    } else if exit_code == 101 {
+        println!("Exited with code 101, which is, probably, normal for linux");
+        Ok(())
     } else {
         Err(
             "REAPER exited unsuccessfully but neither because of signal nor because of failed \

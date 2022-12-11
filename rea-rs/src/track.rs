@@ -99,6 +99,11 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
             Some(ptr) => Some(Self::new(project, ptr)),
         }
     }
+    pub fn from_guid(project: &'a Project, guid: GUID) -> Option<Self> {
+        let track = project.iter_tracks().find(|tr| tr.guid() == guid)?;
+        let index = track.index();
+        Self::from_index(project, index)
+    }
 
     fn get_info_string(
         &self,
@@ -274,6 +279,12 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
             Reaper::get()
                 .low()
                 .GetTrackNumMediaItems(self.get().as_ptr())
+                as usize
+        }
+    }
+    pub fn n_envelopes(&self) -> usize {
+        unsafe {
+            Reaper::get().low().CountTrackEnvelopes(self.get().as_ptr())
                 as usize
         }
     }
@@ -674,6 +685,19 @@ impl<'a> Track<'a, Mutable> {
                 Some(self)
             }
         }
+    }
+
+    pub fn make_only_selected_track(&self) {
+        self.project()
+            .with_current_project(|| {
+                unsafe {
+                    Reaper::get()
+                        .low()
+                        .SetOnlyTrackSelected(self.get().as_ptr())
+                };
+                Ok(())
+            })
+            .unwrap();
     }
 
     pub fn get_item(&mut self, index: usize) -> Option<Item<Mutable>> {

@@ -1,7 +1,7 @@
 use crate::{
     utils::{as_c_str, as_string, make_c_string_buf, WithNull},
-    GenericSend, Mutable, ProbablyMutable, Project, Reaper, SendIntType,
-    Track, TrackSend, WithReaperPtr,
+    Envelope, GenericSend, KnowsProject, Mutable, ProbablyMutable, Project,
+    Reaper, SendIntType, Track, TrackSend, WithReaperPtr,
 };
 use serde::de::DeserializeOwned;
 pub use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ use std::{
 /// by [serde] crate.
 /// - It provides the similar interface as for global ext state values,
 /// as well as to project or other objects ext data.
-/// Currently supported: [Project], [Track], [TrackSend]
+/// Currently supported: [Project], [Track], [TrackSend], [Envelope]
 /// - it erases data, if in process of development
 /// you decided to turn the persistence off.
 /// - it can be initialized with value, but only once, if
@@ -56,9 +56,6 @@ use std::{
 /// assert_eq!(state.get().expect("can not get value"), 56);
 /// state.delete();
 /// assert!(state.get().is_none());
-/// // We need drop here, as state should drop the value
-/// // if persistence is false. This will borrow pr on the drop.
-/// drop(state);
 ///
 /// let tr = pr.get_track_mut(0).unwrap();
 /// let mut state = ExtValue::new("testsection", "first", 45, false, &tr);
@@ -171,15 +168,6 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
         let (section_str, key_str) = (self.section(), self.key());
         let (section, key) = (as_c_str(&section_str), as_c_str(&key_str));
         self.object.delete_ext_value(section, key)
-    }
-}
-impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState> Drop
-    for ExtValue<'a, T, O>
-{
-    fn drop(&mut self) {
-        if !self.persist {
-            self.delete();
-        }
     }
 }
 
@@ -391,6 +379,54 @@ impl<'a> HasExtState for TrackSend<'a, Mutable> {
                 self.parent_track().get().as_ptr(),
                 self.as_int(),
                 self.index() as i32,
+                as_c_str(category.with_null()).as_ptr(),
+                CString::new("").unwrap().into_raw(),
+                true,
+            )
+        };
+    }
+}
+
+impl<'a, P: KnowsProject> HasExtState for Envelope<'a, P, Mutable> {
+    fn set_ext_value(&self, section: &CStr, key: &CStr, value: *mut i8) {
+        let mut category = section_key_to_one_category(section, key);
+        unsafe {
+            Reaper::get().low().GetSetEnvelopeInfo_String(
+                self.get().as_ptr(),
+                as_c_str(category.with_null()).as_ptr(),
+                value,
+                true,
+            );
+        }
+    }
+
+    fn get_ext_value(
+        &self,
+        section: &CStr,
+        key: &CStr,
+        buf_size: usize,
+    ) -> Option<CString> {
+        let mut category = section_key_to_one_category(section, key);
+        let buf = make_c_string_buf(buf_size).into_raw();
+        let result = unsafe {
+            Reaper::get().low().GetSetEnvelopeInfo_String(
+                self.get().as_ptr(),
+                as_c_str(category.with_null()).as_ptr(),
+                buf,
+                false,
+            )
+        };
+        match result {
+            false => None,
+            true => Some(unsafe { CString::from_raw(buf) }),
+        }
+    }
+
+    fn delete_ext_value(&self, section: &CStr, key: &CStr) {
+        let mut category = section_key_to_one_category(section, key);
+        unsafe {
+            Reaper::get().low().GetSetEnvelopeInfo_String(
+                self.get().as_ptr(),
                 as_c_str(category.with_null()).as_ptr(),
                 CString::new("").unwrap().into_raw(),
                 true,
