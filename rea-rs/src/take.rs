@@ -115,6 +115,22 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
     ///
     /// It is quite useless as it is, but, it can be used several times with
     /// [MidiEventBuilder] for iterating through various event types.
+    ///
+    /// # In the case one desire to iter through raw binary data
+    ///
+    /// MIDI buffer is returned as a list of { int offset, char flag, int
+    /// msglen, unsigned char msg[] }.
+    /// - offset: MIDI ticks from previous event
+    /// - flag: &1=selected &2=muted
+    /// - flag high 4 bits for CC shape: &16=linear, &32=slow start/end,
+    ///   &16|32=fast start, &64=fast end, &64|16=bezier
+    /// - msg: the MIDI message.
+    /// - A meta-event of type 0xF followed by 'CCBZ ' and 5 more bytes
+    ///   represents bezier curve data for the previous MIDI event: 1 byte for
+    ///   the bezier type (usually 0) and 4 bytes for the bezier tension as a
+    ///   float.
+    /// - For tick intervals longer than a 32 bit word can represent,
+    ///   zero-length meta events may be placed between valid events.
     pub fn get_midi(
         &self,
         buf_size_override: impl Into<Option<i32>>,

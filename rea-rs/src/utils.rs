@@ -8,7 +8,9 @@ use std::{
     str::Utf8Error,
 };
 
+/// Returns self as a null-terminated String. Implemented only for [String].
 pub trait WithNull: Clone {
+    /// If not `\0` at the end, it will be added.
     fn with_null(&mut self) -> &String;
 }
 impl WithNull for String {
