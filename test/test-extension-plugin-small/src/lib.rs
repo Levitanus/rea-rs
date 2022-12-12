@@ -24,8 +24,11 @@ fn main(context: PluginContext) -> Result<(), Box<dyn Error>> {
                 "possible undo: {:?}",
                 rpr.current_project().next_undo()
             ));
-            // let mut pr = rpr.current_project();
-            // let mut tr = pr.get_track_mut(0).unwrap();
+            let mut pr = rpr.current_project();
+            let mut tr = pr.get_track_mut(0).unwrap();
+            let item = tr.get_item(0).unwrap();
+            let take = item.active_take();
+            debug!("{:?}", take.get_midi(None));
             Ok(())
         },
         ActionKind::NotToggleable,

@@ -42,6 +42,12 @@ pub use item::*;
 pub mod take;
 pub use take::*;
 
+pub mod source;
+pub use source::*;
+
+pub mod midi;
+pub use midi::*;
+
 pub mod fx;
 pub use fx::*;
 
