@@ -10,14 +10,14 @@ use rea_rs::project_info::{
 };
 use rea_rs::{
     AutomationMode, Color, CommandId, EnvelopeChunk, EnvelopePoint,
-    EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo, ExtState, Fx,
+    EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo, ExtState,
     GenericSend, GenericSendMut, HardwareSocket, Immutable, ItemFade,
     MarkerRegionInfo, MessageBoxValue, Mutable, Pan, PanLaw, Pitch, PlayRate,
     Position, Project, RazorEdit, Reaper, RecInput, RecMode, RecMonitoring,
     RecOutMode, SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
     SendSourceChannels, SoloMode, TakeChannelMode, TakePitchMode, TimeMode,
     Track, TrackFolderState, TrackGroupParam, TrackPan, TrackPerformanceFlags,
-    TrackPlayOffset, TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr,
+    TrackPlayOffset, TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX,
     GUID,
 };
 use std::collections::HashMap;

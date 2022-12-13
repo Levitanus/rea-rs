@@ -2,7 +2,7 @@ use core::panic;
 use std::{
     ffi::CString,
     marker::PhantomData,
-    mem::MaybeUninit,
+    mem::{transmute, MaybeUninit},
     path::PathBuf,
     ptr::{null_mut, NonNull},
 };
@@ -17,12 +17,13 @@ use crate::{
         as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
         WithNull,
     },
-    AudioAccessor, AutomationMode, Color, Envelope, EnvelopeSelector, Fx,
-    GenericSend, GetLength, HardwareSend, HardwareSocket, Immutable, Item,
-    KnowsProject, Mutable, Pan, PanLaw, PanLawMode, Position, PositionPixel,
-    ProbablyMutable, Project, Reaper, RecInput, RecMode, RecOutMode,
-    RectPixel, SendIntType, SoloMode, TimeMode, TrackFX, TrackFolderState,
-    TrackReceive, TrackSend, VUMode, Volume, WithReaperPtr, GUID,
+    AudioAccessor, AutomationMode, Color, Envelope, EnvelopeSelector,
+    FXParent, GenericSend, GetLength, HardwareSend, HardwareSocket, Immutable,
+    Item, KnowsProject, Mutable, Pan, PanLaw, PanLawMode, Position,
+    PositionPixel, ProbablyMutable, Project, Reaper, RecInput, RecMode,
+    RecOutMode, RectPixel, SendIntType, SoloMode, TimeMode, TrackFX,
+    TrackFolderState, TrackReceive, TrackSend, VUMode, Volume, WithReaperPtr,
+    FX, GUID,
 };
 
 #[derive(Debug, PartialEq)]
@@ -52,6 +53,19 @@ impl<'a, T: ProbablyMutable> WithReaperPtr<'a> for Track<'a, T> {
     }
     fn should_check(&self) -> bool {
         self.should_check
+    }
+}
+impl<'a, T: ProbablyMutable> FXParent<'a, TrackFX<'a, Immutable>>
+    for Track<'a, T>
+{
+    fn n_fx(&self) -> usize {
+        unsafe {
+            Reaper::get().low().TrackFX_GetCount(self.get().as_ptr()) as usize
+        }
+    }
+    fn get_fx(&'a self, index: usize) -> Option<TrackFX<Immutable>> {
+        let fx = TrackFX::from_index(unsafe { transmute(self) }, index);
+        fx
     }
 }
 impl<'a, T: ProbablyMutable> KnowsProject for Track<'a, T> {
@@ -431,8 +445,14 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         }
     }
 
-    pub fn get_fx(&self, index: usize) -> Option<TrackFX<T>> {
-        let fx = TrackFX::from_index(self, index);
+    /// On Master Track is_rec_fx represents monitoring chain.
+    pub fn get_fx_ny_name(
+        &self,
+        name: impl Into<String>,
+        is_rec_fx: bool,
+    ) -> Option<TrackFX<Immutable>> {
+        let fx =
+            TrackFX::from_name(unsafe { transmute(self) }, name, is_rec_fx);
         fx
     }
 
@@ -732,6 +752,21 @@ impl<'a> Track<'a, Mutable> {
         name: impl Into<String>,
     ) -> Option<Envelope<Self, Mutable>> {
         self.get_envelope_by_name_parametrized(name)
+    }
+
+    pub fn get_fx_mut(&mut self, index: usize) -> Option<TrackFX<Mutable>> {
+        let fx = TrackFX::from_index(self, index);
+        fx
+    }
+
+    /// On Master Track is_rec_fx represents monitoring chain.
+    pub fn get_fx_ny_name_mut(
+        &mut self,
+        name: impl Into<String>,
+        is_rec_fx: bool,
+    ) -> Option<TrackFX<Mutable>> {
+        let fx = TrackFX::from_name(self, name, is_rec_fx);
+        fx
     }
 
     pub fn set_chunk(

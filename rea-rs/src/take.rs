@@ -10,12 +10,11 @@ use crate::{
         as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
         WithNull,
     },
-    AudioAccessor, Color, Fx, Immutable, Item, KnowsProject, MidiEventBuilder,
-    Mutable, Pan, PanLaw, Pitch, PlayRate, ProbablyMutable, Project, Reaper,
-    Source, TakeFX, Volume, WithReaperPtr, GUID,
+    AudioAccessor, Color, FXParent, Immutable, Item, KnowsProject,
+    MidiEventBuilder, Mutable, Pan, PanLaw, Pitch, PlayRate, ProbablyMutable,
+    Project, Reaper, Source, TakeFX, Volume, WithReaperPtr, FX, GUID,
 };
 use int_enum::IntEnum;
-use log::debug;
 use reaper_medium::{MediaItemTake, PcmSource};
 
 #[derive(Debug, PartialEq)]
@@ -23,6 +22,19 @@ pub struct Take<'a, T: ProbablyMutable> {
     ptr: MediaItemTake,
     should_check: bool,
     item: &'a Item<'a, T>,
+}
+impl<'a, T: ProbablyMutable> FXParent<'a, TakeFX<'a, Immutable>>
+    for Take<'a, T>
+{
+    fn n_fx(&self) -> usize {
+        unsafe {
+            Reaper::get().low().TakeFX_GetCount(self.get().as_ptr()) as usize
+        }
+    }
+    fn get_fx(&self, index: usize) -> Option<TakeFX<Immutable>> {
+        let fx = TakeFX::from_index(unsafe { transmute(self) }, index);
+        fx
+    }
 }
 impl<'a, T: ProbablyMutable> KnowsProject for Take<'a, T> {
     fn project(&self) -> &Project {
@@ -59,8 +71,17 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
     pub fn item(&self) -> &Item<T> {
         self.item
     }
-    pub fn get_fx(&'a self, index: usize) -> Option<TakeFX<'a, T>> {
-        TakeFX::from_index(self, index)
+    pub fn get_visible_fx(&'a self) -> Option<TakeFX<'a, Immutable>> {
+        let result = unsafe {
+            Reaper::get()
+                .low()
+                .TakeFX_GetChainVisible(self.get().as_ptr())
+        };
+        if result < 0 {
+            None
+        } else {
+            TakeFX::from_index(unsafe { transmute(self) }, result as usize)
+        }
     }
     pub fn is_active(&self) -> bool {
         self.get() == self.item().active_take().get()
@@ -321,6 +342,25 @@ impl<'a> Take<'a, Mutable> {
             )
         };
         TakeFX::<Mutable>::from_index(self, index as usize)
+    }
+
+    pub fn get_fx_mut(
+        &'a mut self,
+        index: usize,
+    ) -> Option<TakeFX<'a, Mutable>> {
+        TakeFX::from_index(self, index)
+    }
+    pub fn get_visible_fx_mut(&'a mut self) -> Option<TakeFX<'a, Mutable>> {
+        let result = unsafe {
+            Reaper::get()
+                .low()
+                .TakeFX_GetChainVisible(self.get().as_ptr())
+        };
+        if result < 0 {
+            None
+        } else {
+            TakeFX::from_index(self, result as usize)
+        }
     }
 
     pub fn select_all_midi_events(&mut self, select: bool) {

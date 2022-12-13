@@ -21,9 +21,6 @@ pub mod errors;
 pub mod misc_types;
 pub use misc_types::*;
 
-pub mod misc_flags;
-pub use misc_flags::*;
-
 pub mod ext_state;
 pub use ext_state::*;
 

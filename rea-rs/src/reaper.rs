@@ -10,11 +10,11 @@ type ActionCallback = dyn Fn(i32) -> Result<(), Box<dyn Error>>;
 
 pub struct Action {
     command_id: CommandId,
-    command_name: &'static str,
-    description: &'static str,
+    _command_name: &'static str,
+    _description: &'static str,
     operation: Box<ActionCallback>,
-    kind: ActionKind,
-    address: NonNull<gaccel_register_t>,
+    _kind: ActionKind,
+    _address: NonNull<gaccel_register_t>,
 }
 impl Action {
     pub fn call(&self, flag: i32) -> Result<(), Box<dyn Error>> {
@@ -139,11 +139,11 @@ impl Reaper {
         let command_id = CommandId::from(command_id);
         hook.actions.push(Action {
             command_id,
-            command_name,
-            description,
+            _command_name: command_name,
+            _description: description,
             operation: Box::new(operation),
-            kind,
-            address,
+            _kind: kind,
+            _address: address,
         });
         Ok(RegisteredAction { command_id })
     }

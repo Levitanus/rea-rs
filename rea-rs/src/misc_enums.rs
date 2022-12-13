@@ -1,3 +1,4 @@
+use bitflags::bitflags;
 use int_enum::IntEnum;
 
 use crate::{
@@ -286,4 +287,14 @@ pub enum TimeMode {
     /// position length rate
     BeatsFull = 1,
     BeatsOnlyPosition = 2,
+}
+
+bitflags! {
+    pub struct UndoFlags:u8{
+        const TRACK_CONFIGURATIONS = 1;
+        const TRACK_FX = 2;
+        const TRACK_ITEMS = 4;
+        const PROJECT_STATES = 8;
+        const FREEZE_STATES = 16;
+    }
 }
