@@ -123,7 +123,7 @@ fn setup_reaper_for_linux(reaper_download_dir_path: &Path) -> Result<PathBuf> {
     if !reaper_tarball_path.exists() {
         println!("Downloading REAPER to ({:?})...", &reaper_tarball_path);
         download(
-            "https://www.reaper.fm/files/6.x/reaper661_linux_x86_64.tar.xz",
+            "https://www.reaper.fm/files/6.x/reaper671_linux_x86_64.tar.xz",
             &reaper_tarball_path,
         )?;
     }
@@ -145,7 +145,7 @@ fn setup_reaper_for_macos(reaper_download_dir_path: &Path) -> Result<PathBuf> {
     if !reaper_dmg_path.exists() {
         println!("Downloading REAPER to ({:?})...", &reaper_dmg_path);
         download(
-            "https://www.reaper.fm/files/6.x/reaper661_x86_64.dmg",
+            "https://www.reaper.fm/files/6.x/reaper671_x86_64.dmg",
             &reaper_dmg_path,
         )?;
     }

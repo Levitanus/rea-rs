@@ -10,14 +10,15 @@ use rea_rs::project_info::{
 };
 use rea_rs::{
     AutomationMode, Color, CommandId, EnvelopeChunk, EnvelopePoint,
-    EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo, ExtValue, Fx,
+    EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo, ExtState, Fx,
     GenericSend, GenericSendMut, HardwareSocket, Immutable, ItemFade,
-    MarkerRegionInfo, MessageBoxValue, Mutable, Pan, PanLaw, PlayRate,
+    MarkerRegionInfo, MessageBoxValue, Mutable, Pan, PanLaw, Pitch, PlayRate,
     Position, Project, RazorEdit, Reaper, RecInput, RecMode, RecMonitoring,
     RecOutMode, SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
-    SendSourceChannels, SoloMode, TimeMode, Track, TrackFolderState,
-    TrackGroupParam, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
-    TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, GUID,
+    SendSourceChannels, SoloMode, TakeChannelMode, TakePitchMode, TimeMode,
+    Track, TrackFolderState, TrackGroupParam, TrackPan, TrackPerformanceFlags,
+    TrackPlayOffset, TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr,
+    GUID,
 };
 use std::collections::HashMap;
 use std::fs::canonicalize;
@@ -43,6 +44,7 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
         sends(),
         envelopes(),
         items(),
+        takes(),
     ]
     .into_iter();
     let user_interaction =
@@ -420,7 +422,7 @@ fn ext_state() -> TestStep {
         debug!("test on integer and in reaper");
         let rpr = Reaper::get();
         let mut state =
-            ExtValue::new("test section", "first", Some(10), false, rpr);
+            ExtState::new("test section", "first", Some(10), false, rpr);
         assert_eq!(state.get().expect("can not get value"), 10);
         state.set(56);
         assert_eq!(state.get().expect("can not get value"), 56);
@@ -429,8 +431,8 @@ fn ext_state() -> TestStep {
         state.set(56);
 
         debug!("test on struct and in reaper");
-        let mut state: ExtValue<SampleAmount, Reaper> =
-            ExtValue::new("test section", "second", None, false, rpr);
+        let mut state: ExtState<SampleAmount, Reaper> =
+            ExtState::new("test section", "second", None, false, rpr);
         assert_eq!(state.get(), None);
         state.set(SampleAmount::new(35896));
         assert_eq!(state.get().expect("can not get value").get(), 35896);
@@ -440,8 +442,8 @@ fn ext_state() -> TestStep {
 
         debug!("test on struct and in project");
         let mut pr = rpr.current_project();
-        let mut state: ExtValue<SampleAmount, Project> =
-            ExtValue::new("test section", "third", None, true, &pr);
+        let mut state: ExtState<SampleAmount, Project> =
+            ExtState::new("test section", "third", None, true, &pr);
         state.delete();
         assert!(state.get().is_none());
         state.set(SampleAmount::new(3344));
@@ -452,7 +454,7 @@ fn ext_state() -> TestStep {
 
         debug!("test on int and track");
         let tr = pr.get_track_mut(0).unwrap();
-        let mut state = ExtValue::new("test section", "first", 45, false, &tr);
+        let mut state = ExtState::new("test section", "first", 45, false, &tr);
         assert_eq!(state.get().expect("can not get value"), 45);
         state.set(15);
         assert_eq!(state.get().expect("can not get value"), 15);
@@ -465,7 +467,7 @@ fn ext_state() -> TestStep {
         let destination = pr.get_track(1).unwrap();
         let send = TrackSend::create_new(&source, &destination);
         let mut state =
-            ExtValue::new("test section", "first", 45, false, &send);
+            ExtState::new("test section", "first", 45, false, &send);
         assert_eq!(state.get().expect("can not get value"), 45);
         state.set(15);
         assert_eq!(state.get().expect("can not get value"), 15);
@@ -481,7 +483,7 @@ fn ext_state() -> TestStep {
             ))
             .expect("expect envelope");
         let mut state =
-            ExtValue::new("test section", "first", 45, false, &env);
+            ExtState::new("test section", "first", 45, false, &env);
         assert_eq!(state.get().expect("can not get value"), 45);
         state.set(15);
         assert_eq!(state.get().expect("can not get value"), 15);
@@ -493,7 +495,20 @@ fn ext_state() -> TestStep {
         let mut tr = pr.get_track_mut(0).unwrap();
         let item = tr.add_item(0.0, Duration::from_secs(3));
         let mut state =
-            ExtValue::new("test section", "first", 45, false, &item);
+            ExtState::new("test section", "first", 45, false, &item);
+        assert_eq!(state.get().expect("can not get value"), 45);
+        state.set(15);
+        assert_eq!(state.get().expect("can not get value"), 15);
+        state.delete();
+        assert_eq!(state.get(), None);
+
+        debug!("test on int and take");
+        pr.add_track(1, "second");
+        let mut tr = pr.get_track_mut(0).unwrap();
+        let mut item = tr.add_item(0.0, Duration::from_secs(3));
+        let take = item.add_take();
+        let mut state =
+            ExtState::new("test section", "first", 45, false, &take);
         assert_eq!(state.get().expect("can not get value"), 45);
         state.set(15);
         assert_eq!(state.get().expect("can not get value"), 15);
@@ -1418,6 +1433,76 @@ fn items() -> TestStep {
         assert_eq!(left.track().n_items(), 2);
         left.delete();
         assert_eq!(right.track().n_items(), 1);
+
+        Ok(())
+    })
+}
+fn takes() -> TestStep {
+    step("Takes", || {
+        let rpr = Reaper::get();
+        // rpr.perform_action(40886, 0, None);
+        let mut pr = rpr.current_project();
+        for idx in pr.n_tracks()..1 {
+            if idx == 0 {
+                break;
+            }
+            let tr = pr.get_track_mut(idx - 1);
+            match tr {
+                None => continue,
+                Some(tr) => tr.delete(),
+            };
+        }
+        pr.add_track(0, "second");
+        let mut tr = pr.add_track(0, "first");
+        let mut item = tr.add_item(0.5, Duration::from_secs(3));
+        let mut take = item.add_take();
+
+        assert_eq!(take.name(), "");
+        take.set_name("my funny name");
+        assert_eq!(take.name(), "my funny name");
+
+        let guid = GUID::new();
+        take.set_guid(guid);
+        assert_eq!(take.guid(), guid);
+
+        assert_eq!(take.start_offset(), Duration::from_secs(0));
+        take.set_start_offset(Duration::from_secs(2))?;
+        assert_eq!(take.start_offset(), Duration::from_secs(2));
+
+        assert_eq!(take.volume(), Volume::from_db(0.0));
+        take.set_volume(Volume::from_db(25.0));
+        assert_eq!(take.volume(), Volume::from_db(25.0));
+
+        assert_eq!(take.pan(), Pan::from(0.0));
+        take.set_pan(Pan::from(1.0));
+        assert_eq!(take.pan(), Pan::from(1.0));
+
+        assert_eq!(take.pan_law(), PanLaw::Default);
+        take.set_pan_law(PanLaw::Minus3dBCompensated);
+        assert_eq!(take.pan_law(), PanLaw::Minus3dBCompensated);
+
+        assert_eq!(take.play_rate(), PlayRate::from(1.0));
+        take.set_play_rate(PlayRate::from(3.0))?;
+        assert_eq!(take.play_rate(), PlayRate::from(3.0));
+
+        assert_eq!(take.pitch(), Pitch::from(0.0));
+        take.set_pitch(Pitch::from(3.0))?;
+        assert_eq!(take.pitch(), Pitch::from(3.0));
+
+        assert!(take.preserve_pitch());
+        take.set_preserve_pitch(false);
+        assert!(!take.preserve_pitch());
+
+        assert_eq!(take.y_pos(), 0);
+        info!("Let's look at take height: {}", take.height());
+
+        assert_eq!(take.channel_mode(), TakeChannelMode::Normal);
+        take.set_channel_mode(TakeChannelMode::Right);
+        assert_eq!(take.channel_mode(), TakeChannelMode::Right);
+
+        assert_eq!(take.pitch_mode(), None);
+        take.set_pitch_mode(Some(TakePitchMode::new(2, 1)));
+        assert_eq!(take.pitch_mode(), Some(TakePitchMode::new(2, 1)));
 
         Ok(())
     })

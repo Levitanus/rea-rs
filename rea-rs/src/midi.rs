@@ -122,18 +122,27 @@
 //! println!("======================");
 //!
 //! // Now get everything back to the raw buffer.
+//! // Notes are unfolded, as they represent 2 events by 1 object.
 //! let raw_events = flatten_midi_notes(notes.into_iter())
+//!     // Channel pressure can have beizer data inside.
+//!     // So, we need to unfold them to raw events.
 //!     .chain(to_raw_midi_events(flatten_events_with_beizer_curve(
 //!         ch_pr_events.into_iter(),
 //!     )))
+//!     // The same with CC events.
 //!     .chain(to_raw_midi_events(flatten_events_with_beizer_curve(
 //!         cc_events.into_iter(),
 //!     )))
+//!     // after-touch
 //!     .chain(to_raw_midi_events(at_events.into_iter()))
+//!     // program change
 //!     .chain(to_raw_midi_events(pr_ch_events.into_iter()))
+//!     // pitch bend
 //!     .chain(to_raw_midi_events(pitch_events.into_iter()))
+//!     // Sys events (SysEx in this example)
 //!     .chain(to_raw_midi_events(all_sys_events.into_iter()));
 //!
+//! // Resulted vector can be passed back to take.
 //! let raw_buf: Vec<u8> =
 //!     MidiEventConsumer::new(sorted_by_ppq(raw_events)).collect();
 //! assert_eq!(buf.len(), raw_buf.len(), "No equal length!");
@@ -145,7 +154,6 @@
 //!     assert_eq!(left, right, "assert failed at index: {}", idx);
 //! }
 
-use bitflags::bitflags;
 use std::{fmt::Display, vec::IntoIter};
 
 /// Basic MIDI Message functionality.
@@ -1562,10 +1570,8 @@ pub fn flatten_events_with_beizer_curve(
 mod tests {
     use crate::{
         flatten_events_with_beizer_curve, flatten_midi_notes, sorted_by_ppq,
-        to_raw_midi_events, AfterTouchMessage, AllSysMessage, CCMessage,
-        ChannelPressureMessage, MidiEvent, MidiEventBuilder,
-        MidiEventConsumer, MidiNoteEvent, PitchBendMessage,
-        ProgramChangeMessage,
+        to_raw_midi_events, CCMessage, ChannelPressureMessage, MidiEvent,
+        MidiEventBuilder, MidiEventConsumer, MidiNoteEvent,
     };
 
     #[test]
@@ -1723,122 +1729,6 @@ mod tests {
             ch_pr_buf.into_iter().zip(raw_buf).enumerate()
         {
             println!("[{}], left: {}, right: {}", idx, left, right);
-            assert_eq!(left, right, "assert failed at index: {}", idx);
-        }
-    }
-
-    #[test]
-    fn test() {
-        let buf: Vec<u8> = vec![
-            56, 4, 0, 0, 0, 3, 0, 0, 0, 176, 1, 42, 120, 0, 0, 0, 0, 8, 0, 0,
-            0, 255, 1, 109, 121, 116, 101, 120, 116, 1, 1, 0, 0, 0, 3, 0, 0,
-            0, 176, 1, 45, 120, 0, 0, 0, 1, 3, 0, 0, 0, 160, 61, 88, 1, 0, 0,
-            0, 0, 3, 0, 0, 0, 176, 1, 59, 1, 0, 0, 0, 0, 3, 0, 0, 0, 144, 61,
-            96, 120, 0, 0, 0, 0, 3, 0, 0, 0, 176, 1, 68, 120, 0, 0, 0, 0, 3,
-            0, 0, 0, 176, 1, 76, 120, 0, 0, 0, 0, 3, 0, 0, 0, 176, 1, 78, 1,
-            0, 0, 0, 0, 3, 0, 0, 0, 128, 61, 0, 120, 0, 0, 0, 80, 3, 0, 0, 0,
-            176, 1, 74, 0, 0, 0, 0, 0, 12, 0, 0, 0, 255, 15, 67, 67, 66, 90,
-            32, 0, 205, 204, 12, 191, 10, 0, 0, 0, 48, 2, 0, 0, 0, 208, 64, 1,
-            0, 0, 0, 0, 3, 0, 0, 0, 144, 57, 96, 0, 0, 0, 0, 0, 32, 0, 0, 0,
-            255, 15, 78, 79, 84, 69, 32, 48, 32, 53, 55, 32, 116, 101, 120,
-            116, 32, 34, 116, 101, 120, 116, 32, 110, 111, 116, 97, 116, 105,
-            111, 110, 34, 120, 0, 0, 0, 80, 2, 0, 0, 0, 208, 104, 0, 0, 0, 0,
-            0, 12, 0, 0, 0, 255, 15, 67, 67, 66, 90, 32, 0, 133, 235, 81, 63,
-            1, 0, 0, 0, 0, 3, 0, 0, 0, 144, 64, 96, 104, 1, 0, 0, 0, 3, 0, 0,
-            0, 176, 1, 29, 1, 0, 0, 0, 48, 2, 0, 0, 0, 208, 64, 120, 0, 0, 0,
-            0, 3, 0, 0, 0, 176, 1, 28, 3, 0, 0, 0, 0, 3, 0, 0, 0, 128, 57, 0,
-            120, 0, 0, 0, 0, 3, 0, 0, 0, 180, 0, 121, 0, 0, 0, 0, 0, 3, 0, 0,
-            0, 180, 32, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 196, 95, 1, 0, 0, 0, 0,
-            3, 0, 0, 0, 128, 64, 0, 120, 0, 0, 0, 0, 3, 0, 0, 0, 144, 59, 96,
-            0, 0, 0, 0, 0, 23, 0, 0, 0, 255, 15, 78, 79, 84, 69, 32, 48, 32,
-            53, 57, 32, 99, 117, 115, 116, 111, 109, 32, 116, 101, 115, 116,
-            120, 0, 1, 0, 0, 3, 0, 0, 0, 176, 1, 29, 120, 0, 0, 0, 0, 3, 0, 0,
-            0, 176, 1, 33, 1, 0, 0, 0, 0, 3, 0, 0, 0, 224, 65, 67, 120, 0, 0,
-            0, 48, 3, 0, 0, 0, 176, 1, 38, 1, 0, 0, 0, 0, 3, 0, 0, 0, 224,
-            114, 106, 120, 0, 0, 0, 0, 3, 0, 0, 0, 176, 1, 64, 1, 0, 0, 0, 0,
-            3, 0, 0, 0, 224, 66, 112, 1, 0, 0, 0, 0, 3, 0, 0, 0, 128, 59, 0,
-            120, 0, 0, 0, 0, 3, 0, 0, 0, 224, 65, 67, 120, 0, 0, 0, 0, 3, 0,
-            0, 0, 224, 44, 32, 0, 0, 0, 0, 0, 34, 0, 0, 0, 255, 15, 84, 82,
-            65, 67, 32, 100, 121, 110, 97, 109, 105, 99, 32, 99, 114, 101,
-            115, 99, 101, 110, 100, 111, 32, 108, 101, 110, 32, 49, 46, 48,
-            48, 48, 120, 0, 0, 0, 0, 8, 0, 0, 0, 255, 6, 109, 97, 114, 107,
-            101, 114, 104, 1, 0, 0, 0, 3, 0, 0, 0, 144, 60, 96, 0, 0, 0, 0, 0,
-            33, 0, 0, 0, 255, 15, 78, 79, 84, 69, 32, 48, 32, 54, 48, 32, 97,
-            114, 116, 105, 99, 117, 108, 97, 116, 105, 111, 110, 32, 115, 116,
-            97, 99, 99, 97, 116, 111, 120, 0, 0, 0, 48, 3, 0, 0, 0, 224, 0,
-            64, 224, 1, 0, 0, 0, 3, 0, 0, 0, 128, 60, 0, 40, 5, 0, 0, 0, 3, 0,
-            0, 0, 176, 123, 0,
-        ];
-        let events = MidiEventBuilder::new(buf.clone().into_iter());
-
-        println!("NOTE ON EVENTS");
-        for event in events.clone().filter_note_on() {
-            println!("{}", event);
-        }
-        println!("\n----NOTE OFF EVENTS----");
-        for event in events.clone().filter_note_off() {
-            println!("{}", event);
-        }
-        println!("\n----CC EVENTS----");
-        let cc_events: Vec<MidiEvent<CCMessage>> =
-            events.clone().filter_cc().collect();
-        for event in cc_events.iter() {
-            println!("{}", event);
-        }
-        println!("\n----ProgramChange EVENTS----");
-        let pr_ch_events: Vec<MidiEvent<ProgramChangeMessage>> =
-            events.clone().filter_program_change().collect();
-        for event in pr_ch_events.iter() {
-            println!("{}", event);
-        }
-        println!("\n----AfterTouch EVENTS----");
-        let at_events: Vec<MidiEvent<AfterTouchMessage>> =
-            events.clone().filter_after_touch().collect();
-        for event in at_events.iter() {
-            println!("{}", event);
-        }
-        println!("\n----PITCH EVENTS----");
-        let pitch_events: Vec<MidiEvent<PitchBendMessage>> =
-            events.clone().filter_pitch_bend().collect();
-        for event in pitch_events.iter() {
-            println!("{}", event);
-        }
-        println!("\n----ChannelPressure EVENTS----");
-        let ch_pr_events: Vec<MidiEvent<ChannelPressureMessage>> =
-            events.clone().filter_channel_pressure().collect();
-        for event in ch_pr_events.iter() {
-            println!("{}", event);
-        }
-        println!("\n----Sys EVENTS----");
-        let all_sys_events: Vec<MidiEvent<AllSysMessage>> =
-            events.clone().filter_all_sys().collect();
-        for event in all_sys_events.iter() {
-            println!("{}", event);
-        }
-        println!("\n\n----NOTE EVENTS----");
-        println!("======================");
-        let notes: Vec<MidiNoteEvent> =
-            events.clone().filter_notes().collect();
-        for event in notes.iter() {
-            println!("{:#?}", event);
-        }
-        println!("\n\n----Back to RAW EVENTS----");
-        println!("======================");
-        let raw_events = flatten_midi_notes(notes.into_iter())
-            .chain(to_raw_midi_events(flatten_events_with_beizer_curve(
-                ch_pr_events.into_iter(),
-            )))
-            .chain(to_raw_midi_events(flatten_events_with_beizer_curve(
-                cc_events.into_iter(),
-            )))
-            .chain(to_raw_midi_events(at_events.into_iter()))
-            .chain(to_raw_midi_events(pr_ch_events.into_iter()))
-            .chain(to_raw_midi_events(pitch_events.into_iter()))
-            .chain(to_raw_midi_events(all_sys_events.into_iter()));
-        let raw_buf: Vec<u8> =
-            MidiEventConsumer::new(sorted_by_ppq(raw_events)).collect();
-        assert_eq!(buf.len(), raw_buf.len(), "No equal length!");
-        for (idx, (left, right)) in buf.into_iter().zip(raw_buf).enumerate() {
             assert_eq!(left, right, "assert failed at index: {}", idx);
         }
     }

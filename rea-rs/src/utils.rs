@@ -39,6 +39,7 @@ pub fn as_c_char<'a>(value: impl Into<&'a str>) -> *const c_char {
     value.as_ptr()
 }
 
+/// Has hot to contain Null Byte!!!
 pub fn as_c_string<'a>(value: &'a String) -> CString {
     let value = CString::new(value.as_bytes()).unwrap();
     value

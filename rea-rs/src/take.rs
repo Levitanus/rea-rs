@@ -1,14 +1,21 @@
 use std::{
     ffi::c_char,
     mem::{transmute, MaybeUninit},
+    time::Duration,
 };
 
 use crate::{
     errors::{ReaperError, ReaperStaticResult},
-    utils::{as_c_str, as_string, WithNull},
-    AudioAccessor, Fx, Immutable, Item, KnowsProject, MidiEventBuilder,
-    Mutable, ProbablyMutable, Project, Reaper, Source, TakeFX, WithReaperPtr,
+    utils::{
+        as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
+        WithNull,
+    },
+    AudioAccessor, Color, Fx, Immutable, Item, KnowsProject, MidiEventBuilder,
+    Mutable, Pan, PanLaw, Pitch, PlayRate, ProbablyMutable, Project, Reaper,
+    Source, TakeFX, Volume, WithReaperPtr, GUID,
 };
+use int_enum::IntEnum;
+use log::debug;
 use reaper_medium::{MediaItemTake, PcmSource};
 
 #[derive(Debug, PartialEq)]
@@ -103,6 +110,9 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
         }
     }
 
+    /// Get iterator on human-readable MIDI events.
+    ///
+    /// See [crate::midi]
     pub fn iter_midi(
         &self,
         buf_size_override: impl Into<Option<i32>>,
@@ -118,8 +128,8 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
     ///
     /// # In the case one desire to iter through raw binary data
     ///
-    /// MIDI buffer is returned as a list of { int offset, char flag, int
-    /// msglen, unsigned char msg[] }.
+    /// MIDI buffer is returned as a list of `{ int offset, char flag, int
+    /// msglen, unsigned char msg[] }`.
     /// - offset: MIDI ticks from previous event
     /// - flag: &1=selected &2=muted
     /// - flag high 4 bits for CC shape: &16=linear, &32=slow start/end,
@@ -154,6 +164,112 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
             }
             true => Ok(buf),
         }
+    }
+
+    fn get_info_string(
+        &self,
+        category: impl Into<String>,
+        size: usize,
+    ) -> ReaperStaticResult<String> {
+        let mut category = category.into();
+        let buf = make_c_string_buf(size).into_raw();
+        let result = unsafe {
+            Reaper::get().low().GetSetMediaItemTakeInfo_String(
+                self.get().as_ptr(),
+                as_c_str(category.with_null()).as_ptr(),
+                buf,
+                false,
+            )
+        };
+        match result {
+            true => {
+                Ok(as_string_mut(buf)
+                    .expect("Can not convert value to string."))
+            }
+            false => {
+                Err(ReaperError::UnsuccessfulOperation("Can not get value"))
+            }
+        }
+    }
+
+    pub fn guid(&self) -> GUID {
+        let guid_str = self
+            .get_info_string("GUID", 50)
+            .expect("Can not get guid string");
+        GUID::from_string(guid_str).expect("can not convert string to GUID")
+    }
+
+    fn get_info_value(&self, category: impl Into<String>) -> f64 {
+        let mut category = category.into();
+        unsafe {
+            Reaper::get().low().GetMediaItemTakeInfo_Value(
+                self.get().as_ptr(),
+                as_c_str(category.with_null()).as_ptr(),
+            )
+        }
+    }
+
+    pub fn start_offset(&self) -> Duration {
+        Duration::from_secs_f64(self.get_info_value("D_STARTOFFS"))
+    }
+
+    pub fn volume(&self) -> Volume {
+        Volume::from(self.get_info_value("D_VOL"))
+    }
+
+    pub fn pan(&self) -> Pan {
+        Pan::from(self.get_info_value("D_PAN"))
+    }
+
+    pub fn pan_law(&self) -> PanLaw {
+        PanLaw::from(self.get_info_value("D_PANLAW"))
+    }
+
+    pub fn play_rate(&self) -> PlayRate {
+        PlayRate::from(self.get_info_value("D_PLAYRATE"))
+    }
+
+    /// take pitch adjustment in semitones, -12=one octave down, 0=normal,
+    /// +12=one octave up, etc
+    pub fn pitch(&self) -> Pitch {
+        Pitch::from(self.get_info_value("D_PITCH"))
+    }
+
+    /// preserve pitch when changing playback rate
+    pub fn preserve_pitch(&self) -> bool {
+        self.get_info_value("B_PPITCH") != 0.0
+    }
+
+    /// Y-position (relative to top of track) in pixels (read-only)
+    pub fn y_pos(&self) -> usize {
+        self.get_info_value("I_LASTY") as usize
+    }
+
+    /// height in pixels (read-only)
+    pub fn height(&self) -> usize {
+        self.get_info_value("I_LASTH") as usize
+    }
+
+    pub fn channel_mode(&self) -> TakeChannelMode {
+        TakeChannelMode::from_int(self.get_info_value("I_CHANMODE") as i32)
+            .expect("can not convert value to channel mode")
+    }
+
+    pub fn pitch_mode(&self) -> Option<TakePitchMode> {
+        let result = self.get_info_value("I_PITCHMODE") as i32;
+        match result {
+            x if x < 0 => None,
+            y => Some(TakePitchMode::from_raw(y)),
+        }
+    }
+
+    /// if None → default.
+    pub fn color(&self) -> Option<Color> {
+        let raw = self.get_info_value("I_CUSTOMCOLOR") as i32;
+        if raw == 0 {
+            return None;
+        }
+        Some(Color::from_native(raw & 0xffffff))
     }
 }
 
@@ -249,5 +365,188 @@ impl<'a> Take<'a, Mutable> {
                 Err(ReaperError::UnsuccessfulOperation("can not set source"))
             }
         }
+    }
+
+    /// Set raw MIDI to take.
+    ///
+    /// Probably, it's bad idea to construct it DIY, so, see:
+    /// - [crate::midi]
+    /// - [Take::get_midi]
+    /// - [Take::iter_midi]
+    pub fn set_midi(&self, mut midi: Vec<u8>) -> ReaperStaticResult<()> {
+        let raw = midi.as_mut_ptr() as *mut c_char;
+        let result = unsafe {
+            Reaper::get().low().MIDI_SetAllEvts(
+                self.get().as_ptr(),
+                raw,
+                midi.len() as i32,
+            )
+        };
+        match result {
+            true => Ok(()),
+            false => {
+                Err(ReaperError::UnsuccessfulOperation("Can not set midi"))
+            }
+        }
+    }
+
+    fn set_info_string(
+        &mut self,
+        category: impl Into<String>,
+        string: impl Into<String>,
+    ) -> ReaperStaticResult<()> {
+        let mut category = category.into();
+        let string = string.into();
+        let buf = as_c_string(&string).into_raw();
+        let result = unsafe {
+            Reaper::get().low().GetSetMediaItemTakeInfo_String(
+                self.get().as_ptr(),
+                as_c_str(category.with_null()).as_ptr(),
+                buf,
+                true,
+            )
+        };
+        match result {
+            true => Ok(()),
+            false => {
+                Err(ReaperError::UnsuccessfulOperation("Can not get value"))
+            }
+        }
+    }
+
+    pub fn set_name(&mut self, name: impl Into<String>) {
+        self.set_info_string("P_NAME", name)
+            .expect("Can not set name")
+    }
+    pub fn set_guid(&mut self, guid: GUID) {
+        self.set_info_string("GUID", guid.to_string())
+            .expect("Can not set guid")
+    }
+    fn set_info_value(
+        &mut self,
+        category: impl Into<String>,
+        value: f64,
+    ) -> ReaperStaticResult<()> {
+        let category = category.into();
+        let result = unsafe {
+            Reaper::get().low().SetMediaItemTakeInfo_Value(
+                self.get().as_ptr(),
+                as_c_string(&category).as_ptr(),
+                value,
+            )
+        };
+        match result {
+            true => Ok(()),
+            false => {
+                Err(ReaperError::UnsuccessfulOperation("Can not set value"))
+            }
+        }
+    }
+
+    pub fn set_start_offset(
+        &mut self,
+        offset: Duration,
+    ) -> ReaperStaticResult<()> {
+        self.set_info_value("D_STARTOFFS", offset.as_secs_f64())
+    }
+
+    pub fn set_volume(&mut self, volume: Volume) {
+        self.set_info_value("D_VOL", volume.into())
+            .expect("Can not set volume")
+    }
+
+    pub fn set_pan(&mut self, pan: Pan) {
+        self.set_info_value("D_PAN", pan.into())
+            .expect("Can not set pan")
+    }
+
+    pub fn set_pan_law(&mut self, pan_law: PanLaw) {
+        self.set_info_value("D_PANLAW", pan_law.into())
+            .expect("can't set pan law")
+    }
+
+    pub fn set_play_rate(
+        &mut self,
+        play_rate: PlayRate,
+    ) -> ReaperStaticResult<()> {
+        self.set_info_value("D_PLAYRATE", play_rate.into())
+    }
+
+    /// take pitch adjustment in semitones, -12=one octave down, 0=normal,
+    /// +12=one octave up, etc
+    pub fn set_pitch(&mut self, pitch: Pitch) -> ReaperStaticResult<()> {
+        self.set_info_value("D_PITCH", pitch.get())
+    }
+
+    /// preserve pitch when changing playback rate
+    pub fn set_preserve_pitch(&mut self, preserve: bool) {
+        self.set_info_value("B_PPITCH", preserve as i32 as f64)
+            .expect("can not set preserve pitch")
+    }
+
+    pub fn set_channel_mode(&mut self, mode: TakeChannelMode) {
+        self.set_info_value("I_CHANMODE", mode.int_value() as f64)
+            .expect("can not set channel mode")
+    }
+
+    pub fn set_pitch_mode(&mut self, mode: Option<TakePitchMode>) {
+        let value = match mode {
+            None => -1,
+            Some(mode) => mode.as_raw(),
+        };
+        self.set_info_value("I_PITCHMODE", value as f64)
+            .expect("can not set pitch mode")
+    }
+
+    /// if None → default.
+    pub fn set_color(&mut self, color: Option<Color>) {
+        let color = match color {
+            None => 0,
+            Some(color) => color.to_native() | 0x1000000,
+        };
+        self.set_info_value("I_CUSTOMCOLOR", color as f64).unwrap()
+    }
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
+pub enum TakeChannelMode {
+    Normal = 0,
+    ReserveStereo = 1,
+    DownMix = 2,
+    Left = 3,
+    Right = 4,
+}
+
+/// Represents pitch shifter and setting.
+///
+/// Currently, holds only raw values, but later, probably, will hold additional
+/// representation of them human-readably.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TakePitchMode {
+    shifter: u32,
+    parameter: u32,
+}
+impl TakePitchMode {
+    pub fn new(shifter: u16, parameter: u16) -> Self {
+        Self {
+            shifter: shifter as u32,
+            parameter: parameter as u32,
+        }
+    }
+    pub fn shifter(&self) -> u16 {
+        self.shifter as u16
+    }
+    pub fn parameter(&self) -> u16 {
+        self.parameter as u16
+    }
+    pub fn from_raw(raw: i32) -> Self {
+        let raw = raw as u32;
+        let shifter = (raw >> 0xf) & 0xffff;
+        let parameter = raw & 0xffff;
+        Self { shifter, parameter }
+    }
+    pub fn as_raw(&self) -> i32 {
+        (self.shifter << 0xf | self.parameter) as i32
     }
 }

@@ -354,6 +354,26 @@ impl Into<i32> for PanLawMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Pitch {
+    raw: f64,
+}
+impl Pitch {
+    pub fn get(&self) -> f64 {
+        self.raw
+    }
+}
+impl From<f64> for Pitch {
+    fn from(value: f64) -> Self {
+        Self { raw: value }
+    }
+}
+impl Into<f64> for Pitch {
+    fn into(self) -> f64 {
+        self.raw
+    }
+}
+
 /// Project playback rate.
 ///
 /// Normally, represents multiplication factor to project tempo.

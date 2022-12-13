@@ -1,7 +1,7 @@
 use crate::{
     utils::{as_c_str, as_string, make_c_string_buf, WithNull},
     Envelope, GenericSend, Item, KnowsProject, Mutable, ProbablyMutable,
-    Project, Reaper, SendIntType, Track, TrackSend, WithReaperPtr,
+    Project, Reaper, SendIntType, Take, Track, TrackSend, WithReaperPtr,
 };
 use serde::de::DeserializeOwned;
 pub use serde::{Deserialize, Serialize};
@@ -38,10 +38,10 @@ use std::{
 /// # Usage
 ///
 /// ```no_run
-/// use rea_rs::{ExtValue, HasExtState, Reaper, Project};
+/// use rea_rs::{ExtState, HasExtState, Reaper, Project};
 /// let rpr = Reaper::get();
 /// let mut state =
-///     ExtValue::new("test section", "first", Some(10), true, rpr);
+///     ExtState::new("test section", "first", Some(10), true, rpr);
 /// assert_eq!(state.get().expect("can not get value"), 10);
 /// state.set(56);
 /// assert_eq!(state.get().expect("can not get value"), 56);
@@ -49,8 +49,8 @@ use std::{
 /// assert!(state.get().is_none());
 ///
 /// let mut pr = rpr.current_project();
-/// let mut state: ExtValue<u32, Project> =
-///     ExtValue::new("test section", "first", None, true, &pr);
+/// let mut state: ExtState<u32, Project> =
+///     ExtState::new("test section", "first", None, true, &pr);
 /// assert_eq!(state.get().expect("can not get value"), 10);
 /// state.set(56);
 /// assert_eq!(state.get().expect("can not get value"), 56);
@@ -58,7 +58,7 @@ use std::{
 /// assert!(state.get().is_none());
 ///
 /// let tr = pr.get_track_mut(0).unwrap();
-/// let mut state = ExtValue::new("testsection", "first", 45, false, &tr);
+/// let mut state = ExtState::new("testsection", "first", 45, false, &tr);
 /// assert_eq!(state.get().expect("can not get value"), 45);
 /// state.set(15);
 /// assert_eq!(state.get().expect("can not get value"), 15);
@@ -66,7 +66,7 @@ use std::{
 /// assert_eq!(state.get(), None);
 /// ```
 #[derive(Debug, PartialEq)]
-pub struct ExtValue<
+pub struct ExtState<
     'a,
     T: Serialize + DeserializeOwned + Clone + Debug,
     O: HasExtState,
@@ -79,12 +79,12 @@ pub struct ExtValue<
     buf_size: usize,
 }
 impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
-    ExtValue<'a, T, O>
+    ExtState<'a, T, O>
 {
     /// Create ext state object.
     ///
     /// If Some(value) provided, but persist is true,
-    /// only first call to the [ExtValue::new] will
+    /// only first call to the [ExtState::new] will
     /// initialize it. Later will keep previous value.
     pub fn new(
         section: impl Into<String>,
@@ -474,6 +474,54 @@ impl<'a> HasExtState for Item<'a, Mutable> {
         let mut category = section_key_to_one_category(section, key);
         unsafe {
             Reaper::get().low().GetSetMediaItemInfo_String(
+                self.get().as_ptr(),
+                as_c_str(category.with_null()).as_ptr(),
+                CString::new("").unwrap().into_raw(),
+                true,
+            )
+        };
+    }
+}
+
+impl<'a> HasExtState for Take<'a, Mutable> {
+    fn set_ext_value(&self, section: &CStr, key: &CStr, value: *mut i8) {
+        let mut category = section_key_to_one_category(section, key);
+        unsafe {
+            Reaper::get().low().GetSetMediaItemTakeInfo_String(
+                self.get().as_ptr(),
+                as_c_str(category.with_null()).as_ptr(),
+                value,
+                true,
+            );
+        }
+    }
+
+    fn get_ext_value(
+        &self,
+        section: &CStr,
+        key: &CStr,
+        buf_size: usize,
+    ) -> Option<CString> {
+        let mut category = section_key_to_one_category(section, key);
+        let buf = make_c_string_buf(buf_size).into_raw();
+        let result = unsafe {
+            Reaper::get().low().GetSetMediaItemTakeInfo_String(
+                self.get().as_ptr(),
+                as_c_str(category.with_null()).as_ptr(),
+                buf,
+                false,
+            )
+        };
+        match result {
+            false => None,
+            true => Some(unsafe { CString::from_raw(buf) }),
+        }
+    }
+
+    fn delete_ext_value(&self, section: &CStr, key: &CStr) {
+        let mut category = section_key_to_one_category(section, key);
+        unsafe {
+            Reaper::get().low().GetSetMediaItemTakeInfo_String(
                 self.get().as_ptr(),
                 as_c_str(category.with_null()).as_ptr(),
                 CString::new("").unwrap().into_raw(),
