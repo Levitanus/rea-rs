@@ -10,7 +10,7 @@ env_logger = {workspace = true}
 log = {workspace = true}
 rea-rs = {path = "../../rea-rs"}
 reaper-low = {workspace = true}
-reaper-macros = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
+reaper-macros = {workspace = true}
 
 [lib]
 crate-type = ["cdylib"]

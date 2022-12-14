@@ -34,6 +34,7 @@ where
     fn copy_to_track(&self, track: &mut Track<Mutable>, desired_index: usize);
 }
 
+/// Parametrizes mutable FX functionality for [TrackFX] asn [TakeFX].
 pub trait FXMut
 where
     Self: Sized,
