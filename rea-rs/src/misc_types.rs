@@ -561,6 +561,7 @@ impl<'a> TimeRange<'a> {
 /// [Project] parameter.
 ///
 /// Not sure it should be used in complex musical analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimeSignature {
     pub numerator: u32,
     pub denominator: u32,
