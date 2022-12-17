@@ -8,6 +8,7 @@ use reaper_medium::PositionInSeconds;
 use serde_derive::{Deserialize, Serialize};
 use std::{
     mem::MaybeUninit,
+    num::NonZeroU32,
     ops::{Add, Sub},
     time::Duration,
 };
@@ -58,6 +59,73 @@ impl Color {
     pub fn to_native(&self) -> i32 {
         let low = Reaper::get().low();
         low.ColorToNative(self.r as i32, self.g as i32, self.b as i32)
+    }
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct Measure {
+    pub start: Position,
+    pub end: Position,
+    pub time_signature: TimeSignature,
+}
+
+impl Measure {
+    pub fn from_index(index: u32, project: &Project) -> Self {
+        let rpr = Reaper::get().medium();
+        let measure_info =
+            rpr.time_map_get_measure_info(project.context(), index as i32 - 1);
+        Self {
+            start: Position::from_quarters(
+                measure_info.start_qn.get(),
+                project,
+            ),
+            end: Position::from_quarters(measure_info.end_qn.get(), project),
+            time_signature: TimeSignature::from(measure_info.time_signature),
+        }
+    }
+    pub fn from_position(position: Position, project: &Project) -> Self {
+        let low = Reaper::get().low();
+        let (mut start, mut end) =
+            (MaybeUninit::zeroed(), MaybeUninit::zeroed());
+        let index = unsafe {
+            low.TimeMap_QNToMeasures(
+                project.context().to_raw(),
+                position.as_quarters(project),
+                start.as_mut_ptr(),
+                end.as_mut_ptr(),
+            )
+        };
+        Self::from_index(index as u32, project)
+    }
+    pub fn ppq_start<T: ProbablyMutable>(
+        &self,
+        take: &Take<T>,
+        ppq: u32,
+    ) -> u32 {
+        let low = Reaper::get().low();
+        let pos = unsafe {
+            low.MIDI_GetPPQPos_StartOfMeasure(take.get().as_ptr(), ppq as f64)
+        };
+        pos as u32
+    }
+    pub fn ppq_end<T: ProbablyMutable>(
+        &self,
+        take: &Take<T>,
+        ppq: u32,
+    ) -> u32 {
+        let low = Reaper::get().low();
+        let pos = unsafe {
+            low.MIDI_GetPPQPos_EndOfMeasure(take.get().as_ptr(), ppq as f64)
+        };
+        pos as u32
+    }
+    pub fn from_ppq<T: ProbablyMutable>(
+        &self,
+        take: &Take<T>,
+        ppq: u32,
+    ) -> Self {
+        let pos = Position::from_ppq(ppq, take);
+        Self::from_position(pos, take.project())
     }
 }
 
@@ -208,7 +276,7 @@ impl Position {
 
     pub fn from_ppq<T: ProbablyMutable>(
         ppq: impl Into<u32>,
-        take: Take<T>,
+        take: &Take<T>,
     ) -> Self {
         unsafe {
             Self::from(Reaper::get().low().MIDI_GetProjTimeFromPPQPos(
@@ -561,7 +629,9 @@ impl<'a> TimeRange<'a> {
 /// [Project] parameter.
 ///
 /// Not sure it should be used in complex musical analysis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct TimeSignature {
     pub numerator: u32,
     pub denominator: u32,
@@ -575,6 +645,24 @@ impl TimeSignature {
     }
     pub fn get(&self) -> (u32, u32) {
         (self.numerator, self.denominator)
+    }
+}
+impl From<reaper_medium::TimeSignature> for TimeSignature {
+    fn from(value: reaper_medium::TimeSignature) -> Self {
+        Self {
+            numerator: value.numerator.get(),
+            denominator: value.denominator.get(),
+        }
+    }
+}
+impl Into<reaper_medium::TimeSignature> for TimeSignature {
+    fn into(self) -> reaper_medium::TimeSignature {
+        reaper_medium::TimeSignature {
+            numerator: NonZeroU32::new(self.numerator)
+                .expect("Can not convert numerator to NonZero"),
+            denominator: NonZeroU32::new(self.denominator)
+                .expect("Can not convert denominator to NonZero"),
+        }
     }
 }
 
