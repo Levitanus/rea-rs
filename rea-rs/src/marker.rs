@@ -1,8 +1,10 @@
 use std::mem::MaybeUninit;
 
+use serde_derive::{Deserialize, Serialize};
+
 use crate::{utils::as_string, Color, Position, Project, Reaper};
 
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct MarkerRegionInfo {
     pub is_region: bool,
     pub user_index: usize,

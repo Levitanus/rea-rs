@@ -1,6 +1,8 @@
 use std::{error::Error, fmt::Display};
 
-#[derive(Debug, PartialEq)]
+use serde_derive::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub enum ReaperError {
     UserAborted,
     Unexpected,
@@ -16,7 +18,9 @@ impl Display for ReaperError {
             Self::Unexpected => write!(f, "Unexpected error happened."),
             Self::UserAborted => write!(f, "User aborted operation."),
             Self::InvalidObject(s) => write!(f, "Invalid object: {}", *s),
-            Self::UnsuccessfulOperation(s) => write!(f, "Unsuccessful operation: {}", *s),
+            Self::UnsuccessfulOperation(s) => {
+                write!(f, "Unsuccessful operation: {}", *s)
+            }
             Self::NullPtr => write!(f, "NullPtr!"),
             Self::Str(s) => write!(f, "{}", *s),
         }

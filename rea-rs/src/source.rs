@@ -4,6 +4,7 @@ use crate::{
     WithReaperPtr,
 };
 use reaper_medium::PcmSource;
+use serde_derive::{Deserialize, Serialize};
 use std::{mem::MaybeUninit, path::PathBuf, ptr::NonNull, time::Duration};
 
 #[derive(Debug, PartialEq)]
@@ -164,7 +165,7 @@ impl<'a> Source<'a, Mutable> {
 }
 
 /// If a section/reverse block, retrieves offset/len/reverse.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceSectionInfo {
     offset: Duration,
     length: Duration,

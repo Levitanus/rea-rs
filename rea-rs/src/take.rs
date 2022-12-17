@@ -16,6 +16,7 @@ use crate::{
 };
 use int_enum::IntEnum;
 use reaper_medium::{MediaItemTake, PcmSource};
+use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq)]
 pub struct Take<'a, T: ProbablyMutable> {
@@ -549,7 +550,9 @@ impl<'a> Take<'a, Mutable> {
 }
 
 #[repr(i32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, IntEnum, Serialize, Deserialize,
+)]
 pub enum TakeChannelMode {
     Normal = 0,
     ReserveStereo = 1,
@@ -562,7 +565,7 @@ pub enum TakeChannelMode {
 ///
 /// Currently, holds only raw values, but later, probably, will hold additional
 /// representation of them human-readably.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TakePitchMode {
     shifter: u32,
     parameter: u32,

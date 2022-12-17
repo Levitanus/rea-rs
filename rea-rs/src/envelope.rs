@@ -6,6 +6,7 @@ use crate::{
 };
 use int_enum::IntEnum;
 use reaper_medium::TrackEnvelope;
+use serde_derive::{Deserialize, Serialize};
 use std::{
     ffi::CString, marker::PhantomData, mem::MaybeUninit, time::Duration,
 };
@@ -611,7 +612,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EnvelopePoint {
     pub value: f64,
     pub shape: EnvelopePointShape,
@@ -636,7 +637,9 @@ impl EnvelopePoint {
 }
 
 #[repr(i32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, IntEnum, Serialize, Deserialize,
+)]
 pub enum EnvelopePointShape {
     Linear = 0,
     Square = 1,
@@ -648,6 +651,7 @@ pub enum EnvelopePointShape {
 
 bitflags::bitflags! {
     /// Current envelope automation state
+    #[derive(Serialize, Deserialize)]
     pub struct EnvelopeAutomationFlags:u8{
         const PLAY_BACK=1;
         const WRITE=2;
@@ -656,7 +660,7 @@ bitflags::bitflags! {
 }
 
 /// Returned by [Envelope::evaluate].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EnvelopeEvaluateResult {
     position: Position,
     /// How many samples beyond that time position that the returned values
@@ -670,7 +674,7 @@ pub struct EnvelopeEvaluateResult {
 }
 
 /// If Envelope corresponds to send or receive.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum EnvelopeSendInfo {
     TrackSend(usize),
     TrackReceive(usize),

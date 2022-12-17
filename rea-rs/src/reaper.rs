@@ -2,6 +2,7 @@ use reaper_low::{
     raw::gaccel_register_t, register_plugin_destroy_hook, PluginContext,
 };
 use reaper_medium::{ControlSurface, HookCommand, OwnedGaccelRegister};
+use serde_derive::{Deserialize, Serialize};
 use std::{error::Error, ptr::NonNull};
 
 static mut INSTANCE: Option<Reaper> = None;
@@ -158,7 +159,9 @@ impl Reaper {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct CommandId {
     id: u32,
 }
@@ -198,7 +201,7 @@ impl Into<u32> for CommandId {
         self.id
     }
 }
-#[derive(Debug)]
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
 pub struct RegisteredAction {
     // For identifying the registered command (= the functions to be executed)
     pub command_id: CommandId,

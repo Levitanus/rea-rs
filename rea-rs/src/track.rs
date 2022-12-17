@@ -10,6 +10,7 @@ use std::{
 use bitflags::bitflags;
 use int_enum::IntEnum;
 use reaper_medium::{MediaItem, MediaTrack, TrackEnvelope};
+use serde_derive::{Deserialize, Serialize};
 
 use crate::{
     errors::{ReaperError, ReaperResult, ReaperStaticResult},
@@ -1350,7 +1351,7 @@ impl<'a> Track<'a, Mutable> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecMonitoring {
     /// 0 → not, 1 → normal, 2 → when playing (tape)
     pub mode: u32,
@@ -1365,7 +1366,7 @@ impl RecMonitoring {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrackDimensions {
     pub tcp_height: u32,
     pub tcp_height_with_env: u32,
@@ -1378,13 +1379,14 @@ pub struct TrackDimensions {
 
 bitflags! {
     /// Flags for optimization.
+    #[derive(Serialize, Deserialize)]
     pub struct TrackPerformanceFlags:u8{
         const NO_BUFFERING = 1;
         const NO_ANTICIPATIVE_FX = 2;
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum TrackPan {
     ///  Reaper 1.0 balance pan.
     BalanceLegacy(Pan),
@@ -1399,7 +1401,7 @@ pub enum TrackPan {
 /// Represent latency of track sound.
 ///
 /// Can be negative.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum TrackPlayOffset {
     Samples(i32),
     /// 1.0 == 1 second
@@ -1407,6 +1409,7 @@ pub enum TrackPlayOffset {
 }
 
 /// Keeps parameters of track groups.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum TrackGroupParam {
     VolumeLead,
     VolumeFollow,

@@ -7,6 +7,7 @@ use crate::{
 };
 use int_enum::IntEnum;
 use reaper_medium::{MediaItem, MediaItemTake, MediaTrack};
+use serde_derive::{Deserialize, Serialize};
 use std::{marker::PhantomData, ptr::NonNull, time::Duration};
 
 #[derive(Debug, PartialEq)]
@@ -558,7 +559,9 @@ impl<'a> ItemSplit<'a> {
 /// If soloed → other items and tracks will be not
 /// overrided
 #[repr(i32)]
-#[derive(Debug, Copy, Clone, Eq, PartialEq, IntEnum)]
+#[derive(
+    Debug, Copy, Clone, Eq, PartialEq, IntEnum, Serialize, Deserialize,
+)]
 pub enum ItemSoloOverride {
     Soloed = -1,
     NoOverride = 0,
@@ -566,7 +569,7 @@ pub enum ItemSoloOverride {
 }
 
 /// Item FadeIn\FadeOut parameters.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ItemFade {
     pub length: Duration,
     pub curve: f64,
@@ -596,7 +599,9 @@ impl ItemFade {
 ///
 /// Shape affects curve attribute of [ItemFade]
 #[repr(i32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, IntEnum, Serialize, Deserialize,
+)]
 pub enum ItemFadeShape {
     Linear = 0,
     EqualPower = 1,

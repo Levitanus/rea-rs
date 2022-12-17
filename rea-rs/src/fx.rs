@@ -5,6 +5,8 @@ use std::{
     ptr::NonNull,
 };
 
+use serde_derive::{Deserialize, Serialize};
+
 use crate::{
     errors::{ReaperError, ReaperStaticResult},
     utils::{as_c_str, as_string_mut, make_c_string_buf, WithNull},
@@ -1537,6 +1539,7 @@ mod param_parent {
 }
 
 /// [FXParam] step sizes.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct FXParamStepSizes {
     pub step: f64,
     pub small_step: f64,

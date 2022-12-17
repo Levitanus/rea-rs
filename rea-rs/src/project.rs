@@ -14,6 +14,7 @@ use int_enum::IntEnum;
 use log::{debug, warn};
 pub use reaper_medium::ProjectContext;
 use reaper_medium::{MediaItem, MediaTrack};
+use serde_derive::{Deserialize, Serialize};
 use std::{
     ffi::CString, mem::MaybeUninit, path::PathBuf, ptr::NonNull,
     time::Duration,
@@ -1380,9 +1381,12 @@ pub mod project_info {
 
     use bitflags::bitflags;
     use int_enum::IntEnum;
+    use serde_derive::{Deserialize, Serialize};
 
     #[repr(u32)]
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
+    #[derive(
+        Debug, Clone, Copy, PartialEq, Eq, IntEnum, Serialize, Deserialize,
+    )]
     pub enum BoundsMode {
         Custom = 0,
         EntireProject = 1,
@@ -1392,7 +1396,7 @@ pub mod project_info {
         SelectedRegions = 5,
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub struct RenderSettings {
         pub mode: RenderMode,
         /// Render tracks with mono media to mono files.
@@ -1433,7 +1437,9 @@ pub mod project_info {
     }
 
     #[repr(u32)]
-    #[derive(Debug, Clone, Copy, IntEnum, PartialEq, Eq)]
+    #[derive(
+        Debug, Clone, Copy, IntEnum, PartialEq, Eq, Serialize, Deserialize,
+    )]
     pub enum RenderMode {
         MasterMix = 0,
         MasterAndStems = 1,
@@ -1443,7 +1449,7 @@ pub mod project_info {
         SelectedItemsViaMaster = 64,
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub struct RenderTail {
         pub tail: Duration,
         pub flags: RenderTailFlags,
@@ -1455,6 +1461,7 @@ pub mod project_info {
     }
 
     bitflags! {
+        #[derive(Serialize, Deserialize)]
         pub struct RenderTailFlags:u32{
             const IN_CUSTOM_BOUNDS=1;
             const IN_ENTIRE_PROJECT=2;
@@ -1468,7 +1475,7 @@ pub mod project_info {
 }
 
 /// Returned by [Project::focused_fx]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FocusedFxResult {
     pub track_index: i32,
     pub item_index: Option<usize>,

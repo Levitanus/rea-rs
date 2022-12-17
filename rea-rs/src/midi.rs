@@ -156,6 +156,8 @@
 
 use std::{fmt::Display, vec::IntoIter};
 
+use serde_derive::{Deserialize, Serialize};
+
 /// Basic MIDI Message functionality.
 pub trait MidiMessage: Display + Clone {
     /// Check if raw message is of `Self` type.
@@ -174,7 +176,9 @@ pub trait MidiMessage: Display + Clone {
     }
 }
 
-#[derive(Clone, PartialEq, PartialOrd, Debug, Default, Eq)]
+#[derive(
+    Clone, PartialEq, PartialOrd, Debug, Default, Eq, Serialize, Deserialize,
+)]
 pub struct RawMidiMessage {
     buf: Vec<u8>,
 }
@@ -268,7 +272,9 @@ pub trait HasBeizer: MidiMessage {
 }
 
 /// ControlCange Message
-#[derive(Clone, PartialEq, PartialOrd, Debug, Default)]
+#[derive(
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+)]
 pub struct CCMessage {
     msg_buf: Vec<u8>,
     beizer_buf: Vec<u8>,
@@ -350,7 +356,9 @@ impl Display for CCMessage {
     }
 }
 
-#[derive(Clone, PartialEq, PartialOrd, Debug, Default)]
+#[derive(
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+)]
 pub struct NoteOnMessage {
     buf: Vec<u8>,
 }
@@ -410,7 +418,9 @@ impl Display for NoteOnMessage {
     }
 }
 
-#[derive(Clone, PartialEq, PartialOrd, Debug, Default)]
+#[derive(
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+)]
 pub struct NoteOffMessage {
     buf: Vec<u8>,
 }
@@ -470,7 +480,9 @@ impl Display for NoteOffMessage {
     }
 }
 
-#[derive(Clone, PartialEq, PartialOrd, Debug, Default)]
+#[derive(
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+)]
 pub struct PitchBendMessage {
     buf: Vec<u8>,
 }
@@ -549,7 +561,9 @@ impl Display for PitchBendMessage {
     }
 }
 
-#[derive(Clone, PartialEq, PartialOrd, Debug, Default)]
+#[derive(
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+)]
 pub struct AfterTouchMessage {
     buf: Vec<u8>,
 }
@@ -604,7 +618,9 @@ impl Display for AfterTouchMessage {
     }
 }
 
-#[derive(Clone, PartialEq, PartialOrd, Debug, Default)]
+#[derive(
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+)]
 pub struct ProgramChangeMessage {
     buf: Vec<u8>,
 }
@@ -654,7 +670,9 @@ impl Display for ProgramChangeMessage {
 /// Represents all types of Sys messages, starting from `0xf0`
 ///
 /// Later it can be differentiated to Notation, Lyrics, Text etc.
-#[derive(Clone, PartialEq, PartialOrd, Debug, Default)]
+#[derive(
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+)]
 pub struct AllSysMessage {
     buf: Vec<u8>,
 }
@@ -681,7 +699,9 @@ impl Display for AllSysMessage {
     }
 }
 
-#[derive(Clone, PartialEq, PartialOrd, Debug, Default)]
+#[derive(
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+)]
 pub struct ChannelPressureMessage {
     msg: Vec<u8>,
     beizer_buf: Vec<u8>,
@@ -754,7 +774,9 @@ impl Display for ChannelPressureMessage {
 }
 
 /// Generic Midi event, that easily converted to the binary format.
-#[derive(Clone, PartialEq, PartialOrd, Debug, Default)]
+#[derive(
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+)]
 pub struct MidiEvent<T: MidiMessage> {
     position_in_ppq: u32,
     is_selected: bool,
@@ -852,7 +874,9 @@ impl<T: MidiMessage> Display for MidiEvent<T> {
 }
 
 /// Special Event type, holds Midi Notes, representing 2 raw Events
-#[derive(Clone, PartialEq, PartialOrd, Debug, Default)]
+#[derive(
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+)]
 pub struct MidiNoteEvent {
     pub start_in_ppq: u32,
     pub end_in_ppq: u32,
@@ -1209,7 +1233,17 @@ impl<T: Iterator<Item = MidiEvent<RawMidiMessage>>> Iterator
 /// - 1 byte for the bezier type (usually 0)
 /// - 4 bytes for the bezier tension as a float.
 #[derive(
-    Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Debug,
+    Default,
+    Serialize,
+    Deserialize,
 )]
 pub enum CcShapeKind {
     #[default]

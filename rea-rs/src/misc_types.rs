@@ -12,7 +12,9 @@ use std::{
     time::Duration,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -87,7 +89,7 @@ impl SampleAmount {
 }
 
 /// Represents Audio\MIDI physical out pin.
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct HardwareSocket {
     index: u32,
     name: String,
@@ -127,7 +129,18 @@ mod tests {
 /// Internally holds only [Duration] from project start.
 /// Keeps interfaces to all time transformations (e.g. between secs, quarters
 /// and ppq)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+)]
 pub struct Position {
     as_duration: Duration,
 }
@@ -239,7 +252,9 @@ impl GetLength for Duration {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
 pub struct Volume {
     raw: f64,
 }
@@ -277,7 +292,9 @@ fn test_volume() {
     assert_eq!(Volume::from(1.0).as_db(), 0.0);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
 pub struct Pan {
     raw: f64,
 }
@@ -300,7 +317,9 @@ impl Into<f64> for Pan {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
 pub enum PanLaw {
     Default,
     Minus6dB,
@@ -336,7 +355,9 @@ impl Into<f64> for PanLaw {
 }
 
 #[repr(i32)]
-#[derive(Debug, PartialEq, Eq, Clone, Copy, IntEnum)]
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, IntEnum, Serialize, Deserialize,
+)]
 pub enum PanLawMode {
     SineTaper = 0,
     HybridTaperDeprecated = 1,
@@ -354,7 +375,9 @@ impl Into<i32> for PanLawMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
 pub struct Pitch {
     raw: f64,
 }
@@ -397,7 +420,9 @@ impl Into<f64> for Pitch {
 /// ```
 ///
 /// [Project::get_play_rate]
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
 pub struct PlayRate {
     raw: f64,
 }
@@ -426,7 +451,7 @@ impl Into<f64> for PlayRate {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TimeRangeKind {
     TimeSelection,
     LoopSelection,
@@ -537,8 +562,8 @@ impl<'a> TimeRange<'a> {
 ///
 /// Not sure it should be used in complex musical analysis.
 pub struct TimeSignature {
-    numerator: u32,
-    denominator: u32,
+    pub numerator: u32,
+    pub denominator: u32,
 }
 impl TimeSignature {
     pub fn new(numerator: u32, denominator: u32) -> Self {
@@ -560,11 +585,11 @@ impl TimeSignature {
 pub trait ProbablyMutable {}
 /// Guarantees, that only this object and its
 /// child (and sub_child) can be mutated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mutable;
 impl ProbablyMutable for Mutable {}
 /// Guarantees, that object is immutable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Immutable;
 impl ProbablyMutable for Immutable {}
 
@@ -572,6 +597,15 @@ pub trait KnowsProject {
     fn project(&self) -> &Project;
 }
 
+/// GUID, that can help to track object, without knowing it's pointer and
+/// index.
+///
+/// # Note
+///
+/// Sorry, but i does not support serializing yet. So, for using with ExtState,
+/// ith should be converted  to\from String.
+///
+/// [GUID::from_string], [GUID::to_string]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GUID {
     raw: reaper_low::raw::GUID,
@@ -599,19 +633,52 @@ impl GUID {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Copy, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Copy,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+)]
 pub struct PositionPixel {
     pub x: u32,
     pub y: u32,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Copy, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Copy,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+)]
 pub struct DimensionsPixel {
     pub width: u32,
     pub height: u32,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Copy, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Copy,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+)]
 pub struct RectPixel {
     x: u32,
     y: u32,

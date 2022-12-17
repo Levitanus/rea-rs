@@ -6,6 +6,7 @@ use crate::{
 };
 use int_enum::IntEnum;
 use reaper_medium::{MediaTrack, TrackEnvelope};
+use serde_derive::{Deserialize, Serialize};
 use std::ptr::null_mut;
 
 pub trait SendIntType {
@@ -399,6 +400,7 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EnvelopeChunk {
     Volume,
     Pan,
@@ -424,6 +426,7 @@ impl ToString for EnvelopeChunk {
     }
 }
 
+#[derive(Debug)]
 pub enum EnvelopeSelector {
     Chunk(EnvelopeChunk),
     Guid(GUID),
@@ -449,7 +452,7 @@ impl Into<EnvelopeSelector> for GUID {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SendMode {
     PostFader,
     PreFx,
@@ -477,7 +480,9 @@ impl Into<f64> for SendMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct SendSourceChannels {
     pub channel: u32,
     pub is_mono: bool,
@@ -506,7 +511,9 @@ impl Into<f64> for SendSourceChannels {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct SendDestChannels {
     pub channel: u32,
     pub is_mono: bool,
@@ -570,7 +577,9 @@ impl Into<SendSourceChannels> for SendDestChannels {
 ///
 /// buses and channels are 1-based. e.g. bus1 == 1, bus16 == 16.
 /// if bus or channel set to 0 — this means all busses or all channels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct SendMIDIProps {
     pub source_bus: u8,
     pub source_channel: u8,

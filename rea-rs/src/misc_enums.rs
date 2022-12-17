@@ -1,5 +1,6 @@
 use bitflags::bitflags;
 use int_enum::IntEnum;
+use serde_derive::{Deserialize, Serialize};
 
 use crate::{
     errors::{ReaperError, ReaperResult},
@@ -20,7 +21,9 @@ impl Section {
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntEnum)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntEnum, Serialize, Deserialize,
+)]
 pub enum AutomationMode {
     None = -1,
     TrimRead = 0,
@@ -32,7 +35,9 @@ pub enum AutomationMode {
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntEnum)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntEnum, Serialize, Deserialize,
+)]
 pub enum MessageBoxType {
     Ok = 0,
     OkCancel = 1,
@@ -43,7 +48,9 @@ pub enum MessageBoxType {
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntEnum)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntEnum, Serialize, Deserialize,
+)]
 pub enum MessageBoxValue {
     Ok = 1,
     Cancel = 2,
@@ -54,14 +61,16 @@ pub enum MessageBoxValue {
     No = 7,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Direction {
     Right,
     Left,
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntEnum)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntEnum, Serialize, Deserialize,
+)]
 pub enum SoloMode {
     NotSoloed = 0,
     Soloed = 1,
@@ -72,7 +81,9 @@ pub enum SoloMode {
 
 /// Track recording mode
 #[repr(i32)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntEnum)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntEnum, Serialize, Deserialize,
+)]
 pub enum RecMode {
     Input = 0,
     StereoOut = 1,
@@ -86,7 +97,7 @@ pub enum RecMode {
 }
 
 /// Track recording input.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RecInput {
     /// MIDI Channel (`0` → all), HardwareSocket (`None` → all).
     /// Can hold special socket: `HardwareSocket{62, "Virtual Keyboard"}`.
@@ -166,7 +177,7 @@ impl RecInput {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum RecOutMode {
     PostFader,
     PreFX,
@@ -194,7 +205,7 @@ impl RecOutMode {
 
 /// Track VU Mode.
 #[allow(non_camel_case_types)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum VUMode {
     Disabled,
     StereoPeaks,
@@ -244,7 +255,7 @@ impl VUMode {
 ///
 /// The whole folder hierarchy can be build, probably, only with full-project
 /// iteration.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TrackFolderState {
     /// is between two tracks.
     Normal,
@@ -279,7 +290,9 @@ impl TrackFolderState {
 }
 
 #[repr(i32)]
-#[derive(Debug, Clone, Copy, Eq, PartialEq, IntEnum)]
+#[derive(
+    Debug, Clone, Copy, Eq, PartialEq, IntEnum, Serialize, Deserialize,
+)]
 pub enum TimeMode {
     /// Project default
     Default = -1,
