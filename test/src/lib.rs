@@ -1,5 +1,4 @@
 // #![allow(clippy::float_cmp)]
-use crate::{step, TestStep};
 use bitvec::prelude::*;
 use c_str_macro::c_str;
 use float_eq::assert_float_eq;
@@ -20,6 +19,7 @@ use rea_rs::{
     TrackPlayOffset, TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX,
     GUID,
 };
+use reaper_test::{TestStep, TestStepResult};
 use std::collections::HashMap;
 use std::fs::canonicalize;
 use std::iter;
@@ -27,6 +27,25 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::Duration;
+
+#[reaper_macros::reaper_extension_plugin]
+fn test_main(context: reaper_test::PluginContext) -> TestStepResult {
+    Reaper::load(context);
+    let test =
+        reaper_test::ReaperTest::setup(context, "rea-rs integration test");
+    let steps = create_test_steps();
+    for step in steps {
+        test.push_test_step(step);
+    }
+    Ok(())
+}
+
+pub fn step<Op>(name: impl Into<String>, operation: Op) -> TestStep
+where
+    Op: Fn(&reaper_test::ReaperTest) -> TestStepResult + 'static,
+{
+    TestStep::new(name.into(), Box::new(operation))
+}
 
 /// Creates all integration test steps to be executed. The order matters!
 pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
@@ -56,7 +75,7 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
 }
 
 fn global_instances() -> TestStep {
-    step("Global instances", || {
+    step("Global instances", |_| -> TestStepResult {
         // Sizes
         use std::mem::size_of_val;
         let medium_session = Reaper::get().medium_session();
@@ -95,7 +114,7 @@ fn global_instances() -> TestStep {
 }
 
 fn action() -> TestStep {
-    step("Actions", || {
+    step("Actions", |_| -> TestStepResult {
         let rpr = Reaper::get_mut();
         let (send, receive) = mpsc::channel::<bool>();
         let action = rpr.register_action(
@@ -137,7 +156,7 @@ fn action() -> TestStep {
 }
 
 fn projects() -> TestStep {
-    step("Projects", || {
+    step("Projects", |_| -> TestStepResult {
         let rpr = Reaper::get();
         // closes all projects.
         rpr.perform_action(CommandId::new(40886), 0, None);
@@ -255,7 +274,7 @@ fn projects() -> TestStep {
 }
 
 fn browse_for_file() -> TestStep {
-    step("Browse for file", || {
+    step("Browse for file", |_| -> TestStepResult {
         let rpr = Reaper::get();
         let result = rpr.browse_for_file("close this window!", "txt");
         assert_eq!(
@@ -274,7 +293,7 @@ fn browse_for_file() -> TestStep {
 }
 
 fn get_user_inputs() -> TestStep {
-    step("Get user inputs.", || {
+    step("Get user inputs.", |_| -> TestStepResult {
         let rpr = Reaper::get();
         let captions =
             vec!["age(18)", "name(user)", "leave blank", "fate(atheist)"];
@@ -295,7 +314,7 @@ fn get_user_inputs() -> TestStep {
 }
 
 fn show_message_box() -> TestStep {
-    step("Get user inputs.", || {
+    step("Get user inputs.", |_| -> TestStepResult {
         let rpr = Reaper::get();
         let result = rpr.show_message_box(
             "close message box",
@@ -314,7 +333,7 @@ fn show_message_box() -> TestStep {
 }
 
 fn misc() -> TestStep {
-    step("Misc little functions", || {
+    step("Misc little functions", |_| -> TestStepResult {
         let rpr = Reaper::get();
         debug!("Console message");
         rpr.show_console_msg("Hello from misc functions.");
@@ -382,7 +401,7 @@ fn misc() -> TestStep {
 }
 
 fn misc_types() -> TestStep {
-    step("Misc little types", || {
+    step("Misc little types", |_| -> TestStepResult {
         let _rpr = Reaper::get();
         debug!("Color");
         let yellow = Color::new(255, 255, 0);
@@ -417,7 +436,7 @@ fn misc_types() -> TestStep {
 }
 
 fn ext_state() -> TestStep {
-    step("ExtState", || {
+    step("ExtState", |_| -> TestStepResult {
         info!("ExtState keep persistence between test sessions.");
         debug!("test on integer and in reaper");
         let rpr = Reaper::get();
@@ -520,7 +539,7 @@ fn ext_state() -> TestStep {
 }
 
 fn markers() -> TestStep {
-    step("Markers", || {
+    step("Markers", |_| -> TestStepResult {
         let rpr = Reaper::get();
         let mut project = rpr.current_project();
         let idx1 = project.add_marker(
@@ -579,7 +598,7 @@ fn markers() -> TestStep {
     })
 }
 fn tracks() -> TestStep {
-    step("Tracks", || {
+    step("Tracks", |_| -> TestStepResult {
         let rpr = Reaper::get();
         let mut pr = rpr.current_project();
         debug!("add track 'first'");
@@ -972,7 +991,7 @@ fn tracks() -> TestStep {
 }
 
 fn sends() -> TestStep {
-    step("Sends", || {
+    step("Sends", |_| -> TestStepResult {
         let rpr = Reaper::get();
         // rpr.perform_action(40886, 0, None);
         let mut pr = rpr.current_project();
@@ -1069,7 +1088,7 @@ fn sends() -> TestStep {
 }
 
 fn envelopes() -> TestStep {
-    step("Envelopes", || {
+    step("Envelopes", |_| -> TestStepResult {
         let rpr = Reaper::get();
         // rpr.perform_action(40886, 0, None);
         let mut pr = rpr.current_project();
@@ -1301,7 +1320,7 @@ fn envelopes() -> TestStep {
     })
 }
 fn items() -> TestStep {
-    step("Items", || {
+    step("Items", |_| -> TestStepResult {
         let rpr = Reaper::get();
         // rpr.perform_action(40886, 0, None);
         let mut pr = rpr.current_project();
@@ -1438,7 +1457,7 @@ fn items() -> TestStep {
     })
 }
 fn takes() -> TestStep {
-    step("Takes", || {
+    step("Takes", |_| -> TestStepResult {
         let rpr = Reaper::get();
         // rpr.perform_action(40886, 0, None);
         let mut pr = rpr.current_project();
