@@ -13,8 +13,9 @@ rea-rs = {path = "../rea-rs"}
 reaper-low = "0.1.0"
 reaper-macros = "0.1.0"
 reaper-medium = "0.1.0"
-# reaper-test = {git = "https://github.com/Levitanus/reaper-test"}
-reaper-test = {path = "../../reaper-test"}
+reaper-test = {git = "https://github.com/Levitanus/reaper-test"}
+
+# reaper-test = {path = "../../reaper-test"}
 
 [patch.crates-io]
 reaper-low = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
