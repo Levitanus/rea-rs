@@ -64,6 +64,7 @@ impl Color {
 
 #[derive(Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Measure {
+    pub index: u32,
     pub start: Position,
     pub end: Position,
     pub time_signature: TimeSignature,
@@ -75,6 +76,7 @@ impl Measure {
         let measure_info =
             rpr.time_map_get_measure_info(project.context(), index as i32 - 1);
         Self {
+            index,
             start: Position::from_quarters(
                 measure_info.start_qn.get(),
                 project,
