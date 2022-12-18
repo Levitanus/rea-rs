@@ -699,6 +699,163 @@ impl Display for AllSysMessage {
     }
 }
 
+/// Represents Text messages `0xf0, 0x01`
+#[derive(
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+)]
+pub struct TextMessage {
+    buf: Vec<u8>,
+}
+impl TextMessage {
+    pub fn text(&self) -> String {
+        String::from_utf8(self.get_raw()[2..].to_vec())
+            .expect("Cannot decode text message to utf-8")
+    }
+    pub fn set_text(&mut self, text: impl Into<String>) {
+        let mut text: String = text.into();
+        let mut buf = vec![0xf0, 0x01];
+        buf.append(unsafe { text.as_mut_vec() });
+        self.buf = buf;
+    }
+}
+impl MidiMessage for TextMessage {
+    fn from_raw(buf: Vec<u8>) -> Option<Self> {
+        if buf[0] < 0xf0 {
+            return None;
+        }
+        if buf[1] == 0x01 {
+            Some(Self { buf })
+        } else {
+            None
+        }
+    }
+    fn get_raw(&self) -> Vec<u8> {
+        self.buf.clone()
+    }
+    fn borrow_raw(&self) -> &Vec<u8> {
+        &self.buf
+    }
+    fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.buf
+    }
+}
+impl Display for TextMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TextMessage{{text: {:?}}}", self.text(),)
+    }
+}
+
+/// Represents Notation messages `0xf0, 0x0f`
+#[derive(Clone, PartialEq, PartialOrd, Debug, Serialize, Deserialize)]
+pub struct NotationMessage {
+    buf: Vec<u8>,
+    // notation: Notation,
+}
+
+/// Partially parsed notation.
+#[derive(Clone, PartialEq, PartialOrd, Debug, Serialize, Deserialize)]
+pub enum Notation {
+    /// Note notation: channel(1-based), note, tokens
+    Note(u8, u8, Vec<String>),
+    /// Track notation: tokens
+    Track(Vec<String>),
+    /// Unknown notation: tokens, including the type.
+    Unknown(Vec<String>),
+}
+
+impl NotationMessage {
+    pub fn notation(&self) -> Notation {
+        let text = self.text();
+        let tokens: Vec<&str> = text.split(" ").collect();
+        match tokens[0] {
+            "NOTE" => Notation::Note(
+                tokens[1].parse::<u8>().expect("Should be channel number") + 1,
+                tokens[2].parse::<u8>().expect("Should be note number"),
+                tokens[3..].into_iter().map(|s| String::from(*s)).collect(),
+            ),
+            "TRAC" => Notation::Track(
+                tokens[1..].into_iter().map(|s| String::from(*s)).collect(),
+            ),
+            _ => Notation::Unknown(
+                tokens.into_iter().map(|s| String::from(s)).collect(),
+            ),
+        }
+    }
+    pub fn set_notation(&mut self, notation: Notation) {
+        let tokens = match notation {
+            Notation::Note(ch, note, mut tk) => {
+                let mut v = vec![
+                    String::from("NOTE"),
+                    format!("{}", ch - 1),
+                    format!("{}", note),
+                ];
+                v.append(&mut tk);
+                v.join(" ")
+            }
+            Notation::Track(mut tk) => {
+                let mut v = vec![String::from("TRAC")];
+                v.append(&mut tk);
+                v.join(" ")
+            }
+            Notation::Unknown(tk) => tk.join(" "),
+        };
+        self.set_text(tokens)
+    }
+    fn text(&self) -> String {
+        String::from_utf8(self.get_raw()[2..].to_vec())
+            .expect("Cannot decode text message to utf-8")
+    }
+    fn set_text(&mut self, text: impl Into<String>) {
+        let mut text: String = text.into();
+        let mut buf = vec![0xf0, 0x0f];
+        buf.append(unsafe { text.as_mut_vec() });
+        self.buf = buf;
+    }
+}
+impl MidiMessage for NotationMessage {
+    fn from_raw(buf: Vec<u8>) -> Option<Self> {
+        if buf[0] < 0xf0 {
+            return None;
+        }
+        if buf[1] == 0x0f {
+            Some(Self { buf })
+        } else {
+            None
+        }
+    }
+    fn get_raw(&self) -> Vec<u8> {
+        self.buf.clone()
+    }
+    fn borrow_raw(&self) -> &Vec<u8> {
+        &self.buf
+    }
+    fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.buf
+    }
+}
+impl Display for NotationMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NotationMessage{{notation: {}}}", self.notation(),)
+    }
+}
+impl Display for Notation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Note(ch, nt, tk) => write!(
+                f,
+                "Notation: Note(channel:{}, note: {}, tokens: {:?})",
+                ch, nt, tk
+            ),
+            Self::Track(tk) => {
+                write!(f, "Notation: Track(tokens: {:?})", tk)
+            }
+            Self::Unknown(tk) => {
+                write!(f, "Unknown: Track(tokens: {:?})", tk)
+            }
+        }
+    }
+}
+
 #[derive(
     Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
 )]

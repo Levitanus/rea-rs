@@ -148,6 +148,8 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
     /// It is quite useless as it is, but, it can be used several times with
     /// [MidiEventBuilder] for iterating through various event types.
     ///
+    /// if buffer_size is not overrided — max size will be used.
+    ///
     /// # In the case one desire to iter through raw binary data
     ///
     /// MIDI buffer is returned as a list of `{ int offset, char flag, int
