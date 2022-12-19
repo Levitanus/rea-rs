@@ -762,7 +762,34 @@ pub enum Notation {
     /// Unknown notation: tokens, including the type.
     Unknown(Vec<String>),
 }
-
+impl Notation {
+    fn as_tokens_string(self) -> String {
+        match self {
+            Notation::Note(ch, note, mut tk) => {
+                let mut v = vec![
+                    String::from("NOTE"),
+                    format!("{}", ch - 1),
+                    format!("{}", note),
+                ];
+                v.append(&mut tk);
+                v.join(" ")
+            }
+            Notation::Track(mut tk) => {
+                let mut v = vec![String::from("TRAC")];
+                v.append(&mut tk);
+                v.join(" ")
+            }
+            Notation::Unknown(tk) => tk.join(" "),
+        }
+    }
+}
+impl From<Notation> for NotationMessage {
+    fn from(value: Notation) -> Self {
+        Self {
+            buf: NotationMessage::text_to_buf(value.as_tokens_string()),
+        }
+    }
+}
 impl NotationMessage {
     pub fn notation(&self) -> Notation {
         let text = self.text();
@@ -782,34 +809,21 @@ impl NotationMessage {
         }
     }
     pub fn set_notation(&mut self, notation: Notation) {
-        let tokens = match notation {
-            Notation::Note(ch, note, mut tk) => {
-                let mut v = vec![
-                    String::from("NOTE"),
-                    format!("{}", ch - 1),
-                    format!("{}", note),
-                ];
-                v.append(&mut tk);
-                v.join(" ")
-            }
-            Notation::Track(mut tk) => {
-                let mut v = vec![String::from("TRAC")];
-                v.append(&mut tk);
-                v.join(" ")
-            }
-            Notation::Unknown(tk) => tk.join(" "),
-        };
+        let tokens = notation.as_tokens_string();
         self.set_text(tokens)
+    }
+    fn text_to_buf(text: impl Into<String>) -> Vec<u8> {
+        let mut text: String = text.into();
+        let mut buf = vec![0xf0, 0x0f];
+        buf.append(unsafe { text.as_mut_vec() });
+        buf
     }
     fn text(&self) -> String {
         String::from_utf8(self.get_raw()[2..].to_vec())
             .expect("Cannot decode text message to utf-8")
     }
     fn set_text(&mut self, text: impl Into<String>) {
-        let mut text: String = text.into();
-        let mut buf = vec![0xf0, 0x0f];
-        buf.append(unsafe { text.as_mut_vec() });
-        self.buf = buf;
+        self.buf = Self::text_to_buf(text);
     }
 }
 impl MidiMessage for NotationMessage {
