@@ -154,9 +154,8 @@
 //!     assert_eq!(left, right, "assert failed at index: {}", idx);
 //! }
 
-use std::{fmt::Display, vec::IntoIter};
-
 use serde_derive::{Deserialize, Serialize};
+use std::{fmt::Display, vec::IntoIter};
 
 /// Basic MIDI Message functionality.
 pub trait MidiMessage: Display + Clone {
@@ -195,6 +194,14 @@ impl MidiMessage for RawMidiMessage {
     }
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
         &mut self.buf
+    }
+}
+impl RawMidiMessage {
+    /// Construct a new `RawMidiMessage` from any other message type.
+    ///
+    /// Equivalent of from(), but generic
+    pub fn from_msg<T: MidiMessage>(value: T) -> Self {
+        Self::from_raw(value.get_raw()).expect("ICan not convert message.")
     }
 }
 impl Display for RawMidiMessage {
@@ -756,7 +763,11 @@ pub struct NotationMessage {
 #[derive(Clone, PartialEq, PartialOrd, Debug, Serialize, Deserialize)]
 pub enum Notation {
     /// Note notation: channel(1-based), note, tokens
-    Note(u8, u8, Vec<String>),
+    Note {
+        channel: u8,
+        note: u8,
+        tokens: Vec<String>,
+    },
     /// Track notation: tokens
     Track(Vec<String>),
     /// Unknown notation: tokens, including the type.
@@ -765,13 +776,17 @@ pub enum Notation {
 impl Notation {
     fn as_tokens_string(self) -> String {
         match self {
-            Notation::Note(ch, note, mut tk) => {
+            Notation::Note {
+                channel,
+                note,
+                mut tokens,
+            } => {
                 let mut v = vec![
                     String::from("NOTE"),
-                    format!("{}", ch - 1),
+                    format!("{}", channel - 1),
                     format!("{}", note),
                 ];
-                v.append(&mut tk);
+                v.append(&mut tokens);
                 v.join(" ")
             }
             Notation::Track(mut tk) => {
@@ -795,11 +810,17 @@ impl NotationMessage {
         let text = self.text();
         let tokens: Vec<&str> = text.split(" ").collect();
         match tokens[0] {
-            "NOTE" => Notation::Note(
-                tokens[1].parse::<u8>().expect("Should be channel number") + 1,
-                tokens[2].parse::<u8>().expect("Should be note number"),
-                tokens[3..].into_iter().map(|s| String::from(*s)).collect(),
-            ),
+            "NOTE" => Notation::Note {
+                channel: tokens[1]
+                    .parse::<u8>()
+                    .expect("Should be channel number")
+                    + 1,
+                note: tokens[2].parse::<u8>().expect("Should be note number"),
+                tokens: tokens[3..]
+                    .into_iter()
+                    .map(|s| String::from(*s))
+                    .collect(),
+            },
             "TRAC" => Notation::Track(
                 tokens[1..].into_iter().map(|s| String::from(*s)).collect(),
             ),
@@ -855,10 +876,14 @@ impl Display for NotationMessage {
 impl Display for Notation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Note(ch, nt, tk) => write!(
+            Self::Note {
+                channel,
+                note,
+                tokens,
+            } => write!(
                 f,
                 "Notation: Note(channel:{}, note: {}, tokens: {:?})",
-                ch, nt, tk
+                channel, note, tokens
             ),
             Self::Track(tk) => {
                 write!(f, "Notation: Track(tokens: {:?})", tk)
@@ -1242,7 +1267,7 @@ impl MidiEventBuilder {
     ///     )
     /// );
     /// ```
-    pub fn filter_notes(self) -> FilterNotes {
+    pub fn filter_notes(self) -> FilterNotes<Self> {
         FilterNotes::from(self)
     }
 
@@ -1666,19 +1691,26 @@ impl Iterator for FilterAllSys {
 }
 
 /// Iterates through Note events. Better not to use outside the module.
-pub struct FilterNotes {
-    midi_events: MidiEventBuilder,
+pub struct FilterNotes<T: Iterator<Item = MidiEvent<RawMidiMessage>>> {
+    midi_events: T,
     note_ons: Vec<MidiEvent<NoteOnMessage>>,
 }
-impl From<MidiEventBuilder> for FilterNotes {
-    fn from(value: MidiEventBuilder) -> Self {
+impl<T: Iterator<Item = MidiEvent<RawMidiMessage>>> FilterNotes<T> {
+    pub fn new(events: T) -> Self {
         Self {
-            midi_events: value,
+            midi_events: events,
             note_ons: Vec::new(),
         }
     }
 }
-impl Iterator for FilterNotes {
+impl From<MidiEventBuilder> for FilterNotes<MidiEventBuilder> {
+    fn from(value: MidiEventBuilder) -> Self {
+        Self::new(value)
+    }
+}
+impl<T: Iterator<Item = MidiEvent<RawMidiMessage>>> Iterator
+    for FilterNotes<T>
+{
     type Item = MidiNoteEvent;
 
     fn next(&mut self) -> Option<Self::Item> {
