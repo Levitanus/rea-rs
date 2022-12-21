@@ -684,16 +684,27 @@ impl<'a> Project {
     }
 
     pub fn get_selected_item(&self, index: usize) -> Option<Item<Immutable>> {
-        unsafe {
-            let ptr = Reaper::get()
-                .low()
-                .GetSelectedMediaItem(self.context().to_raw(), index as i32);
-            if ptr.is_null() {
-                return None;
-            }
-            let item = Item::new(self, MediaItem::new(ptr).unwrap());
-            Some(item)
+        match self.selected_item_ptr(index) {
+            Some(ptr) => Some(Item::new(self, ptr)),
+            None => None,
         }
+    }
+    pub fn get_selected_item_mut(
+        &mut self,
+        index: usize,
+    ) -> Option<Item<Mutable>> {
+        match self.selected_item_ptr(index) {
+            Some(ptr) => Some(Item::new(self, ptr)),
+            None => None,
+        }
+    }
+    fn selected_item_ptr(&self, index: usize) -> Option<MediaItem> {
+        let ptr = unsafe {
+            Reaper::get()
+                .low()
+                .GetSelectedMediaItem(self.context().to_raw(), index as i32)
+        };
+        MediaItem::new(ptr)
     }
 
     /// Glue items (action shortcut).
