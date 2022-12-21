@@ -267,7 +267,7 @@ impl Position {
             ))
         }
     }
-    pub fn as_ppq<T: ProbablyMutable>(&self, take: Take<T>) -> u32 {
+    pub fn as_ppq<T: ProbablyMutable>(&self, take: &Take<T>) -> u32 {
         unsafe {
             Reaper::get().low().MIDI_GetPPQPosFromProjTime(
                 take.get().as_mut(),
@@ -276,16 +276,20 @@ impl Position {
         }
     }
 
-    pub fn from_ppq<T: ProbablyMutable>(
+    pub fn from_ppq<'a, 'b, T: ProbablyMutable>(
         ppq: impl Into<u32>,
-        take: &Take<T>,
-    ) -> Self {
-        unsafe {
-            Self::from(Reaper::get().low().MIDI_GetProjTimeFromPPQPos(
+        take: &'a Take<T>,
+    ) -> Self
+    where
+        Self: 'b,
+    {
+        let val = unsafe {
+            Reaper::get().low().MIDI_GetProjTimeFromPPQPos(
                 take.get().as_mut(),
                 ppq.into() as f64,
-            ))
-        }
+            )
+        };
+        Self::from(val)
     }
 }
 impl Add for Position {
