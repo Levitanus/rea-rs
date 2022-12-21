@@ -313,7 +313,7 @@ impl<'a> Item<'a, Mutable> {
             );
         }
     }
-    pub fn set_selected(&self, selected: bool) {
+    pub fn set_selected(&mut self, selected: bool) {
         unsafe {
             Reaper::get()
                 .low()

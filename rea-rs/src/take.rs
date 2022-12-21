@@ -416,7 +416,7 @@ impl<'a> Take<'a, Mutable> {
     /// - [crate::midi]
     /// - [Take::get_midi]
     /// - [Take::iter_midi]
-    pub fn set_midi(&self, mut midi: Vec<u8>) -> ReaperStaticResult<()> {
+    pub fn set_midi(&mut self, mut midi: Vec<u8>) -> ReaperStaticResult<()> {
         let raw = midi.as_mut_ptr() as *mut c_char;
         let result = unsafe {
             Reaper::get().low().MIDI_SetAllEvts(
