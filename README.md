@@ -16,13 +16,6 @@ Item, [AudioAccessor](https://levitanus.github.io/rea-rs-doc/rea_rs/audio_access
 It should also be possible to use from VST Plugin, but this has not yet
 been tested at all.
 
-Almost everything needed to communicate to crate is re-exported (like [reaper_medium](https://levitanus.github.io/rea-rs-doc/reaper_medium/index.html) and [rea_rs_low](https://levitanus.github.io/rea-rs-doc/rea_rs_low/index.html) types), but for comfortably making extension-plugin entry-point it's better to also use reaper-macros dependency:
-
-```toml
-[dependencies]
-reaper-macros = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
-```
-
 Until there is no new version of `reaper-rs` which differs from the current master branch a lot, this is the dependency list I highly recommend:
 
 These are the dependencies:
@@ -128,10 +121,7 @@ For the moment, downsides of API are:
 
 - top-level functionality: I'm not sure, that at least a half of little
   reaper functions is wrapped. Like all windowing and theming stuff.
-- GUI. As well as with `reapy`, GUI is an issue. In the long perspective, I
-  feel that [egui](https://github.com/emilk/egui) backend in the `Win32`
-  and `Swell` should be made. But at the moment, possibly, any backend of
-  `egui` will suit.
+- GUI. As well as with `reapy`, GUI is an issue. I've started `reaper-imgui` crate, that makes possible to use ReaImGui extension from rust. But it waits for being properly wrapped by `rea-rs`.
 - Thread-safety. It's important to know, that almost nothing of [Reaper](https://levitanus.github.io/rea-rs-doc/rea_rs/reaper/struct.Reaper.html)
   should left the main thread. There are some functions, that are designed
   for audio thread, and some, that are safe to execute from any thread.

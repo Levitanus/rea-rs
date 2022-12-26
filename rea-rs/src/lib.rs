@@ -137,10 +137,9 @@
 //! For the moment, downsides of API are:
 //! - top-level functionality: I'm not sure, that at least a half of little
 //!   reaper functions is wrapped. Like all windowing and theming stuff.
-//! - GUI. As well as with `reapy`, GUI is an issue. In the long perspective, I
-//!   feel that [egui](https://github.com/emilk/egui) backend in the `Win32`
-//!   and `Swell` should be made. But at the moment, possibly, any backend of
-//!   `egui` will suit.
+//! - GUI. As well as with `reapy`, GUI is an issue. I've started
+//!   `reaper-imgui` crate, that makes possible to use ReaImGui extension from
+//!   rust. But it waits for being properly wrapped by `rea-rs`.
 //! - Thread-safety. It's important to know, that almost nothing of [Reaper]
 //!   should left the main thread. There are some functions, that are designed
 //!   for audio thread, and some, that are safe to execute from any thread.
