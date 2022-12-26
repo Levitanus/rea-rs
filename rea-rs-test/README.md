@@ -1,4 +1,4 @@
-# reaper-test
+# rea-rs-test
 
 Makes testing of REAPER extension plugins easy.
 
@@ -36,17 +36,10 @@ publish = false
 version = "0.1.0"
 
 [dependencies]
-reaper-low = "0.1.0"
-reaper-macros = "0.1.0"
-reaper-medium = "0.1.0"
-reaper-test = "0.1.0"
+rea-rs = "0.1.1"
+rea-rs-macros = "0.1.0"
+rea-rs-test = "0.1.0"
 my_lib = {path = "../my_lib"}
-
-[patch.crates-io]
-reaper-low = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
-reaper-macros = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
-reaper-medium = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
-reaper-test = {git = "https://github.com/Levitanus/reaper-test"}
 
 [lib]
 crate-type = ["cdylib"]
@@ -57,7 +50,7 @@ name = "reaper_test_extension_plugin"
 contents of `test/tests/integration_test.rs`:
 
 ```rust
-use reaper_test::{run_integration_test, ReaperVersion};
+use rea_rs_test::{run_integration_test, ReaperVersion};
 #[test]
 fn main() {
     run_integration_test(ReaperVersion::latest());
@@ -67,11 +60,12 @@ fn main() {
 `test/src/lib.rs` is the file your integration tests are placed in.
 
 ```rust
-use reaper_macros::reaper_extension_plugin;
-use reaper_test::*;
+use rea_rs_macros::reaper_extension_plugin;
+use rea_rs_test::*;
+use rea_rs::{Reaper; PluginContext};
 use std::error::Error;
-fn hello_world(reaper: &ReaperTest) -> TestStepResult {
-    reaper.medium().show_console_msg("Hello world!");
+fn hello_world(reaper: &mut Reaper) -> TestStepResult {
+    reaper.show_console_msg("Hello world!");
     Ok(())
 }
 #[reaper_extension_plugin]
@@ -89,4 +83,4 @@ to run integration tests, go to the test folder and type:
 
 ## Hint
 
-Use crates `log` and `env_logger` for ptinting to stdio. integration test turns env logger on by itself.
+Use crates `log` and `env_logger` for printing to stdio. integration test turns env logger on by itself.
