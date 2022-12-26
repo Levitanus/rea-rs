@@ -18,11 +18,11 @@
 //! been tested at all.
 //!
 //! These are the dependencies:
-//! ```ignore
+//! ```toml
 //! [dependencies]
-//! rea-rs = "0.1.1"
-//! rea-rs-low = "0.1.0" // optional
-//! rea-rs-macros = "0.1.0"
+//! rea-rs = "0.1.2"
+//! rea-rs-low = "0.1.2" # optional
+//! rea-rs-macros = "0.1.2"
 //! ```
 //!
 //! But, actually, all medium- and low-level functionality is still existing in

@@ -22,9 +22,9 @@ These are the dependencies:
 
 ```toml
 [dependencies]
-rea-rs = "0.1.1"
-rea-rs-low = "0.1.0" // optional
-rea-rs-macros = "0.1.0"
+rea-rs = "0.1.2"
+rea-rs-low = "0.1.2" # optional
+rea-rs-macros = "0.1.2"
 ```
 
 But, actually, all medium- and low-level functionality is still existing in the [Reaper](https://levitanus.github.io/rea-rs-doc/rea_rs/reaper/struct.Reaper.html) object. Just use `Reaper::low`, `Reaper::medium` and `Reaper::medium_session`. The Common entry point should look like this:
