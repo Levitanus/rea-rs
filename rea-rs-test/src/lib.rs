@@ -56,7 +56,7 @@
 //! ```no_run
 //! use rea_rs_test::{run_integration_test, ReaperVersion};
 //! #[test]
-//! fn main() {
+//! fn test() {
 //!     run_integration_test(ReaperVersion::latest());
 //! }
 //! ```
@@ -66,7 +66,7 @@
 //! ```no_run
 //! use rea_rs_macros::reaper_extension_plugin;
 //! use rea_rs_test::*;
-//! use rea_rs::{Reaper; PluginContext};
+//! use rea_rs::{Reaper, PluginContext};
 //! use std::error::Error;
 //! fn hello_world(reaper: &mut Reaper) -> TestStepResult {
 //!     reaper.show_console_msg("Hello world!");

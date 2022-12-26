@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/rea-rs-low/0.1.1")]
+#![doc(html_root_url = "https://docs.rs/rea-rs-low/0.1.2")]
 #![allow(renamed_and_removed_lints)]
 #![deny(broken_intra_doc_links)]
 
