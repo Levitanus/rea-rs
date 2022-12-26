@@ -1,14 +1,13 @@
 use crate::{
-    errors::ReaperResult,
-    utils::{as_string_mut, make_c_string_buf},
+    errors::{ReaperError, ReaperStaticResult},
+    utils::{as_c_str, as_string_mut, make_c_string_buf, WithNull},
     Direction, Project, Reaper, Take, WithReaperPtr,
 };
 use int_enum::IntEnum;
-use reaper_medium::PositionInSeconds;
+use rea_rs_low::raw;
 use serde_derive::{Deserialize, Serialize};
 use std::{
     mem::MaybeUninit,
-    num::NonZeroU32,
     ops::{Add, Sub},
     time::Duration,
 };
@@ -68,21 +67,47 @@ pub struct Measure {
     pub start: Position,
     pub end: Position,
     pub time_signature: TimeSignature,
+    pub tempo: f64,
 }
 
 impl Measure {
     pub fn from_index(index: u32, project: &Project) -> Self {
-        let rpr = Reaper::get().medium();
-        let measure_info =
-            rpr.time_map_get_measure_info(project.context(), index as i32 - 1);
-        Self {
-            index,
-            start: Position::from_quarters(
-                measure_info.start_qn.get(),
-                project,
-            ),
-            end: Position::from_quarters(measure_info.end_qn.get(), project),
-            time_signature: TimeSignature::from(measure_info.time_signature),
+        let rpr = Reaper::get().low();
+        let (
+            mut qn_start,
+            mut qn_end,
+            mut timesig_num,
+            mut timesig_denom,
+            mut tempo,
+        ) = (
+            MaybeUninit::zeroed(),
+            MaybeUninit::zeroed(),
+            MaybeUninit::zeroed(),
+            MaybeUninit::zeroed(),
+            MaybeUninit::zeroed(),
+        );
+        let result = unsafe {
+            rpr.TimeMap_GetMeasureInfo(
+                project.context().to_raw(),
+                index as i32 - 1,
+                qn_start.as_mut_ptr(),
+                qn_end.as_mut_ptr(),
+                timesig_num.as_mut_ptr(),
+                timesig_denom.as_mut_ptr(),
+                tempo.as_mut_ptr(),
+            )
+        };
+        unsafe {
+            Self {
+                index,
+                start: Position::from(result),
+                end: Position::from_quarters(qn_end.assume_init(), project),
+                time_signature: TimeSignature::new(
+                    timesig_num.assume_init() as u32,
+                    timesig_denom.assume_init() as u32,
+                ),
+                tempo: tempo.assume_init(),
+            }
         }
     }
     pub fn from_position(position: Position, project: &Project) -> Self {
@@ -220,11 +245,6 @@ impl From<f64> for Position {
         Self {
             as_duration: duration,
         }
-    }
-}
-impl From<PositionInSeconds> for Position {
-    fn from(value: PositionInSeconds) -> Self {
-        Self::from(value.get())
     }
 }
 impl Into<f64> for Position {
@@ -653,24 +673,6 @@ impl TimeSignature {
         (self.numerator, self.denominator)
     }
 }
-impl From<reaper_medium::TimeSignature> for TimeSignature {
-    fn from(value: reaper_medium::TimeSignature) -> Self {
-        Self {
-            numerator: value.numerator.get(),
-            denominator: value.denominator.get(),
-        }
-    }
-}
-impl Into<reaper_medium::TimeSignature> for TimeSignature {
-    fn into(self) -> reaper_medium::TimeSignature {
-        reaper_medium::TimeSignature {
-            numerator: NonZeroU32::new(self.numerator)
-                .expect("Can not convert numerator to NonZero"),
-            denominator: NonZeroU32::new(self.denominator)
-                .expect("Can not convert denominator to NonZero"),
-        }
-    }
-}
 
 /// Generic mutability marker, that allows to
 /// mutate only one Reaper object at time.
@@ -703,7 +705,7 @@ pub trait KnowsProject {
 /// [GUID::from_string], [GUID::to_string]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GUID {
-    raw: reaper_low::raw::GUID,
+    raw: rea_rs_low::raw::GUID,
 }
 impl Into<String> for GUID {
     fn into(self) -> String {
@@ -717,14 +719,39 @@ impl ToString for GUID {
         as_string_mut(buf).expect("Can not convert guid to string")
     }
 }
+
+const ZERO_GUID: raw::GUID = raw::GUID {
+    Data1: 0,
+    Data2: 0,
+    Data3: 0,
+    Data4: [0; 8],
+};
+
 impl GUID {
-    pub fn from_string(value: String) -> ReaperResult<Self> {
-        let ptr = Reaper::get().medium().string_to_guid(value)?;
-        Ok(Self { raw: ptr })
+    pub fn from_string(mut value: String) -> ReaperStaticResult<Self> {
+        let mut g = MaybeUninit::zeroed();
+        unsafe {
+            Reaper::get().low().stringToGuid(
+                as_c_str(value.with_null()).as_ptr(),
+                g.as_mut_ptr(),
+            );
+            let g = g.assume_init();
+            match g {
+                ZERO_GUID => {
+                    Err(ReaperError::InvalidObject("Can not convert to GUID"))
+                }
+                ptr => Ok(Self { raw: ptr }),
+            }
+        }
     }
     pub fn new() -> Self {
-        let ptr = Reaper::get().medium().gen_guid();
-        Self { raw: ptr }
+        unsafe {
+            let mut ptr = MaybeUninit::zeroed();
+            Reaper::get().low().genGuid(ptr.as_mut_ptr());
+            Self {
+                raw: ptr.assume_init(),
+            }
+        }
     }
 }
 

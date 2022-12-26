@@ -1,12 +1,12 @@
 use crate::{
     errors::{ReaperError, ReaperStaticResult},
+    ptr_wrappers::{MediaItem, MediaItemTake, MediaTrack},
     utils::{as_c_str, as_c_string, as_string_mut},
     utils::{make_c_string_buf, WithNull},
     Color, Immutable, KnowsProject, Mutable, Position, ProbablyMutable,
     Project, Reaper, Take, TimeMode, Track, Volume, WithReaperPtr, GUID,
 };
 use int_enum::IntEnum;
-use reaper_medium::{MediaItem, MediaItemTake, MediaTrack};
 use serde_derive::{Deserialize, Serialize};
 use std::{marker::PhantomData, ptr::NonNull, time::Duration};
 
@@ -17,7 +17,7 @@ pub struct Item<'a, T: ProbablyMutable> {
     should_check: bool,
     phantom_mut: PhantomData<T>,
 }
-impl<'a, T: ProbablyMutable> WithReaperPtr<'a> for Item<'a, T> {
+impl<'a, T: ProbablyMutable> WithReaperPtr for Item<'a, T> {
     type Ptr = MediaItem;
     fn get_pointer(&self) -> Self::Ptr {
         self.ptr

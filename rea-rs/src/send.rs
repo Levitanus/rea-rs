@@ -1,11 +1,11 @@
 use crate::{
     errors::{ReaperError, ReaperResult},
+    ptr_wrappers::{MediaTrack, TrackEnvelope},
     utils::{as_c_str, WithNull},
     AutomationMode, Envelope, Immutable, KnowsProject, Mutable, Pan, PanLaw,
     ProbablyMutable, Reaper, Track, Volume, WithReaperPtr, GUID,
 };
 use int_enum::IntEnum;
-use reaper_medium::{MediaTrack, TrackEnvelope};
 use serde_derive::{Deserialize, Serialize};
 use std::ptr::null_mut;
 
@@ -208,7 +208,7 @@ pub trait GenericSend<'a, T: ProbablyMutable + 'a>: SendIntType {
                 self.index() as i32,
                 as_c_str(&String::from("P_DESTTRACK\0")).as_ptr(),
                 null_mut(),
-            ) as *mut reaper_low::raw::MediaTrack
+            ) as *mut rea_rs_low::raw::MediaTrack
         };
         let ptr = MediaTrack::new(result);
         match ptr {
@@ -227,7 +227,7 @@ pub trait GenericSend<'a, T: ProbablyMutable + 'a>: SendIntType {
                 self.index() as i32,
                 as_c_str(&String::from("P_SRCTRACK\0")).as_ptr(),
                 null_mut(),
-            ) as *mut reaper_low::raw::MediaTrack
+            ) as *mut rea_rs_low::raw::MediaTrack
         };
         let ptr = MediaTrack::new(result);
         match ptr {
@@ -255,7 +255,7 @@ pub trait GenericSend<'a, T: ProbablyMutable + 'a>: SendIntType {
                 ))
                 .as_ptr(),
                 null_mut(),
-            ) as *mut reaper_low::raw::TrackEnvelope
+            ) as *mut rea_rs_low::raw::TrackEnvelope
         };
         let ptr = TrackEnvelope::new(result);
         match ptr {

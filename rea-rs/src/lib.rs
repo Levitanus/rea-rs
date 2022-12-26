@@ -17,29 +17,12 @@
 //! It should also be possible to use from VST Plugin, but this has not yet
 //! been tested at all.
 //!
-//! Almost everything needed to communicate to crate is re-exported (like
-//! [reaper_medium] and [reaper_low] types), but for comfortably making
-//! extension-plugin entry-point it's better to also use reaper-macros
-//! dependency:
-//!
+//! These are the dependencies:
 //! ```ignore
 //! [dependencies]
-//! reaper-macros = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
-//! ```
-//!
-//! Until there is no new version of `reaper-rs` which differs from the current
-//! master branch a lot, this is the dependency list I highly recommend:
-//! ```ignore
-//! [dependencies]
-//! rea-rs = {git = "https://github.com/Levitanus/rea-rs"}
-//! reaper-low = "0.1.0"
-//! reaper-macros = "0.1.0"
-//! reaper-medium = "0.1.0"
-//!
-//! [patch.crates-io]
-//! reaper-low = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
-//! reaper-macros = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
-//! reaper-medium = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
+//! rea-rs = "0.1.1"
+//! rea-rs-low = "0.1.0" // optional
+//! rea-rs-macros = "0.1.0"
 //! ```
 //!
 //! But, actually, all medium- and low-level functionality is still existing in
@@ -50,7 +33,7 @@
 //!
 //! ```no_run
 //! use rea_rs::{errors::ReaperResult, ActionKind, Reaper, PluginContext};
-//! use reaper_macros::reaper_extension_plugin;
+//! use rea_rs_macros::reaper_extension_plugin;
 //! use std::error::Error;
 //!
 //! #[reaper_extension_plugin]
@@ -67,22 +50,22 @@
 //! there are two common ways to invoke the code: Actions and [ControlSurface].
 //!
 //! ```no_run
-//! use rea_rs::{
-//! ActionKind, ControlSurface, PluginContext, Reaper, RegisteredAction,
-//! };
-//! use reaper_macros::reaper_extension_plugin;
+//! use rea_rs::{PluginContext, Reaper, RegisteredAccel, Timer};
+//! use rea_rs_macros::reaper_extension_plugin;
 //! use std::error::Error;
 //!
 //! #[derive(Debug)]
 //! struct Listener {
-//!     action: RegisteredAction,
+//!     action: RegisteredAccel,
 //! }
 //!
 //! // Full list of function larger.
-//! impl ControlSurface for Listener {
-//!     fn run(&mut self) {
+//! impl Timer for Listener {
+//!     fn run(&mut self) -> Result<(), Box<dyn Error>> {
 //!         Reaper::get().perform_action(self.action.command_id, 0, None);
+//!         Ok(())
 //!     }
+//!     fn id_string(&self) -> String {"test listener".to_string()}
 //! }
 //!
 //! fn my_action_func(_flag: i32) -> Result<(), Box<dyn Error>> {
@@ -102,12 +85,10 @@
 //!         "description",
 //!         my_action_func,
 //!         // Only type currently supported
-//!         ActionKind::NotToggleable,
+//!         None
 //!     )?;
 //!
-//!     reaper
-//!         .medium_session_mut()
-//!         .plugin_register_add_csurf_inst(Box::new(Listener { action })).unwrap();
+//!     reaper.register_timer(Box::new(Listener{action}));
 //!     Ok(())
 //! }
 //! ```
@@ -169,11 +150,13 @@
 //!
 //! Enjoy the coding!
 
-pub use reaper_low::PluginContext;
-pub use reaper_medium::ControlSurface;
+pub use rea_rs_low::PluginContext;
 
 pub mod reaper;
 pub use reaper::*;
+
+pub mod ptr_wrappers;
+pub mod reaper_pointer;
 
 pub mod simple_functions;
 pub use simple_functions::*;
@@ -191,6 +174,7 @@ pub mod misc_enums;
 pub use misc_enums::*;
 
 pub mod errors;
+pub mod keys;
 
 pub mod misc_types;
 pub use misc_types::*;

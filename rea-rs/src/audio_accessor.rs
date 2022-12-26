@@ -1,24 +1,22 @@
 use std::marker::PhantomData;
 
-use reaper_medium;
-
 use crate::{
     errors::{ReaperError, ReaperResult},
-    KnowsProject, Mutable, Position, ProbablyMutable, Reaper, SampleAmount,
-    WithReaperPtr,
+    ptr_wrappers, KnowsProject, Mutable, Position, ProbablyMutable, Reaper,
+    SampleAmount, WithReaperPtr,
 };
 
 #[derive(Debug, PartialEq)]
 pub struct AudioAccessor<'a, T: KnowsProject, P: ProbablyMutable> {
-    ptr: reaper_medium::AudioAccessor,
+    ptr: ptr_wrappers::AudioAccessor,
     parent: &'a T,
     should_check: bool,
     phantom: PhantomData<P>,
 }
-impl<'a, T: KnowsProject, P: ProbablyMutable> WithReaperPtr<'a>
+impl<'a, T: KnowsProject, P: ProbablyMutable> WithReaperPtr
     for AudioAccessor<'a, T, P>
 {
-    type Ptr = reaper_medium::AudioAccessor;
+    type Ptr = ptr_wrappers::AudioAccessor;
     fn get_pointer(&self) -> Self::Ptr {
         self.ptr
     }
@@ -38,7 +36,7 @@ impl<'a, T: KnowsProject, P: ProbablyMutable> WithReaperPtr<'a>
     }
 }
 impl<'a, T: KnowsProject, P: ProbablyMutable> AudioAccessor<'a, T, P> {
-    pub fn new(parent: &'a T, ptr: reaper_medium::AudioAccessor) -> Self {
+    pub fn new(parent: &'a T, ptr: ptr_wrappers::AudioAccessor) -> Self {
         Self {
             ptr,
             parent,

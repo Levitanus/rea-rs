@@ -16,7 +16,7 @@ Item, [AudioAccessor](https://levitanus.github.io/rea-rs-doc/rea_rs/audio_access
 It should also be possible to use from VST Plugin, but this has not yet
 been tested at all.
 
-Almost everything needed to communicate to crate is re-exported (like [reaper_medium](https://levitanus.github.io/rea-rs-doc/reaper_medium/index.html) and [reaper_low](https://levitanus.github.io/rea-rs-doc/reaper_low/index.html) types), but for comfortably making extension-plugin entry-point it's better to also use reaper-macros dependency:
+Almost everything needed to communicate to crate is re-exported (like [reaper_medium](https://levitanus.github.io/rea-rs-doc/reaper_medium/index.html) and [rea_rs_low](https://levitanus.github.io/rea-rs-doc/rea_rs_low/index.html) types), but for comfortably making extension-plugin entry-point it's better to also use reaper-macros dependency:
 
 ```toml
 [dependencies]
@@ -25,24 +25,22 @@ reaper-macros = {git = "https://github.com/Levitanus/reaper-rs", branch = "stabl
 
 Until there is no new version of `reaper-rs` which differs from the current master branch a lot, this is the dependency list I highly recommend:
 
+These are the dependencies:
+
 ```toml
 [dependencies]
-rea-rs = {git = "https://github.com/Levitanus/rea-rs"}
-reaper-low = "0.1.0"
-reaper-macros = "0.1.0"
-reaper-medium = "0.1.0"
-[patch.crates-io]
-reaper-low = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
-reaper-macros = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
-reaper-medium = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
+rea-rs = "0.1.1"
+rea-rs-low = "0.1.0" // optional
+rea-rs-macros = "0.1.0"
 ```
 
 But, actually, all medium- and low-level functionality is still existing in the [Reaper](https://levitanus.github.io/rea-rs-doc/rea_rs/reaper/struct.Reaper.html) object. Just use `Reaper::low`, `Reaper::medium` and `Reaper::medium_session`. The Common entry point should look like this:
 
 ```rust
 use rea_rs::{errors::ReaperResult, ActionKind, Reaper, PluginContext};
-use reaper_macros::reaper_extension_plugin;
+use rea_rs_macros::reaper_extension_plugin;
 use std::error::Error;
+
 #[reaper_extension_plugin]
 fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
     Reaper::load(context);
@@ -53,32 +51,37 @@ fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
 }
 ```
 
-Since, there are not many things to be done at the start time of Reaper, there are two common ways to invoke the code: Actions and `ControlSurface`.
+Since, there are not many things to be done at the start time of Reaper, there are two common ways to invoke the code: Actions and `Timer`.
 
 ```rust
-use rea_rs::{
-ActionKind, ControlSurface, PluginContext, Reaper, RegisteredAction,
-};
-use reaper_macros::reaper_extension_plugin;
+use rea_rs::{PluginContext, Reaper, RegisteredAccel, Timer};
+use rea_rs_macros::reaper_extension_plugin;
 use std::error::Error;
+
 #[derive(Debug)]
 struct Listener {
-    action: RegisteredAction,
+    action: RegisteredAccel,
 }
+
 // Full list of function larger.
-impl ControlSurface for Listener {
-    fn run(&mut self) {
+impl Timer for Listener {
+    fn run(&mut self) -> Result<(), Box<dyn Error>> {
         Reaper::get().perform_action(self.action.command_id, 0, None);
+        Ok(())
     }
+    fn id_string(&self) -> String {"test listener".to_string()}
 }
+
 fn my_action_func(_flag: i32) -> Result<(), Box<dyn Error>> {
     Reaper::get().show_console_msg("running");
     Ok(())
 }
+
 #[reaper_extension_plugin]
 fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
     Reaper::load(context);
     let reaper = Reaper::get_mut();
+
     let action = reaper.register_action(
         // This will be capitalized and used as action ID in action window
         "command_name",
@@ -86,11 +89,10 @@ fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
         "description",
         my_action_func,
         // Only type currently supported
-        ActionKind::NotToggleable,
+        None
     )?;
-    reaper
-        .medium_session_mut()
-        .plugin_register_add_csurf_inst(Box::new(Listener { action })).unwrap();
+
+    reaper.register_timer(Box::new(Listener{action}));
     Ok(())
 }
 ```

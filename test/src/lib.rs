@@ -12,14 +12,15 @@ use rea_rs::{
     EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo, ExtState,
     GenericSend, GenericSendMut, HardwareSocket, Immutable, ItemFade,
     MarkerRegionInfo, MessageBoxValue, Mutable, Pan, PanLaw, Pitch, PlayRate,
-    Position, Project, RazorEdit, Reaper, RecInput, RecMode, RecMonitoring,
-    RecOutMode, SampleAmount, SendDestChannels, SendMIDIProps, SendMode,
-    SendSourceChannels, SoloMode, TakeChannelMode, TakePitchMode, TimeMode,
-    Track, TrackFolderState, TrackGroupParam, TrackPan, TrackPerformanceFlags,
-    TrackPlayOffset, TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX,
-    GUID,
+    PluginContext, Position, Project, RazorEdit, Reaper, RecInput, RecMode,
+    RecMonitoring, RecOutMode, SampleAmount, SendDestChannels, SendMIDIProps,
+    SendMode, SendSourceChannels, SoloMode, TakeChannelMode, TakePitchMode,
+    TimeMode, Track, TrackFolderState, TrackGroupParam, TrackPan,
+    TrackPerformanceFlags, TrackPlayOffset, TrackSend, UndoFlags, VUMode,
+    Volume, WithReaperPtr, FX, GUID,
 };
-use reaper_test::{TestStep, TestStepResult};
+use rea_rs_macros::reaper_extension_plugin;
+use rea_rs_test::{TestStep, TestStepResult};
 use std::collections::HashMap;
 use std::fs::canonicalize;
 use std::iter;
@@ -28,11 +29,11 @@ use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::Duration;
 
-#[reaper_macros::reaper_extension_plugin]
-fn test_main(context: reaper_test::PluginContext) -> TestStepResult {
+#[reaper_extension_plugin]
+fn test_main(context: PluginContext) -> TestStepResult {
     Reaper::load(context);
     let test =
-        reaper_test::ReaperTest::setup(context, "rea-rs integration test");
+        rea_rs_test::ReaperTest::setup(context, "rea-rs integration test");
     let steps = create_test_steps();
     for step in steps {
         test.push_test_step(step);
@@ -42,7 +43,7 @@ fn test_main(context: reaper_test::PluginContext) -> TestStepResult {
 
 pub fn step<Op>(name: impl Into<String>, operation: Op) -> TestStep
 where
-    Op: Fn(&reaper_test::ReaperTest) -> TestStepResult + 'static,
+    Op: Fn(&mut Reaper) -> TestStepResult + 'static,
 {
     TestStep::new(name.into(), Box::new(operation))
 }
@@ -78,37 +79,26 @@ fn global_instances() -> TestStep {
     step("Global instances", |_| -> TestStepResult {
         // Sizes
         use std::mem::size_of_val;
-        let medium_session = Reaper::get().medium_session();
-        let medium_reaper = Reaper::get().medium();
         Reaper::get().show_console_msg(format!(
             "\
             Struct sizes in byte:\n\
             - reaper_high::Reaper: {high_reaper}\n\
-            - reaper_medium::ReaperSession: {medium_session}\n\
-            - reaper_medium::Reaper: {medium_reaper}\n\
-            - reaper_low::Reaper: {low_reaper}\n\
+            - rea_rs_low::Reaper: {low_reaper}\n\
             ",
             high_reaper = size_of_val(Reaper::get()),
-            medium_session = size_of_val(&medium_session),
-            medium_reaper = size_of_val(medium_reaper),
-            low_reaper = size_of_val(medium_reaper.low()),
+            low_reaper = size_of_val(Reaper::get().low()),
         ));
         // Low-level REAPER
-        reaper_low::Reaper::make_available_globally(*medium_reaper.low());
-        // reaper_low::Reaper::make_available_globally(*medium_reaper.low());
-        let low = reaper_low::Reaper::get();
-        println!("reaper_low::Reaper {:?}", &low);
+        rea_rs_low::Reaper::make_available_globally(*Reaper::get().low());
+        // rea_rs_low::Reaper::make_available_globally(*medium_reaper.low());
+        let low = rea_rs_low::Reaper::get();
+        println!("rea_rs_low::Reaper {:?}", &low);
         unsafe {
             low.ShowConsoleMsg(
                 c_str!("- Hello from low-level API\n").as_ptr(),
             );
         }
 
-        // Medium-level REAPER
-        reaper_medium::Reaper::make_available_globally(medium_reaper.clone());
-        // reaper_medium::Reaper::make_available_globally(medium_reaper.
-        // clone());
-        medium_reaper.show_console_msg("- Hello from medium-level API\n");
         Ok(())
     })
 }
@@ -125,7 +115,7 @@ fn action() -> TestStep {
                 send.send(true)?;
                 Ok(())
             },
-            rea_rs::ActionKind::NotToggleable,
+            None,
         )?;
         debug!("Try perform action with id: {:?}", action.command_id);
         rpr.perform_action(action.command_id, 0, None);

@@ -9,11 +9,11 @@ use std::{
 
 use bitflags::bitflags;
 use int_enum::IntEnum;
-use reaper_medium::{MediaItem, MediaTrack, TrackEnvelope};
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
     errors::{ReaperError, ReaperResult, ReaperStaticResult},
+    ptr_wrappers::{MediaItem, MediaTrack, TrackEnvelope},
     utils::{
         as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
         WithNull,
@@ -37,7 +37,7 @@ pub struct Track<'a, T: ProbablyMutable> {
     pub info_buf_size: usize,
     phantom_mut: PhantomData<T>,
 }
-impl<'a, T: ProbablyMutable> WithReaperPtr<'a> for Track<'a, T> {
+impl<'a, T: ProbablyMutable> WithReaperPtr for Track<'a, T> {
     type Ptr = MediaTrack;
     fn get_pointer(&self) -> Self::Ptr {
         self.ptr

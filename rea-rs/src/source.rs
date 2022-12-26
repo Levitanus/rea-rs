@@ -1,9 +1,9 @@
 use crate::{
+    ptr_wrappers::PcmSource,
     utils::{as_string_mut, make_c_string_buf},
-    KnowsProject, Mutable, Position, ProbablyMutable, Project, Reaper, Take,
-    WithReaperPtr,
+    KnowsProject, Mutable, Position, ProbablyMutable, Project, ProjectContext,
+    Reaper, Take, WithReaperPtr,
 };
-use reaper_medium::PcmSource;
 use serde_derive::{Deserialize, Serialize};
 use std::{mem::MaybeUninit, path::PathBuf, ptr::NonNull, time::Duration};
 
@@ -13,7 +13,7 @@ pub struct Source<'a, T: ProbablyMutable> {
     ptr: PcmSource,
     should_check: bool,
 }
-impl<'a, T: ProbablyMutable> WithReaperPtr<'a> for Source<'a, T> {
+impl<'a, T: ProbablyMutable> WithReaperPtr for Source<'a, T> {
     type Ptr = PcmSource;
     fn get_pointer(&self) -> Self::Ptr {
         self.ptr
@@ -127,9 +127,7 @@ impl<'a, T: ProbablyMutable> Source<'a, T> {
         };
         match NonNull::new(ptr) {
             None => None,
-            Some(ptr) => {
-                Project::new(reaper_medium::ProjectContext::Proj(ptr)).into()
-            }
+            Some(ptr) => Project::new(ProjectContext::Proj(ptr)).into(),
         }
     }
 

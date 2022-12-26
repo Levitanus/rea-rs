@@ -1,2 +1,4 @@
 #[test]
-fn test() {}
+fn test() {
+    println!("{}|{}={}", 0x10, 0x8, 0x10 | 0x08);
+}

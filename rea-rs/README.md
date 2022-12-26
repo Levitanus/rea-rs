@@ -16,7 +16,7 @@ Item, [AudioAccessor](https://levitanus.github.io/rea-rs-doc/rea_rs/audio_access
 It should also be possible to use from VST Plugin, but this has not yet
 been tested at all.
 
-Almost everything needed to communicate to crate is re-exported (like [reaper_medium](https://levitanus.github.io/rea-rs-doc/reaper_medium/index.html) and [reaper_low](https://levitanus.github.io/rea-rs-doc/reaper_low/index.html) types), but for comfortably making extension-plugin entry-point it's better to also use reaper-macros dependency:
+Almost everything needed to communicate to crate is re-exported (like [reaper_medium](https://levitanus.github.io/rea-rs-doc/reaper_medium/index.html) and [rea_rs_low](https://levitanus.github.io/rea-rs-doc/rea_rs_low/index.html) types), but for comfortably making extension-plugin entry-point it's better to also use reaper-macros dependency:
 
 ```toml
 [dependencies]
@@ -41,7 +41,7 @@ But, actually, all medium- and low-level functionality is still existing in the 
 
 ```rust
 use rea_rs::{errors::ReaperResult, ActionKind, Reaper, PluginContext};
-use reaper_macros::reaper_extension_plugin;
+use rea_rs_macros::reaper_extension_plugin;
 use std::error::Error;
 #[reaper_extension_plugin]
 fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
@@ -59,7 +59,7 @@ Since, there are not many things to be done at the start time of Reaper, there a
 use rea_rs::{
 ActionKind, ControlSurface, PluginContext, Reaper, RegisteredAction,
 };
-use reaper_macros::reaper_extension_plugin;
+use rea_rs_macros::reaper_extension_plugin;
 use std::error::Error;
 #[derive(Debug)]
 struct Listener {

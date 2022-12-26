@@ -1,20 +1,58 @@
+use std::ptr::null_mut;
+
 use bitflags::bitflags;
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
     errors::{ReaperError, ReaperResult},
+    ptr_wrappers::ReaProject,
     HardwareSocket, Reaper,
 };
 
+/// Determines the project in which a function should be executed.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub enum ProjectContext {
+    /// Project in the currently open tab.
+    CurrentProject,
+    /// A particular project, not necessarily the one in the currently open
+    /// tab.
+    Proj(ReaProject),
+}
+
+// TODO-medium Maybe change strategy and make ReaProject a newtype that
+// implements Send?
+unsafe impl Send for ProjectContext {}
+
+impl ProjectContext {
+    /// Converts this value to a raw pointer as expected by the low-level API.
+    pub fn to_raw(self) -> *mut rea_rs_low::raw::ReaProject {
+        use ProjectContext::*;
+        match self {
+            Proj(p) => p.as_ptr(),
+            CurrentProject => null_mut(),
+        }
+    }
+}
+
 pub enum Section {
     Main,
+    MainAlt,
+    MediaExplorer,
+    MidiEditor,
+    MidiEventListEditor,
+    MidiInlineEditor,
     Id(u32),
 }
 impl Section {
     pub fn id(&self) -> u32 {
         match self {
             Self::Main => 0,
+            Self::MainAlt => 100,
+            Self::MediaExplorer => 32063,
+            Self::MidiEditor => 32060,
+            Self::MidiEventListEditor => 32061,
+            Self::MidiInlineEditor => 32062,
             Self::Id(id) => *id,
         }
     }

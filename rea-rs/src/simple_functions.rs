@@ -1,12 +1,15 @@
 use crate::{
     errors::{ReaperError, ReaperResult},
-    utils::{as_c_char, as_mut_i8, as_string, make_string_buf},
+    misc_enums::ProjectContext,
+    reaper_pointer::ReaperPointer,
+    utils::{
+        as_c_char, as_c_str, as_mut_i8, as_string, make_string_buf, WithNull,
+    },
     AutomationMode, CommandId, MessageBoxType, MessageBoxValue, Project,
     Reaper, Section, UndoFlags,
 };
 use int_enum::IntEnum;
 use log::debug;
-use reaper_medium::{ProjectContext, ReaperPointer};
 use std::{
     collections::HashMap, error::Error, ffi::CString, fs::canonicalize,
     marker::PhantomData, path::Path, ptr::NonNull,
@@ -21,7 +24,10 @@ impl Reaper {
     pub fn show_console_msg(&self, msg: impl Into<String>) {
         let mut msg: String = msg.into();
         msg.push_str("\n");
-        self.medium().show_console_msg(msg);
+        unsafe {
+            self.low()
+                .ShowConsoleMsg(as_c_str(msg.with_null()).as_ptr())
+        };
     }
 
     pub fn clear_console(&self) {
@@ -49,11 +55,13 @@ impl Reaper {
             }
             Some(pr) => pr,
         };
-        self.medium().main_on_command_ex(
-            action_id.into(),
-            flag,
-            project.context(),
-        )
+        unsafe {
+            self.low().Main_OnCommandEx(
+                action_id.get() as i32,
+                flag,
+                project.context().to_raw(),
+            )
+        }
     }
 
     /// Get project from the current tab.
@@ -437,11 +445,14 @@ impl Reaper {
     ///
     /// Returns true if the pointer is a valid object
     /// of the correct type in the current project.
-    pub fn validate_ptr<'a>(
-        &self,
-        pointer: impl Into<ReaperPointer<'a>>,
-    ) -> bool {
-        self.medium().validate_ptr(pointer)
+    pub fn validate_ptr<'a>(&self, pointer: impl Into<ReaperPointer>) -> bool {
+        let pointer: ReaperPointer = pointer.into();
+        unsafe {
+            self.low().ValidatePtr(
+                pointer.ptr_as_void(),
+                pointer.key_into_raw().as_ptr(),
+            )
+        }
     }
 
     /// Checks if the given pointer is still valid.
@@ -449,13 +460,11 @@ impl Reaper {
     /// # Example
     ///
     /// ```no_run
-    /// # let session = reaper_medium::ReaperSession::default();
-    /// use reaper_medium::ProjectContext::CurrentProject;
-    ///
-    /// let track = session.reaper().get_track(CurrentProject, 0)
-    ///     .ok_or("No track")?;
-    /// let track_is_valid = session.reaper()
-    ///     .validate_ptr_2(CurrentProject, track);
+    /// use rea_rs::{Reaper, ProjectContext, WithReaperPtr};
+    /// let rpr = Reaper::get();
+    /// let pr = rpr.current_project();
+    /// let track = pr.get_track(0).ok_or("No track")?;
+    /// let track_is_valid = rpr.validate_ptr_2(&pr, track.get_pointer());
     /// assert!(track_is_valid);
     /// # Ok::<_, Box<dyn std::error::Error>>(())
     /// ```
@@ -466,9 +475,16 @@ impl Reaper {
     pub fn validate_ptr_2<'a>(
         &self,
         project: &Project,
-        pointer: impl Into<ReaperPointer<'a>>,
+        pointer: impl Into<ReaperPointer>,
     ) -> bool {
-        self.medium().validate_ptr_2(project.context(), pointer)
+        let pointer: ReaperPointer = pointer.into();
+        unsafe {
+            self.low().ValidatePtr2(
+                project.context().to_raw(),
+                pointer.ptr_as_void(),
+                pointer.key_into_raw().as_ptr(),
+            )
+        }
     }
 }
 
@@ -476,12 +492,12 @@ impl Reaper {
 ///
 /// Should be created by [`Reaper::iter_projects()`]
 pub struct ProjectIterator {
-    low: reaper_low::Reaper,
+    low: rea_rs_low::Reaper,
     index: i32,
     phantom: PhantomData<Project>,
 }
 impl ProjectIterator {
-    fn new(low: reaper_low::Reaper) -> Self {
+    fn new(low: rea_rs_low::Reaper) -> Self {
         Self {
             low,
             index: 0,

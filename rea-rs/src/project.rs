@@ -1,19 +1,18 @@
 pub use crate::utils::WithReaperPtr;
 use crate::{
     errors::{ReaperError, ReaperResult},
+    ptr_wrappers::{MediaItem, MediaTrack, ReaProject},
     utils::{
         as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
         make_string_buf, WithNull,
     },
     Color, CommandId, Immutable, Item, MarkerRegionInfo, MarkerRegionIterator,
-    Mutable, PlayRate, Position, Reaper, TimeRange, TimeRangeKind,
-    TimeSignature, Track, UndoFlags,
+    Mutable, PlayRate, Position, ProjectContext, Reaper, TimeRange,
+    TimeRangeKind, TimeSignature, Track, UndoFlags,
 };
 use c_str_macro::c_str;
 use int_enum::IntEnum;
 use log::{debug, warn};
-pub use reaper_medium::ProjectContext;
-use reaper_medium::{MediaItem, MediaTrack};
 use serde_derive::{Deserialize, Serialize};
 use std::{
     ffi::CString, mem::MaybeUninit, path::PathBuf, ptr::NonNull,
@@ -30,8 +29,8 @@ pub struct Project {
     checked: bool,
     info_buf_size: usize,
 }
-impl<'a> WithReaperPtr<'a> for Project {
-    type Ptr = reaper_medium::ReaProject;
+impl<'a> WithReaperPtr for Project {
+    type Ptr = ReaProject;
     fn get_pointer(&self) -> Self::Ptr {
         unsafe { NonNull::new_unchecked(self.context.to_raw()) }
     }

@@ -1,11 +1,11 @@
 use crate::{
     errors::{ReaperError, ReaperStaticResult},
+    ptr_wrappers::TrackEnvelope,
     utils::{as_c_str, as_string_mut, make_c_string_buf, WithNull},
     GetLength, KnowsProject, Mutable, Position, ProbablyMutable, Reaper,
     WithReaperPtr, GUID,
 };
 use int_enum::IntEnum;
-use reaper_medium::TrackEnvelope;
 use serde_derive::{Deserialize, Serialize};
 use std::{
     ffi::CString, marker::PhantomData, mem::MaybeUninit, time::Duration,
@@ -27,7 +27,7 @@ pub struct Envelope<'a, P: KnowsProject, T: ProbablyMutable> {
     should_check: bool,
     phantom: PhantomData<T>,
 }
-impl<'a, P: KnowsProject, T: ProbablyMutable> WithReaperPtr<'a>
+impl<'a, P: KnowsProject, T: ProbablyMutable> WithReaperPtr
     for Envelope<'a, P, T>
 {
     type Ptr = TrackEnvelope;

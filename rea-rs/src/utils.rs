@@ -1,8 +1,8 @@
 use crate::{
     errors::{ReaperError, ReaperResult},
+    reaper_pointer::ReaperPointer,
     Project, Reaper,
 };
-use reaper_medium::ReaperPointer;
 use std::{
     ffi::{c_char, CStr, CString},
     str::Utf8Error,
@@ -104,8 +104,8 @@ pub fn make_c_string_buf(size: usize) -> CString {
 /// has to return `true`.
 /// - `get()` call should invoke either `require_valid`
 /// or `require_valid_2`.
-pub trait WithReaperPtr<'a> {
-    type Ptr: Into<ReaperPointer<'a>>;
+pub trait WithReaperPtr {
+    type Ptr: Into<ReaperPointer>;
     /// Get underlying ReaperPointer.
     fn get_pointer(&self) -> Self::Ptr;
     /// Get underlying ReaperPointer with validity check.

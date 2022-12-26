@@ -6,6 +6,7 @@ use std::{
 
 use crate::{
     errors::{ReaperError, ReaperStaticResult},
+    ptr_wrappers::{self, MediaItemTake, PcmSource},
     utils::{
         as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
         WithNull,
@@ -15,7 +16,6 @@ use crate::{
     Project, Reaper, Source, TakeFX, Volume, WithReaperPtr, FX, GUID,
 };
 use int_enum::IntEnum;
-use reaper_medium::{MediaItemTake, PcmSource};
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq)]
@@ -42,7 +42,7 @@ impl<'a, T: ProbablyMutable> KnowsProject for Take<'a, T> {
         self.item.project()
     }
 }
-impl<'a, T: ProbablyMutable> WithReaperPtr<'a> for Take<'a, T> {
+impl<'a, T: ProbablyMutable> WithReaperPtr for Take<'a, T> {
     type Ptr = MediaItemTake;
     fn get_pointer(&self) -> Self::Ptr {
         self.ptr
@@ -306,7 +306,7 @@ impl<'a> Take<'a, Mutable> {
                 .low()
                 .CreateTakeAudioAccessor(self.get().as_ptr())
         };
-        match reaper_medium::AudioAccessor::new(ptr) {
+        match ptr_wrappers::AudioAccessor::new(ptr) {
             None => panic!("Can not create audio accessor"),
             Some(ptr) => AudioAccessor::new(self, ptr),
         }

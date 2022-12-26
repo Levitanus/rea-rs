@@ -1,6 +1,8 @@
 [workspace]
 members = [
   "rea-rs",
+  "low",
+  "macros",
   "test",
 ]
 
@@ -11,15 +13,7 @@ c_str_macro = "1.0.2"
 env_logger = "0.10"
 int-enum = "0.5"
 log = "0.4"
-reaper-low = "0.1.0"
-reaper-macros = "0.1.0"
-reaper-medium = "0.1.0"
 rmp-serde = "1.1"
 serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"
-
-[patch.crates-io]
-reaper-low = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
-reaper-macros = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
-reaper-medium = {git = "https://github.com/Levitanus/reaper-rs", branch = "stable_for_rea-rs"}
