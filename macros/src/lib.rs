@@ -12,7 +12,7 @@ use quote::quote;
 /// Macro for easily bootstrapping a REAPER extension plug-in.
 ///
 /// Use the macro like this:
-/// ```no_run
+/// ```ignore
 /// use std::error::Error;
 /// use rea_rs_macros::reaper_extension_plugin;
 /// use rea_rs_low::PluginContext;

@@ -2,8 +2,10 @@
 authors = ["Timofei Kazantse aka Levitanus <pianoist@ya.ru>"]
 description = "A rusty version of ReaScript API"
 edition = "2021"
+keywords = ["reaper", "daw", "plug-in", "audio", "midi"]
+license = "MIT"
 name = "rea-rs"
-readme = "README.md"
+readme = "../README.md"
 repository = "https://github.com/Levitanus/rea-rs"
 version = "0.1.1"
 
