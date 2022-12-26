@@ -7,6 +7,7 @@ edition = "2021"
 include = [
   "/lib/reaper/reaper_plugin.h",
   "/lib/WDL/WDL/swell/*.h",
+  "/lib/WDL/WDL",
   "/src",
   "/tests",
   "/build.rs",
@@ -16,7 +17,7 @@ include = [
 keywords = ["reaper", "daw", "plug-in", "audio", "midi"]
 license = "MIT"
 name = "rea-rs-low"
-readme = "../../README.md"
+readme = "../README.md"
 repository = "https://github.com/helgoboss/reaper-rs"
 version = "0.1.1"
 
