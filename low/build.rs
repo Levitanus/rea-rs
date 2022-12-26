@@ -1,16 +1,19 @@
-#[cfg(feature = "generate-stage-one")]
+use std::path::PathBuf;
+// #[cfg(feature = "generate-stage-one")]
 use std::process::Command;
 
 /// Executed whenever Cargo builds reaper-rs
 fn main() {
     #[cfg(target_family = "unix")]
-    #[cfg(feature = "generate-stage-one")]
-    Command::new("git")
-        .arg("clone")
-        .arg("https://github.com/justinfrankel/WDL.git")
-        .arg("lib/WDL")
-        .output()
-        .expect("Can not clone WDL");
+    // #[cfg(feature = "generate-stage-one")]
+    if !PathBuf::from("/lib/WDL").exists() {
+        Command::new("git")
+            .arg("clone")
+            .arg("https://github.com/justinfrankel/WDL.git")
+            .arg("lib/WDL")
+            .output()
+            .expect("Can not clone WDL");
+    }
     #[cfg(feature = "generate-stage-one")]
     codegen::stage_one::generate_bindings();
 
