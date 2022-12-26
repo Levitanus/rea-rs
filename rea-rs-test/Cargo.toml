@@ -1,0 +1,21 @@
+[package]
+authors = ["Benjamin Klum <benjamin.klum@helgoboss.org>", "Timofei Kazantsev aka Levitanus <pianoist@ya.ru>"]
+description = "Library for testing reaper extensions within real REAPER instance."
+edition = "2021"
+name = "rea-rs-test"
+readme = "README.md"
+version = "0.1.1"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+env_logger = "0.10"
+log = "0.4"
+rea-rs = {version = "0.1.1", path = "../rea-rs"}
+rea-rs-low = {version = "0.1.1", path = "../low"}
+
+fs_extra = "1.2.0"
+reqwest = {version = "0.11", features = ["blocking"]}
+tar = "0.4.26"
+wait-timeout = "0.1.5"
+xz2 = "0.1"

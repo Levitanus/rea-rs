@@ -1,0 +1,17 @@
+[package]
+edition = "2021"
+name = "reaper-test-extension-plugin"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+env_logger = "0.10"
+log = "0.4"
+rea-rs = {version = "0.1.1", path = "../../rea-rs"}
+rea-rs-low = {version = "0.1.1", path = "../../low"}
+rea-rs-macros = {version = "0.1.1", path = "../../macros"}
+rea-rs-test = {version = "0.1.1", path = "../"}
+
+[lib]
+crate-type = ["cdylib"]
+name = "reaper_test_extension_plugin"
