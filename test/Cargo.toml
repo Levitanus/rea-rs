@@ -12,7 +12,7 @@ log = "0.4"
 rea-rs = {version = "0.1.1", path = "../rea-rs"}
 rea-rs-low = {version = "0.1.1", path = "../low"}
 rea-rs-macros = {version = "0.1.1", path = "../macros"}
-rea-rs-test = {version = "0.1.1", path = "../../reaper-test"}
+rea-rs-test = {version = "0.1.1", path = "../rea-rs-test"}
 
 [lib]
 crate-type = ["cdylib"]

@@ -4,6 +4,7 @@ members = [
   "low",
   "macros",
   "test",
+  "rea-rs-test",
 ]
 
 [workspace.dependencies]
