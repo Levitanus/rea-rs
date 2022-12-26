@@ -143,7 +143,6 @@ impl Timer for IntegrationTimer {
 }
 
 pub struct ReaperTest {
-    reaper: Reaper,
     steps: Vec<TestStep>,
     is_integration_test: bool,
 }
@@ -161,22 +160,19 @@ impl ReaperTest {
         context: PluginContext,
         action_name: &'static str,
     ) -> &'static mut Self {
-        let reaper = Reaper::load(context);
-        let mut instance = Self {
-            reaper,
+        let reaper = Reaper::init_global(context);
+        let instance = Self {
             steps: Vec::new(),
             is_integration_test: std::env::var("RUN_REAPER_INTEGRATION_TEST")
                 .is_ok(),
         };
         let integration = instance.is_integration_test;
-        instance
-            .reaper
+        reaper
             .register_action(action_name, action_name, test, None)
             .expect("Can not reigister test action");
         Self::make_available_globally(instance);
-        let obj = ReaperTest::get_mut();
         if integration {
-            obj.reaper.register_timer(Box::new(IntegrationTimer {}))
+            reaper.register_timer(Box::new(IntegrationTimer {}))
         }
         ReaperTest::get_mut()
     }
@@ -218,8 +214,7 @@ impl ReaperTest {
                 .iter()
                 .map(|step| -> Result<(), Box<dyn Error>> {
                     println!("Testing step: {}", step.name);
-                    let rpr = &mut ReaperTest::get_mut().reaper;
-                    (step.operation)(rpr)?;
+                    (step.operation)(Reaper::get_mut())?;
                     Ok(())
                 })
                 .count();

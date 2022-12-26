@@ -31,7 +31,6 @@ use std::time::Duration;
 //
 #[reaper_extension_plugin]
 fn test_main(context: PluginContext) -> TestStepResult {
-    Reaper::load(context);
     let test =
         rea_rs_test::ReaperTest::setup(context, "rea-rs integration test");
     let steps = create_test_steps();
