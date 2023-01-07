@@ -214,7 +214,7 @@ trait ShortMessage: MidiMessage {
     fn message() -> u8;
 
     fn channel_private(&self) -> u8 {
-        self.borrow_raw()[0] - Self::message()
+        self.borrow_raw()[0] - Self::message() + 1
     }
     fn msg2(&self) -> u8 {
         self.borrow_raw()[1]
@@ -223,7 +223,7 @@ trait ShortMessage: MidiMessage {
         self.borrow_raw()[2]
     }
     fn set_channel_private(&mut self, value: u8) {
-        self.borrow_raw_mut()[0] = value + Self::message()
+        self.borrow_raw_mut()[0] = value - 1 + Self::message()
     }
     fn set_msg2(&mut self, value: u8) {
         self.borrow_raw_mut()[1] = value
@@ -372,7 +372,7 @@ pub struct NoteOnMessage {
 impl NoteOnMessage {
     pub fn new(channel: u8, note: u8, velocity: u8) -> Self {
         Self {
-            buf: vec![0x90 + channel, note, velocity],
+            buf: vec![0x90 + channel - 1, note, velocity],
         }
     }
     pub fn note(&self) -> u8 {
@@ -434,7 +434,7 @@ pub struct NoteOffMessage {
 impl NoteOffMessage {
     pub fn new(channel: u8, note: u8, velocity: u8) -> Self {
         Self {
-            buf: vec![0x80 + channel, note, velocity],
+            buf: vec![0x80 + channel - 1, note, velocity],
         }
     }
     pub fn note(&self) -> u8 {
@@ -1078,6 +1078,7 @@ pub struct MidiNoteEvent {
     pub end_in_ppq: u32,
     pub is_selected: bool,
     pub is_muted: bool,
+    /// 1-based
     pub channel: u8,
     pub note: u8,
     pub on_velocity: u8,
@@ -1726,23 +1727,28 @@ impl<T: Iterator<Item = MidiEvent<RawMidiMessage>>> Iterator
         match NoteOffMessage::from_raw(raw_msg) {
             None => return self.next(),
             Some(msg) => {
-                let off = MidiEvent::with_new_message(item, msg);
-                let on = self
-                    .note_ons
-                    .iter()
-                    .position(|i| {
-                        i.message().note() == off.message().note()
-                            && i.message().channel_private()
-                                == off.message().channel_private()
-                    })
-                    .expect(
-                        format!(
-                            "There is no note on for note_off: {:#?}",
-                            off.message()
-                        )
-                        .as_str(),
-                    );
-                let on = self.note_ons.swap_remove(on);
+                let off =
+                    MidiEvent::with_new_message(item.clone(), msg.clone());
+                let on = match self.note_ons.iter().position(|i| {
+                    i.message().note() == off.message().note()
+                        && i.message().channel_private()
+                            == off.message().channel_private()
+                }) {
+                    Some(on) => self.note_ons.swap_remove(on),
+                    None => {
+                        eprintln!("No Note On for note-off: {:?}", off);
+                        let mut on = MidiEvent::with_new_message(
+                            item,
+                            NoteOnMessage::new(
+                                msg.channel_private(),
+                                msg.note(),
+                                msg.velocity(),
+                            ),
+                        );
+                        on.set_ppq_position(0);
+                        on
+                    }
+                };
                 Some(MidiNoteEvent::from_raw_parts(on, off))
             }
         }
