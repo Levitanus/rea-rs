@@ -33,11 +33,11 @@ bitflags! {
 }
 
 /// Represents keyboard keys, independent of the keyboard layout.
+#[allow(non_camel_case_types)]
 #[repr(u32)]
 #[derive(
     Debug, PartialEq, PartialOrd, Ord, Eq, Hash, Copy, Clone, IntEnum,
 )]
-#[allow(non_camel_case_types)]
 pub enum VKeys {
     VK_ADD = raw::VK_ADD,
     VK_BACK = raw::VK_BACK,
@@ -159,5 +159,16 @@ pub struct KeyBinding {
 impl KeyBinding {
     pub fn new(fvirt: FVirt, key: u16) -> Self {
         Self { fvirt, key }
+    }
+}
+
+/// For now — just raw keystroke lParam
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Hash, Copy, Clone)]
+pub struct KeyStroke {
+    pub raw: u32,
+}
+impl From<isize> for KeyStroke {
+    fn from(value: isize) -> Self {
+        Self { raw: value as u32 }
     }
 }

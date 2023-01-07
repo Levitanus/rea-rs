@@ -1,4 +1,7 @@
-use rea_rs_low::{raw, register_plugin_destroy_hook, PluginContext};
+use rea_rs_low::{
+    raw::{self, gaccel_register_t},
+    register_plugin_destroy_hook, PluginContext,
+};
 
 use crate::{errors::ReaperStaticResult, keys::KeyBinding};
 use c_str_macro::c_str;
@@ -63,7 +66,7 @@ pub struct Reaper {
     low: rea_rs_low::Reaper,
     actions: Vec<Action>,
     hook: extern "C" fn(i32, i32) -> bool,
-    accels: Vec<raw::gaccel_register_t>,
+    accels: Vec<Gaccel>,
     timers: HashMap<String, (Instant, Box<dyn Timer>)>,
 }
 impl Reaper {
@@ -103,6 +106,9 @@ impl Reaper {
 
     pub fn low(&self) -> &rea_rs_low::Reaper {
         &self.low
+    }
+    pub fn plugin_context(&self) -> PluginContext {
+        self.low.plugin_context().clone()
     }
 
     /// Gives access to the instance which you made available globally before.
@@ -171,10 +177,10 @@ impl Reaper {
     ) -> RegisteredAccel {
         let kb: Option<KeyBinding> = key_binding.into();
         let low = self.low();
-        let id_string = CString::new(id_string)
+        let id_string = id_string.replace(" ", "_");
+        let id_string = CString::new(id_string.as_str())
             .expect("Can not convert id_string to CString");
-        let desc = CString::new(description)
-            .expect("Can not convert description to CString");
+
         let command_id = unsafe {
             low.plugin_register(
                 c_str!("command_id").as_ptr(),
@@ -193,17 +199,23 @@ impl Reaper {
                 cmd: command_id as u16,
             },
         };
+        // let mut description = description.to_string();
+        let desc = CString::new(description).unwrap();
+        let reg_str = c_str!("gaccel");
         let mut gaccel = raw::gaccel_register_t {
             accel,
-            desc: desc.as_ptr(),
+            desc: desc.as_c_str().as_ptr(),
         };
         unsafe {
             low.plugin_register(
-                c_str!("gaccel").as_ptr(),
+                reg_str.as_ptr(),
                 &mut gaccel as *mut raw::gaccel_register_t as _,
             )
         };
-        self.accels.push(gaccel);
+        self.accels.push(Gaccel {
+            _desc: desc,
+            gaccel,
+        });
         let reg = RegisteredAccel {
             command_id: CommandId::new(command_id as u32),
         };
@@ -246,7 +258,7 @@ impl Drop for Reaper {
             unsafe {
                 low.plugin_register(
                     c_str!("-gaccel").as_ptr(),
-                    accel as *mut raw::gaccel_register_t as _,
+                    &mut accel.gaccel as *mut raw::gaccel_register_t as _,
                 )
             };
         }
@@ -334,4 +346,9 @@ pub enum ActionKind {
 #[derive(Debug, PartialEq, Eq)]
 pub struct RegisteredAccel {
     pub command_id: CommandId,
+}
+
+struct Gaccel {
+    _desc: CString,
+    gaccel: gaccel_register_t,
 }
