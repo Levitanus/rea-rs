@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/rea-rs-macros/0.1.2")]
+#![doc(html_root_url = "https://docs.rs/rea-rs-macros/0.1.3")]
 #![allow(renamed_and_removed_lints)]
 #![deny(broken_intra_doc_links)]
 
@@ -27,17 +27,17 @@ use quote::quote;
 /// ```
 #[proc_macro_attribute]
 pub fn reaper_extension_plugin(
-    _attr: TokenStream,
+    attr: TokenStream,
     input: TokenStream,
 ) -> TokenStream {
     // Parse attributes
-    // let args = syn::parse_macro_input!(attr as syn::AttributeArgs);
-    // let args = match ReaperExtensionPluginMacroArgs::from_list(&args) {
-    //     Ok(v) => v,
-    //     Err(e) => {
-    //         return e.write_errors().into();
-    //     }
-    // };
+    let args = syn::parse_macro_input!(attr as syn::AttributeArgs);
+    let _args = match ReaperExtensionPluginMacroArgs::from_list(&args) {
+        Ok(v) => v,
+        Err(e) => {
+            return e.write_errors().into();
+        }
+    };
     // Parse function which is annotated with that attribute
     let main_function = syn::parse_macro_input!(input as syn::ItemFn);
     // Check if it's a low-level or high-level plug-in.

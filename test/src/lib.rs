@@ -1019,7 +1019,7 @@ fn sends() -> TestStep {
 
         assert_eq!(send.volume(), Volume::from(1.0));
         send.set_volume(Volume::from_db(-20.0))?;
-        assert_eq!(0.1, send.volume().into());
+        assert_eq!(0.1, send.volume().get());
 
         assert_eq!(send.pan(), Pan::from(0.0));
         send.set_pan(-0.5)?;

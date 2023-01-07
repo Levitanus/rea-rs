@@ -1,7 +1,7 @@
 use fs_extra::dir::CopyOptions;
 use std::error::Error;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -76,59 +76,68 @@ impl ReaperVersion {
 
 pub fn run_integration_test(reaper_version: ReaperVersion) {
     env_logger::init();
+    let executable_path = match build_integration_test(reaper_version) {
+        Some(result) => result.expect("Can not build test environment"),
+        None => return (),
+    };
+    let result = run_integration_test_in_reaper(&executable_path);
+    result.expect("Running the integration test in REAPER failed");
+}
+
+pub fn build_integration_test(
+    reaper_version: ReaperVersion,
+) -> Option<Result<PathBuf>> {
     if cfg!(target_family = "windows") {
         println!(
             "REAPER integration tests currently not supported on Windows"
         );
-        return;
+        return None;
     }
     let target_dir_path =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
             .join("../target");
     let reaper_download_dir_path = target_dir_path.join("reaper");
     println!("Running integration test");
-    let result = if cfg!(target_os = "macos") {
-        run_on_macos(
+    let executable_path = if cfg!(target_os = "macos") {
+        build_on_macos(
             &reaper_version,
             &target_dir_path,
             &reaper_download_dir_path,
         )
     } else {
-        run_on_linux(
+        build_on_linux(
             &reaper_version,
             &target_dir_path,
             &reaper_download_dir_path,
         )
     };
-    result.expect("Running the integration test in REAPER failed");
+    Some(executable_path)
 }
 
-fn run_on_linux(
+fn build_on_linux(
     reaper_version: &ReaperVersion,
     target_dir_path: &Path,
     reaper_download_dir_path: &Path,
-) -> Result<()> {
+) -> Result<PathBuf> {
     let reaper_home_path =
         setup_reaper_for_linux(reaper_version, reaper_download_dir_path)?;
     install_plugin(&target_dir_path, &reaper_home_path)?;
     let reaper_executable =
         reaper_home_path.join(reaper_version.linux_executable_path());
-    run_integration_test_in_reaper(&reaper_executable)?;
-    Ok(())
+    Ok(reaper_executable)
 }
 
-fn run_on_macos(
+fn build_on_macos(
     reaper_version: &ReaperVersion,
     target_dir_path: &Path,
     reaper_download_dir_path: &Path,
-) -> Result<()> {
+) -> Result<PathBuf> {
     let reaper_home_path =
         setup_reaper_for_macos(reaper_version, reaper_download_dir_path)?;
     install_plugin(&target_dir_path, &reaper_home_path)?;
     let reaper_executable =
         reaper_home_path.join(reaper_version.macos_executable_path());
-    run_integration_test_in_reaper(&reaper_executable)?;
-    Ok(())
+    Ok(reaper_executable)
 }
 
 /// Download file only if it is not exists.
@@ -136,12 +145,10 @@ fn download_file(url: impl Into<String>, path: PathBuf) -> Result<()> {
     if path.exists() {
         return Ok(());
     }
-    let mut resp = reqwest::blocking::get(url.into())?;
-    let mut buf: Vec<u8> = Vec::new();
-    resp.read_to_end(&mut buf)?;
-    File::create(path.clone())?
-        .write_all(buf.as_slice())
-        .expect(format!("Can not write to file {:?}", path).as_str());
+    let resp = reqwest::blocking::get(url.into())?;
+    let mut f = File::create(path.clone())?;
+    let mut content = Cursor::new(resp.bytes()?);
+    std::io::copy(&mut content, &mut f)?;
     Ok(())
 }
 
@@ -163,28 +170,28 @@ fn install_plugin(
     fs::create_dir_all(target_path.parent().ok_or("no parent")?)?;
     println!("Copying plug-in to {:?}...", &target_path);
     fs::copy(&source_path, &target_path)?;
-    println!("installing ReaImGui Extension...");
-    [
-        "reaper_imgui-aarch64.so",
-        "reaper_imgui-armv7l.so",
-        "reaper_imgui-i386.dylib",
-        "reaper_imgui-i686.so",
-        "reaper_imgui-x64.dll",
-        "reaper_imgui-x86.dll",
-        "reaper_imgui-x86_64.dylib",
-        "reaper_imgui-x86_64.so ",
-    ]
-    .into_iter()
-    .map(|name| {
-        download_file(
-            "https://github.com/cfillion/reaimgui/releases/latest/download/"
-                .to_string()
-                + name,
-            reaper_home_path.join("UserPlugins").join(name),
-        )
-        .expect("Can not download file")
-    })
-    .count();
+    // println!("installing ReaImGui Extension...");
+    // [
+    //     "reaper_imgui-aarch64.so",
+    //     "reaper_imgui-armv7l.so",
+    //     "reaper_imgui-i386.dylib",
+    //     "reaper_imgui-i686.so",
+    //     "reaper_imgui-x64.dll",
+    //     "reaper_imgui-x86.dll",
+    //     "reaper_imgui-x86_64.dylib",
+    //     "reaper_imgui-x86_64.so ",
+    // ]
+    // .into_iter()
+    // .map(|name| {
+    //     download_file(
+    //         "https://github.com/cfillion/reaimgui/releases/latest/download/"
+    //             .to_string()
+    //             + name,
+    //         reaper_home_path.join("UserPlugins").join(name),
+    //     )
+    //     .expect("Can not download file")
+    // })
+    // .count();
     Ok(())
 }
 

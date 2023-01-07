@@ -7,10 +7,10 @@ version = "0.1.0"
 [dependencies]
 env_logger = "0.10"
 log = "0.4"
-rea-rs = {version = "0.1.1", path = "../../rea-rs"}
-rea-rs-low = {version = "0.1.1", path = "../../low"}
-rea-rs-macros = {version = "0.1.1", path = "../../macros"}
-rea-rs-test = {version = "0.1.1", path = "../"}
+rea-rs = {version = "0.1.3", path = "../../rea-rs"}
+rea-rs-low = {version = "0.1.3", path = "../../low"}
+rea-rs-macros = {version = "0.1.3", path = "../../macros"}
+rea-rs-test = {version = "0.1.3", path = "../"}
 
 [lib]
 crate-type = ["cdylib"]
