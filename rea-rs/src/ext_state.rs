@@ -4,7 +4,7 @@ use crate::{
     Project, Reaper, SendIntType, Take, Track, TrackSend, WithReaperPtr,
 };
 use serde::de::DeserializeOwned;
-pub use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{
     ffi::{CStr, CString},
     fmt::Debug,
@@ -146,8 +146,13 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
             None => return None,
             Some(value) => value,
         };
-        let value = value_obj.as_bytes();
-        let value: T = rmp_serde::decode::from_slice(value)
+        let value = value_obj.to_string_lossy();
+        // let value = value_obj.as_bytes();
+        // let value: T = rmp_serde::decode::from_slice(value)
+        //     .expect("This value was not serialized by ExtState");
+        // let value: T = serde_pickle::from_slice(value, Default::default())
+        //     .expect("This value was not serialized by ExtState");
+        let value: T = serde_json::from_str(&*value)
             .expect("This value was not serialized by ExtState");
         Some(value)
     }
@@ -156,11 +161,17 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
     pub fn set(&mut self, value: T) {
         let (section_str, key_str) = (self.section(), self.key());
         let (section, key) = (as_c_str(&section_str), as_c_str(&key_str));
-        let mut value = rmp_serde::encode::to_vec(&value)
-            .expect("can not serialize value");
-        value.push(0);
-        let value = CString::from_vec_with_nul(value)
-            .expect("can not serialize to string");
+        // let mut value = serde_pickle::to_vec(&value, Default::default())
+        //     .expect("can not serialize value");
+        // let mut value = rmp_serde::encode::to_vec(&value)
+        //     .expect("can not serialize value");
+        // value.push(0);
+        // let value = CString::from_vec_with_nul(value)
+        //     .expect("can not serialize to string");
+        let value =
+            serde_json::to_string(&value).expect("Can not serialize value!");
+        let value = CString::new(value.as_str())
+            .expect("Can not convert ExtValue String to CString");
         self.object.set_ext_value(section, key, value.into_raw())
     }
 
