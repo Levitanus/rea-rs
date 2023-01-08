@@ -1,12 +1,13 @@
 use crate::{
     errors::{ReaperError, ReaperResult},
     misc_enums::ProjectContext,
+    ptr_wrappers::Hwnd,
     reaper_pointer::ReaperPointer,
     utils::{
         as_c_char, as_c_str, as_mut_i8, as_string, make_string_buf, WithNull,
     },
-    AutomationMode, CommandId, MessageBoxType, MessageBoxValue, Project,
-    Reaper, Section, UndoFlags,
+    AutomationMode, CommandId, MIDIEditor, MessageBoxType, MessageBoxValue,
+    Project, Reaper, Section, UndoFlags,
 };
 use int_enum::IntEnum;
 use log::debug;
@@ -484,6 +485,14 @@ impl Reaper {
                 pointer.ptr_as_void(),
                 pointer.key_into_raw().as_ptr(),
             )
+        }
+    }
+
+    pub fn active_midi_editor(&self) -> Option<MIDIEditor> {
+        let hwnd = self.low().MIDIEditor_GetActive();
+        match Hwnd::new(hwnd) {
+            None => None,
+            Some(ptr) => Some(MIDIEditor::new(ptr)),
         }
     }
 }

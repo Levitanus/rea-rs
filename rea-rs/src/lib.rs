@@ -212,5 +212,8 @@ pub use audio_accessor::*;
 pub mod envelope;
 pub use envelope::*;
 
+pub mod midi_editor;
+pub use midi_editor::*;
+
 #[cfg(test)]
 mod test;

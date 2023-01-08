@@ -1,6 +1,8 @@
 //! Module originally designed by Benjamin Klum https://github.com/helgoboss for his
 //! `reaper-rs` repository. But module was moved here for removing dependency
 //! on reaper-medium crate, which is almost not used by the rea-rs.
+use crate::ptr_wrappers::Hwnd;
+
 use super::ptr_wrappers::{
     AudioAccessor, MediaItem, MediaItemTake, MediaTrack, PcmSource,
     ReaProject, TrackEnvelope,
@@ -19,6 +21,7 @@ pub enum ReaperPointer {
     TrackEnvelope(TrackEnvelope),
     PcmSource(PcmSource),
     AudioAccessor(AudioAccessor),
+    Hwnd(Hwnd),
     // If a variant is missing in this enum, you can use this custom one as a
     // resort.
     //
@@ -58,6 +61,7 @@ impl ReaperPointer {
             TrackEnvelope(_) => c_str!("TrackEnvelope*"),
             PcmSource(_) => c_str!("PCM_source*"),
             AudioAccessor(_) => c_str!("AudioAccessor*"),
+            Hwnd(_) => c_str!("HWND*"),
         }
     }
 
@@ -71,6 +75,7 @@ impl ReaperPointer {
             TrackEnvelope(p) => p.as_ptr() as *mut _,
             PcmSource(p) => p.as_ptr() as *mut _,
             AudioAccessor(p) => p.as_ptr() as *mut _,
+            Hwnd(p) => p.as_ptr() as *mut _,
             // Custom { pointer, .. } => *pointer,
         }
     }
@@ -95,3 +100,4 @@ impl_from_ptr_to_variant!(MediaItemTake, MediaItemTake);
 impl_from_ptr_to_variant!(TrackEnvelope, TrackEnvelope);
 impl_from_ptr_to_variant!(PcmSource, PcmSource);
 impl_from_ptr_to_variant!(AudioAccessor, AudioAccessor);
+impl_from_ptr_to_variant!(Hwnd, Hwnd);
