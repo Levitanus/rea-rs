@@ -233,6 +233,7 @@ mod tests {
     PartialOrd,
     Ord,
     Hash,
+    Default,
     Serialize,
     Deserialize,
 )]
