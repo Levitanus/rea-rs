@@ -332,6 +332,12 @@ impl ShortMessage for CCMessage {
     }
 }
 impl CCMessage {
+    pub fn channel(&self) -> u8 {
+        self.channel_private()
+    }
+    pub fn set_channel(&mut self, channel: u8) {
+        self.set_channel_private(channel)
+    }
     pub fn cc_num(&self) -> u8 {
         self.msg2()
     }
@@ -374,6 +380,12 @@ impl NoteOnMessage {
         Self {
             buf: vec![0x90 + channel - 1, note, velocity],
         }
+    }
+    pub fn channel(&self) -> u8 {
+        self.channel_private()
+    }
+    pub fn set_channel(&mut self, channel: u8) {
+        self.set_channel_private(channel)
     }
     pub fn note(&self) -> u8 {
         self.msg2()
@@ -437,6 +449,12 @@ impl NoteOffMessage {
             buf: vec![0x80 + channel - 1, note, velocity],
         }
     }
+    pub fn channel(&self) -> u8 {
+        self.channel_private()
+    }
+    pub fn set_channel(&mut self, channel: u8) {
+        self.set_channel_private(channel)
+    }
     pub fn note(&self) -> u8 {
         self.msg2()
     }
@@ -494,6 +512,12 @@ pub struct PitchBendMessage {
     buf: Vec<u8>,
 }
 impl PitchBendMessage {
+    pub fn channel(&self) -> u8 {
+        self.channel_private()
+    }
+    pub fn set_channel(&mut self, channel: u8) {
+        self.set_channel_private(channel)
+    }
     /// combined MSB\LSB values
     pub fn raw_value(&self) -> u16 {
         (self.msg3() as u16) << 7 | self.msg2() as u16
@@ -575,6 +599,12 @@ pub struct AfterTouchMessage {
     buf: Vec<u8>,
 }
 impl AfterTouchMessage {
+    pub fn channel(&self) -> u8 {
+        self.channel_private()
+    }
+    pub fn set_channel(&mut self, channel: u8) {
+        self.set_channel_private(channel)
+    }
     pub fn note(&self) -> u8 {
         self.msg2()
     }
@@ -632,6 +662,12 @@ pub struct ProgramChangeMessage {
     buf: Vec<u8>,
 }
 impl ProgramChangeMessage {
+    pub fn channel(&self) -> u8 {
+        self.channel_private()
+    }
+    pub fn set_channel(&mut self, channel: u8) {
+        self.set_channel_private(channel)
+    }
     pub fn program(&self) -> u8 {
         self.msg2()
     }
@@ -835,7 +871,7 @@ impl NotationMessage {
     }
     fn text_to_buf(text: impl Into<String>) -> Vec<u8> {
         let mut text: String = text.into();
-        let mut buf = vec![0xf0, 0x0f];
+        let mut buf = vec![0xff, 0x0f];
         buf.append(unsafe { text.as_mut_vec() });
         buf
     }
@@ -849,7 +885,7 @@ impl NotationMessage {
 }
 impl MidiMessage for NotationMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        if buf[0] < 0xf0 {
+        if buf[0] < 0xff {
             return None;
         }
         if buf[1] == 0x0f {
@@ -946,6 +982,12 @@ impl ShortMessage for ChannelPressureMessage {
     }
 }
 impl ChannelPressureMessage {
+    pub fn channel(&self) -> u8 {
+        self.channel_private()
+    }
+    pub fn set_channel(&mut self, channel: u8) {
+        self.set_channel_private(channel)
+    }
     pub fn pressure(&self) -> u8 {
         self.msg2()
     }
