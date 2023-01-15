@@ -111,6 +111,9 @@ impl Reaper {
         self.low.plugin_context().clone()
     }
 
+    pub fn is_available() -> bool {
+        unsafe { INSTANCE.is_some() }
+    }
     /// Gives access to the instance which you made available globally before.
     ///
     /// # Panics
