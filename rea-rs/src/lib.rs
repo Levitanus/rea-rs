@@ -38,7 +38,7 @@
 //!
 //! #[reaper_extension_plugin]
 //! fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
-//!     Reaper::load(context);
+//!     Reaper::init_global(context);
 //!     let reaper = Reaper::get_mut();
 //!     let message = "Hello from small extension";
 //!     reaper.show_console_msg(message);
@@ -75,7 +75,7 @@
 //!
 //! #[reaper_extension_plugin]
 //! fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
-//!     Reaper::load(context);
+//!     Reaper::init_global(context);
 //!     let reaper = Reaper::get_mut();
 //!
 //!     let action = reaper.register_action(
