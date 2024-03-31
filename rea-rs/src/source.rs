@@ -193,14 +193,24 @@ impl<'a> Source<'a, Mutable> {
     }
 }
 
+#[test]
+fn test_source_offset() {
+    let offset = SourceOffset::from_secs_f64(2.0);
+    assert_eq!(offset.as_secs_f64(), 2.0);
+    let offset = SourceOffset::from_secs_f64(-2.0);
+    assert_eq!(offset.as_secs_f64(), -2.0);
+    let offset = SourceOffset::from_secs_f64(-2.543);
+    assert_eq!(offset.as_secs_f64(), -2.543);
+}
+
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Hash, Copy, Clone)]
 pub struct SourceOffset {
     offset: TimeDelta,
 }
 impl SourceOffset {
     pub fn from_secs_f64(secs: f64) -> Self {
-        let offset =
-            TimeDelta::from_std(Duration::from_secs_f64(secs.abs())).unwrap();
+        let duration = Duration::from_secs_f64(secs.abs());
+        let offset = TimeDelta::from_std(duration).unwrap();
         if secs.is_sign_negative() {
             Self { offset: -offset }
         } else {
@@ -211,8 +221,9 @@ impl SourceOffset {
         self.offset
     }
     pub fn as_secs_f64(&self) -> f64 {
-        self.offset.num_seconds() as f64
-            + self.offset.num_microseconds().unwrap() as f64 / 1000000.0
+        let seconds = self.offset.num_seconds();
+        let nanoseconds = self.offset.num_microseconds().unwrap();
+        seconds as f64 + (nanoseconds - seconds * 1000000) as f64 / 1000000.0
     }
 }
 impl From<TimeDelta> for SourceOffset {
