@@ -398,8 +398,12 @@ mod codegen {
         /// Generates the `reaper.rs` file from the previously generated
         /// `bindings.rs`
         fn generate_reaper(file: &syn::File) {
-            let fn_ptrs = parse_fn_ptrs(file, "reaper_functions");
-            let result = generate_reaper_token_stream(&fn_ptrs);
+            let result = {
+                let fn_ptrs = parse_fn_ptrs(file, "reaper_functions");
+                let result = generate_reaper_token_stream(&fn_ptrs);
+                let syntax_tree =  syn::parse_file(result.to_string().as_str()).unwrap();
+                prettyplease::unparse(&syntax_tree)
+            };
             std::fs::write("src/reaper.rs", result.to_string())
                 .expect("Unable to write file");
         }
