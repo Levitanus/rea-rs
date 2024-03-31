@@ -230,13 +230,13 @@ fn projects() -> TestStep {
             RenderSettings::new(RenderMode::MasterMix, false, false)
         );
         pr.set_render_settings(RenderSettings::new(
-            RenderMode::RednerMatrix,
+            RenderMode::RenderMatrix,
             true,
             true,
         ));
         assert_eq!(
             pr.get_render_settings(),
-            RenderSettings::new(RenderMode::RednerMatrix, true, true)
+            RenderSettings::new(RenderMode::RenderMatrix, true, true)
         );
 
         debug!("Render channels amount");
