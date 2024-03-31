@@ -40,11 +40,24 @@ pub trait Timer {
     }
 }
 
+fn action_error(error: Box<dyn Error>) {
+    Reaper::get()
+        .show_message_box(
+            "Error while performing action",
+            error.to_string(),
+            crate::MessageBoxType::Ok,
+        )
+        .expect("Can not show error message box");
+}
+
 extern "C" fn action_hook(command_id: i32, flag: i32) -> bool {
     let actions = &Reaper::get().actions;
     for action in actions.iter() {
         if action.command_id.get() == command_id as u32 {
-            action.call(flag).unwrap();
+            match action.call(flag) {
+                Ok(_) => (),
+                Err(e) => action_error(e),
+            };
             return true;
         }
     }
@@ -203,7 +216,8 @@ impl Reaper {
             },
         };
         // let mut description = description.to_string();
-        let desc = CString::new(description).unwrap();
+        let desc = CString::new(description)
+            .expect("Can not convert description to CString");
         let reg_str = c_str!("gaccel");
         let mut gaccel = raw::gaccel_register_t {
             accel,
