@@ -1,7 +1,6 @@
 use std::{
     ffi::c_char,
     mem::{transmute, MaybeUninit},
-    time::Duration,
 };
 
 use crate::{
@@ -13,7 +12,8 @@ use crate::{
     },
     AudioAccessor, Color, FXParent, Immutable, Item, KnowsProject,
     MidiEventBuilder, Mutable, Pan, PanLaw, Pitch, PlayRate, ProbablyMutable,
-    Project, Reaper, Source, TakeFX, Volume, WithReaperPtr, FX, GUID,
+    Project, Reaper, Source, SourceOffset, TakeFX, Volume, WithReaperPtr, FX,
+    GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
@@ -233,8 +233,8 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
         }
     }
 
-    pub fn start_offset(&self) -> Duration {
-        Duration::from_secs_f64(self.get_info_value("D_STARTOFFS"))
+    pub fn start_offset(&self) -> SourceOffset {
+        SourceOffset::from_secs_f64(self.get_info_value("D_STARTOFFS"))
     }
 
     pub fn volume(&self) -> Volume {
@@ -294,6 +294,44 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
             return None;
         }
         Some(Color::from_native(raw & 0xffffff))
+    }
+
+    pub fn peaks(
+        &self,
+        peakrate: f64,
+        starttime: f64,
+        numchannels: usize,
+        numsamplesperchannel: usize,
+        spectral_peaks: bool,
+    ) -> Result<TakePeaksResult, ()> {
+        let block_size = match spectral_peaks {
+            true => 3,
+            false => 2,
+        };
+        let capacity = numsamplesperchannel * numchannels * block_size;
+        let mut buf: Vec<f64> = Vec::with_capacity(100);
+        for _ in 0..capacity {
+            buf.push(0.0);
+        }
+        let want_extra_type = match spectral_peaks {
+            true => 115,
+            false => 0,
+        };
+        let result = unsafe {
+            Reaper::get().low().GetMediaItemTake_Peaks(
+                self.get().as_ptr(),
+                peakrate,
+                starttime,
+                numchannels as i32,
+                numsamplesperchannel as i32,
+                want_extra_type,
+                buf.as_mut_ptr(),
+            )
+        };
+        if result <= 0 {
+            return Err(());
+        }
+        Ok(TakePeaksResult::new(result, buf, capacity / block_size))
     }
 }
 
@@ -488,7 +526,7 @@ impl<'a> Take<'a, Mutable> {
 
     pub fn set_start_offset(
         &mut self,
-        offset: Duration,
+        offset: SourceOffset,
     ) -> ReaperStaticResult<()> {
         self.set_info_value("D_STARTOFFS", offset.as_secs_f64())
     }
@@ -593,5 +631,76 @@ impl TakePitchMode {
     }
     pub fn as_raw(&self) -> i32 {
         (self.shifter << 0xf | self.parameter) as i32
+    }
+}
+
+/// Return struct for Take::peaks()
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TakePeaksResult {
+    result: i32,
+    peaks: Vec<f64>,
+    blocksize: usize,
+}
+impl TakePeaksResult {
+    fn new(result: i32, peaks: Vec<f64>, blocksize: usize) -> Self {
+        Self {
+            result,
+            peaks,
+            blocksize,
+        }
+    }
+    pub fn return_val_raw(&self) -> i32 {
+        self.result
+    }
+    pub fn peaks_raw(&self) -> &Vec<f64> {
+        &self.peaks
+    }
+    pub fn peaks_raw_mut(&mut self) -> &mut Vec<f64> {
+        &mut self.peaks
+    }
+    pub fn output_mode(&self) -> usize {
+        (self.result / 0xf00000) as usize
+    }
+    pub fn is_spectral_available(&self) -> bool {
+        (self.result / 0x1000000) != 0
+    }
+    pub fn num_samples_available(&self) -> usize {
+        (self.result % 0xf0000) as usize
+    }
+    pub fn peaks_max(&self) -> Vec<f64> {
+        let mut ret = Vec::new();
+        for i in 0..self.blocksize {
+            ret.push(self.peaks[i])
+        }
+        ret
+    }
+    pub fn peaks_min(&self) -> Vec<f64> {
+        let mut ret = Vec::new();
+        for i in self.blocksize..self.blocksize * 2 {
+            ret.push(self.peaks[i])
+        }
+        ret
+    }
+    pub fn peaks_extra(&self) -> Option<Vec<f64>> {
+        if !self.is_spectral_available() {
+            return None;
+        }
+        let mut ret = Vec::new();
+        for i in self.blocksize * 2..self.blocksize * 3 {
+            ret.push(self.peaks[i])
+        }
+        Some(ret)
+    }
+    pub fn max(&self) -> f64 {
+        self.peaks[0..self.blocksize]
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max)
+    }
+    pub fn min(&self) -> f64 {
+        self.peaks[self.blocksize..self.blocksize * 2]
+            .iter()
+            .cloned()
+            .fold(f64::INFINITY, f64::min)
     }
 }

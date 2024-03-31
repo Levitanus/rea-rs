@@ -2,10 +2,18 @@ use crate::{
     ptr_wrappers::PcmSource,
     utils::{as_string_mut, make_c_string_buf},
     KnowsProject, Mutable, Position, ProbablyMutable, Project, ProjectContext,
-    Reaper, Take, WithReaperPtr,
+    Reaper, Take, Volume, WithReaperPtr,
 };
+use chrono::TimeDelta;
+use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
-use std::{mem::MaybeUninit, path::PathBuf, ptr::NonNull, time::Duration};
+use std::{
+    mem::MaybeUninit,
+    ops::{Add, Sub},
+    path::PathBuf,
+    ptr::NonNull,
+    time::Duration,
+};
 
 #[derive(Debug, PartialEq)]
 pub struct Source<'a, T: ProbablyMutable> {
@@ -75,7 +83,11 @@ impl<'a, T: ProbablyMutable> Source<'a, T> {
             true => {
                 let item_start = self.take().item().position();
                 let offset = self.take().start_offset();
-                let start = item_start - Position::new(offset);
+                let start: Position = SourceOffset::from(
+                    TimeDelta::from_std(item_start.as_duration()).unwrap()
+                        - offset.get(),
+                )
+                .into();
                 let start_in_qn = start.as_quarters(self.take().project());
                 let end_in_qn = start_in_qn + result;
                 let end =
@@ -155,10 +167,109 @@ impl<'a, T: ProbablyMutable> Source<'a, T> {
             }),
         }
     }
+
+    pub fn calculate_normalization(
+        &self,
+        units: SourceNoramlizeUnit,
+        target: Volume,
+        start: SourceOffset,
+        end: SourceOffset,
+    ) -> Volume {
+        let result = unsafe {
+            Reaper::get().low().CalculateNormalization(
+                self.get().as_ptr(),
+                units.int_value(),
+                target.get(),
+                start.as_secs_f64(),
+                end.as_secs_f64(),
+            )
+        };
+        Volume::from(result)
+    }
 }
 impl<'a> Source<'a, Mutable> {
     pub fn delete(&mut self) {
         unsafe { Reaper::get().low().PCM_Source_Destroy(self.get().as_ptr()) }
+    }
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Hash, Copy, Clone)]
+pub struct SourceOffset {
+    offset: TimeDelta,
+}
+impl SourceOffset {
+    pub fn from_secs_f64(secs: f64) -> Self {
+        let offset =
+            TimeDelta::from_std(Duration::from_secs_f64(secs.abs())).unwrap();
+        if secs.is_sign_negative() {
+            Self { offset: -offset }
+        } else {
+            Self { offset }
+        }
+    }
+    pub fn get(&self) -> TimeDelta {
+        self.offset
+    }
+    pub fn as_secs_f64(&self) -> f64 {
+        self.offset.num_seconds() as f64
+            + self.offset.num_microseconds().unwrap() as f64 / 1000000.0
+    }
+}
+impl From<TimeDelta> for SourceOffset {
+    fn from(value: TimeDelta) -> Self {
+        Self { offset: value }
+    }
+}
+impl From<Position> for SourceOffset {
+    fn from(value: Position) -> Self {
+        Self {
+            offset: TimeDelta::from_std(value.as_duration()).unwrap(),
+        }
+    }
+}
+impl Into<Position> for SourceOffset {
+    fn into(self) -> Position {
+        self.offset.abs().to_std().unwrap().into()
+    }
+}
+impl From<Duration> for SourceOffset {
+    fn from(value: Duration) -> Self {
+        Self {
+            offset: TimeDelta::from_std(value).unwrap(),
+        }
+    }
+}
+impl Into<Duration> for SourceOffset {
+    fn into(self) -> Duration {
+        self.offset.abs().to_std().unwrap()
+    }
+}
+impl Add<SourceOffset> for SourceOffset {
+    type Output = SourceOffset;
+
+    fn add(self, rhs: SourceOffset) -> Self::Output {
+        SourceOffset::from(self.offset + rhs.offset)
+    }
+}
+impl Add<Duration> for SourceOffset {
+    type Output = SourceOffset;
+
+    fn add(self, rhs: Duration) -> Self::Output {
+        SourceOffset::from(self.offset + TimeDelta::from_std(rhs).unwrap())
+    }
+}
+impl Sub<SourceOffset> for SourceOffset {
+    type Output = SourceOffset;
+
+    fn sub(self, rhs: SourceOffset) -> Self::Output {
+        SourceOffset::from(self.offset - rhs.offset)
+    }
+}
+impl Sub<Duration> for SourceOffset {
+    type Output = SourceOffset;
+
+    fn sub(self, rhs: Duration) -> Self::Output {
+        SourceOffset::from(self.offset - TimeDelta::from_std(rhs).unwrap())
     }
 }
 
@@ -168,4 +279,18 @@ pub struct SourceSectionInfo {
     offset: Duration,
     length: Duration,
     reversed: bool,
+}
+
+#[allow(non_camel_case_types)]
+#[repr(i32)]
+#[derive(
+    Debug, PartialEq, PartialOrd, Ord, Eq, Hash, Copy, Clone, IntEnum,
+)]
+pub enum SourceNoramlizeUnit {
+    LUFS_I = 0,
+    RMS_I = 1,
+    Peak = 2,
+    TruePeak = 3,
+    LUFS_M = 4,
+    LUFS_S = 5,
 }

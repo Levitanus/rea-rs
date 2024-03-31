@@ -149,6 +149,7 @@
 //!
 //! Enjoy the coding!
 
+pub use chrono::Duration;
 pub use int_enum::IntEnum;
 pub use rea_rs_low::PluginContext;
 
