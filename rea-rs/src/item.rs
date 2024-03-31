@@ -168,14 +168,17 @@ impl<'a, T: ProbablyMutable> Item<'a, T> {
         }
     }
     pub fn fade_out(&self) -> ItemFade {
-        let length =
-            Duration::from_secs_f64(self.get_info_value("D_FADEOUTLEN"));
+        let auto_fade_length = self.get_info_value("D_FADEOUTLEN_AUTO") != 0.0;
+        let length = if auto_fade_length {
+            Duration::from_secs_f64(self.get_info_value("D_FADEOUTLEN_AUTO"))
+        } else {
+            Duration::from_secs_f64(self.get_info_value("D_FADEOUTLEN"))
+        };
         let curve = self.get_info_value("D_FADEOUTDIR");
         let shape = ItemFadeShape::from_int(
             self.get_info_value("C_FADEOUTSHAPE") as i32,
         )
         .unwrap();
-        let auto_fade_length = self.get_info_value("D_FADEOUTLEN_AUTO") != 0.0;
         ItemFade {
             length,
             curve,
@@ -273,14 +276,11 @@ impl<'a> Item<'a, Mutable> {
             Some(ptr) => Take::new(ptr, self),
         }
     }
-    pub fn get_take_mut(
-        &'a mut self,
-        index: usize,
-    ) -> Option<Take<'a, Mutable>> {
+    pub fn get_take_mut(&mut self, index: usize) -> Option<Take<'_, Mutable>> {
         let ptr = self.get_take_ptr(index)?;
         Some(Take::new(ptr, self))
     }
-    pub fn active_take_mut(&'a mut self) -> Take<'a, Mutable> {
+    pub fn active_take_mut(&mut self) -> Take<'_, Mutable> {
         let ptr = self.active_take_ptr().unwrap();
         Take::new(ptr, self)
     }
@@ -610,4 +610,5 @@ pub enum ItemFadeShape {
     FastStart = 4,
     SlowStartEnd = 5,
     Beizer = 6,
+    Default = 7,
 }
