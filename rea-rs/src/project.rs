@@ -229,14 +229,14 @@ impl<'a> Project {
         }
     }
 
-    pub fn get_time_range(&'a mut self, kind: TimeRangeKind) -> TimeRange<'a> {
+    pub fn get_time_range(&'a self, kind: TimeRangeKind) -> TimeRange<'a> {
         TimeRange::new(self, kind)
     }
 
-    pub fn get_loop_selection(&'a mut self) -> TimeRange<'a> {
+    pub fn get_loop_selection(&'a self) -> TimeRange<'a> {
         TimeRange::new(self, TimeRangeKind::LoopSelection)
     }
-    pub fn get_time_selection(&'a mut self) -> TimeRange<'a> {
+    pub fn get_time_selection(&'a self) -> TimeRange<'a> {
         TimeRange::new(self, TimeRangeKind::TimeSelection)
     }
 
@@ -1454,7 +1454,7 @@ pub mod project_info {
         MasterMix = 0,
         MasterAndStems = 1,
         Stems = 2,
-        RednerMatrix = 8,
+        RenderMatrix = 8,
         SelectedItems = 32,
         SelectedItemsViaMaster = 64,
     }

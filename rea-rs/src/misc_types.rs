@@ -222,7 +222,7 @@ mod tests {
 /// Position in project.
 ///
 /// Internally holds only [Duration] from project start.
-/// Keeps interfaces to all time transformations (e.g. between secs, quarters
+/// Keeps interfaces to all time transformations (e.g. between secs, quarters
 /// and ppq)
 #[derive(
     Debug,

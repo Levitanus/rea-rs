@@ -14,10 +14,10 @@ use rea_rs::{
     MarkerRegionInfo, MessageBoxValue, Mutable, Pan, PanLaw, Pitch, PlayRate,
     PluginContext, Position, Project, RazorEdit, Reaper, RecInput, RecMode,
     RecMonitoring, RecOutMode, SampleAmount, SendDestChannels, SendMIDIProps,
-    SendMode, SendSourceChannels, SoloMode, TakeChannelMode, TakePitchMode,
-    TimeMode, Track, TrackFolderState, TrackGroupParam, TrackPan,
-    TrackPerformanceFlags, TrackPlayOffset, TrackSend, UndoFlags, VUMode,
-    Volume, WithReaperPtr, FX, GUID,
+    SendMode, SendSourceChannels, SoloMode, SourceOffset, TakeChannelMode,
+    TakePitchMode, TimeMode, Track, TrackFolderState, TrackGroupParam,
+    TrackPan, TrackPerformanceFlags, TrackPlayOffset, TrackSend, UndoFlags,
+    VUMode, Volume, WithReaperPtr, FX, GUID,
 };
 use rea_rs_macros::reaper_extension_plugin;
 use rea_rs_test::{TestStep, TestStepResult};
@@ -1473,9 +1473,9 @@ fn takes() -> TestStep {
         take.set_guid(guid);
         assert_eq!(take.guid(), guid);
 
-        assert_eq!(take.start_offset(), Duration::from_secs(0));
-        take.set_start_offset(Duration::from_secs(2))?;
-        assert_eq!(take.start_offset(), Duration::from_secs(2));
+        assert_eq!(take.start_offset(), SourceOffset::from_secs_f64(0.0));
+        take.set_start_offset(SourceOffset::from_secs_f64(2.0))?;
+        assert_eq!(take.start_offset(), SourceOffset::from_secs_f64(2.0));
 
         assert_eq!(take.volume(), Volume::from_db(0.0));
         take.set_volume(Volume::from_db(25.0));
