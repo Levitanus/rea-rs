@@ -34,9 +34,10 @@ pub trait Timer {
         Duration::from_secs(0)
     }
     fn stop(&mut self) {
-        Reaper::get_mut()
-            .unregister_timer(self.id_string())
-            .expect("Can not unregister self")
+        match Reaper::get_mut().unregister_timer(self.id_string()) {
+            Ok(_) => (),
+            Err(e) => action_error(e.into()),
+        };
     }
 }
 
@@ -69,7 +70,10 @@ extern "C" fn timer_f() {
     for (_, (last_time, timer)) in timers.iter_mut() {
         let now = time::Instant::now();
         if now.duration_since(last_time.clone()) > timer.interval() {
-            timer.run().expect("timer loop ended with error");
+            match timer.run() {
+                Ok(_) => (),
+                Err(e) => action_error(e),
+            };
             *last_time = now;
         }
     }
@@ -190,12 +194,11 @@ impl Reaper {
         id_string: &'static str,
         description: &'static str,
         key_binding: impl Into<Option<KeyBinding>>,
-    ) -> RegisteredAccel {
+    ) -> Result<RegisteredAccel, Box<dyn Error>> {
         let kb: Option<KeyBinding> = key_binding.into();
         let low = self.low();
         let id_string = id_string.replace(" ", "_");
-        let id_string = CString::new(id_string.as_str())
-            .expect("Can not convert id_string to CString");
+        let id_string = CString::new(id_string.as_str())?;
 
         let command_id = unsafe {
             low.plugin_register(
@@ -216,8 +219,7 @@ impl Reaper {
             },
         };
         // let mut description = description.to_string();
-        let desc = CString::new(description)
-            .expect("Can not convert description to CString");
+        let desc = CString::new(description)?;
         let reg_str = c_str!("gaccel");
         let mut gaccel = raw::gaccel_register_t {
             accel,
@@ -236,7 +238,7 @@ impl Reaper {
         let reg = RegisteredAccel {
             command_id: CommandId::new(command_id as u32),
         };
-        reg
+        Ok(reg)
     }
 
     pub fn register_action(
@@ -246,7 +248,8 @@ impl Reaper {
         operation: impl Fn(i32) -> Result<(), Box<dyn Error>> + 'static,
         key_binding: impl Into<Option<KeyBinding>>,
     ) -> Result<RegisteredAccel, Box<dyn Error>> {
-        let accel = self.register_gaccel(id_string, description, key_binding);
+        let accel =
+            self.register_gaccel(id_string, description, key_binding)?;
         let action = Action {
             command_id: accel.command_id,
             operation: Box::new(operation),
