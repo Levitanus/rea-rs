@@ -1,5 +1,5 @@
 #include "pcm_source.hpp"
-#include "../lib/WDL/WDL/projectcontext.h"
+#include "../lib/WDL/projectcontext.h"
 
 namespace reaper_pcm_source {
   // Rust -> C++

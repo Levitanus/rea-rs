@@ -32,7 +32,7 @@
 #define SWELL_API_DEFPARM(x)
 #define SWELL_API_DEFINE(ret, func, parms) ret (*func) parms ;
 extern "C" {
-#include "../lib/WDL/WDL/swell/swell.h"
+#include "../lib/WDL/swell/swell.h"
 };
 
 // only include this file in projects that are linked to libSwell.so
@@ -52,7 +52,7 @@ static struct {
 #undef SWELL_API_DEFINE
 #define SWELL_API_DEFINE(ret, func, parms) {#func, (void **)&func },
 
-#include "../lib/WDL/WDL/swell/swell.h"
+#include "../lib/WDL/swell/swell.h"
 
 };
 

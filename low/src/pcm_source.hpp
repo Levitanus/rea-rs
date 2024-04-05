@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../lib/reaper/reaper_plugin.h"
-#include "../lib/WDL/WDL/heapbuf.h"
+#include "../lib/WDL/heapbuf.h"
 
 namespace reaper_pcm_source {
   // This function is called from Rust and implemented in C++. It instantiates a C++ PCM_source and returns

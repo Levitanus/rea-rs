@@ -21,7 +21,7 @@ namespace reaper_functions {
 #undef SWELL_API_DEFINE
 #define SWELL_PROVIDED_BY_APP
 namespace swell_functions {
-#include "../lib/WDL/WDL/swell/swell-functions.h"
+#include "../lib/WDL/swell/swell-functions.h"
 
   // We pick macOS-specific functions by hand.
   extern "C" bool (*SWELL_osx_is_dark_mode)(int mode);
