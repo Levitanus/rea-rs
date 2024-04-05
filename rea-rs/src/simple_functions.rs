@@ -6,14 +6,14 @@ use crate::{
     utils::{
         as_c_char, as_c_str, as_mut_i8, as_string, make_string_buf, WithNull,
     },
-    AutomationMode, CommandId, MIDIEditor, MessageBoxType, MessageBoxValue,
-    Project, Reaper, Section, UndoFlags,
+    AutomationMode, Color, CommandId, MIDIEditor, MessageBoxType,
+    MessageBoxValue, Project, Reaper, Section, ThemeColor, UndoFlags,
 };
 use int_enum::IntEnum;
 use log::debug;
 use std::{
     collections::HashMap, error::Error, ffi::CString, fs::canonicalize,
-    marker::PhantomData, path::Path, ptr::NonNull,
+    marker::PhantomData, path::Path, ptr::NonNull, str::Utf8Error,
 };
 
 impl Reaper {
@@ -338,6 +338,70 @@ impl Reaper {
             }
             Ok(map)
         }
+    }
+
+    /// get the path for reaper resources: scripts, options etc.
+    pub fn get_resource_path(&self) -> Result<String, Utf8Error> {
+        as_string(self.low().GetResourcePath())
+    }
+
+    /// get the color from current Reaper Theme
+    ///
+    /// * if `from_Theme_file` is `true`, the value returned from a theme file,
+    ///   without possible user modifications.
+    pub fn get_theme_color(
+        &self,
+        category: ThemeColor,
+        from_theme_file: bool,
+    ) -> Color {
+        let ini_key = CString::new(category.to_string())
+            .expect("Can not convert category to CString");
+        let result = unsafe {
+            self.low().GetThemeColor(
+                ini_key.as_ptr(),
+                match from_theme_file {
+                    true => 1,
+                    false => 0,
+                },
+            )
+        };
+        assert!(
+            result != -1,
+            "Couldn't retrieve theme color of category {category}"
+        );
+        Color::from_native(result)
+    }
+
+    /// get the color from current Reaper Theme
+    ///
+    /// * None is provided ‒ the default theme color will be used.
+    pub fn set_theme_color(
+        &mut self,
+        category: ThemeColor,
+        color: Option<Color>,
+        bypass_transforms: bool,
+    ) -> Color {
+        let ini_key = CString::new(category.to_string())
+            .expect("Can not convert category to CString");
+        let result = unsafe {
+            self.low().SetThemeColor(
+                ini_key.as_ptr(),
+                if let Some(c) = color {
+                    c.to_native()
+                } else {
+                    -1
+                },
+                match bypass_transforms {
+                    true => 1,
+                    false => 0,
+                },
+            )
+        };
+        assert!(
+            result != -1,
+            "Couldn't retrieve theme color of category {category}"
+        );
+        Color::from_native(result)
     }
 
     /// Call function while freezing the UI.

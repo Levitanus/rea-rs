@@ -12,55 +12,6 @@ use std::{
     time::Duration,
 };
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize,
-)]
-pub struct Color {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-}
-impl Color {
-    /// New color from r, g, b (0..255).
-    pub fn new(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b }
-    }
-
-    /// Get as tuple.
-    pub fn get(&self) -> (u8, u8, u8) {
-        (self.r, self.g, self.b)
-    }
-
-    /// Make from the OS-dependent color.
-    pub fn from_native(native: i32) -> Self {
-        unsafe {
-            let low = Reaper::get().low();
-            let (mut r, mut g, mut b) = (
-                MaybeUninit::new(0),
-                MaybeUninit::new(0),
-                MaybeUninit::new(0),
-            );
-            low.ColorFromNative(
-                native,
-                r.as_mut_ptr(),
-                g.as_mut_ptr(),
-                b.as_mut_ptr(),
-            );
-            Self {
-                r: r.assume_init_read() as u8,
-                g: g.assume_init_read() as u8,
-                b: b.assume_init_read() as u8,
-            }
-        }
-    }
-
-    /// Convert to OS-dependent color.
-    pub fn to_native(&self) -> i32 {
-        let low = Reaper::get().low();
-        low.ColorToNative(self.r as i32, self.g as i32, self.b as i32)
-    }
-}
-
 #[derive(Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Measure {
     pub index: u32,
