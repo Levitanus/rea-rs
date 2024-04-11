@@ -55,6 +55,8 @@ pub mod root {
     pub const IDIGNORE: u32 = 5;
     pub const IDYES: u32 = 6;
     pub const IDNO: u32 = 7;
+    pub const GW_CHILD: u32 = 5;
+    pub const GWL_ID: i32 = -12;
     pub const WM_CTLCOLORMSGBOX: u32 = 306;
     pub const WM_CTLCOLOREDIT: u32 = 307;
     pub const WM_CTLCOLORLISTBOX: u32 = 308;

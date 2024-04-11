@@ -154,6 +154,8 @@ mod codegen {
                 .allowlist_var("reaper_functions::.*")
                 .allowlist_var("swell_functions::.*")
                 .allowlist_var("SWELL_.*")
+                .allowlist_var("GWL_ID")
+                .allowlist_var("GW_CHILD")
                 .allowlist_var("CSURF_EXT_.*")
                 .allowlist_var("PCM_SINK_EXT_.*")
                 .allowlist_var("PCM_SOURCE_EXT_.*")
@@ -415,6 +417,9 @@ mod codegen {
         fn generate_swell(file: &syn::File) {
             let fn_ptrs = parse_fn_ptrs(file, "swell_functions");
             let result = generate_swell_token_stream(&fn_ptrs);
+            let syntax_tree =
+                syn::parse_file(result.to_string().as_str()).unwrap();
+            let result = prettyplease::unparse(&syntax_tree);
             std::fs::write("src/swell.rs", result.to_string())
                 .expect("Unable to write file");
         }

@@ -1,6 +1,6 @@
 use rea_rs_low::{
     raw::{self, gaccel_register_t},
-    register_plugin_destroy_hook, PluginContext,
+    register_plugin_destroy_hook, PluginContext, Swell,
 };
 
 use crate::{errors::ReaperStaticResult, keys::KeyBinding};
@@ -81,6 +81,7 @@ extern "C" fn timer_f() {
 
 pub struct Reaper {
     low: rea_rs_low::Reaper,
+    swell: Swell,
     actions: Vec<Action>,
     hook: extern "C" fn(i32, i32) -> bool,
     accels: Vec<Gaccel>,
@@ -99,6 +100,7 @@ impl Reaper {
         }
         Self {
             low,
+            swell: Swell::load(context),
             actions,
             hook,
             accels: Vec::new(),
@@ -123,6 +125,9 @@ impl Reaper {
 
     pub fn low(&self) -> &rea_rs_low::Reaper {
         &self.low
+    }
+    pub fn swell(&self) -> &rea_rs_low::Swell {
+        &self.swell
     }
     pub fn plugin_context(&self) -> PluginContext {
         self.low.plugin_context().clone()
