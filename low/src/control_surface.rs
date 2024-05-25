@@ -52,15 +52,15 @@ use std::ptr::{null, null_mut, NonNull};
 ///
 /// [`create_cpp_to_rust_control_surface()`]: fn.create_cpp_to_rust_control_surface.html
 pub trait IReaperControlSurface: Debug + Downcast {
-    fn GetTypeString(&self) -> *const ::std::os::raw::c_char {
+    fn GetTypeString(&mut self) -> *const ::std::os::raw::c_char {
         null()
     }
 
-    fn GetDescString(&self) -> *const ::std::os::raw::c_char {
+    fn GetDescString(&mut self) -> *const ::std::os::raw::c_char {
         null()
     }
 
-    fn GetConfigString(&self) -> *const ::std::os::raw::c_char {
+    fn GetConfigString(&mut self) -> *const ::std::os::raw::c_char {
         null()
     }
 
@@ -215,7 +215,7 @@ pub unsafe fn delete_cpp_control_surface(
 extern "C" fn cpp_to_rust_IReaperControlSurface_GetTypeString(
     callback_target: *mut Box<dyn IReaperControlSurface>,
 ) -> *const ::std::os::raw::c_char {
-    firewall(|| unsafe { &*callback_target }.GetTypeString())
+    firewall(|| unsafe { &mut *callback_target }.GetTypeString())
         .unwrap_or(null_mut())
 }
 
@@ -223,7 +223,7 @@ extern "C" fn cpp_to_rust_IReaperControlSurface_GetTypeString(
 extern "C" fn cpp_to_rust_IReaperControlSurface_GetDescString(
     callback_target: *mut Box<dyn IReaperControlSurface>,
 ) -> *const ::std::os::raw::c_char {
-    firewall(|| unsafe { &*callback_target }.GetDescString())
+    firewall(|| unsafe { &mut *callback_target }.GetDescString())
         .unwrap_or(null_mut())
 }
 
@@ -231,7 +231,7 @@ extern "C" fn cpp_to_rust_IReaperControlSurface_GetDescString(
 extern "C" fn cpp_to_rust_IReaperControlSurface_GetConfigString(
     callback_target: *mut Box<dyn IReaperControlSurface>,
 ) -> *const ::std::os::raw::c_char {
-    firewall(|| unsafe { &*callback_target }.GetConfigString())
+    firewall(|| unsafe { &mut *callback_target }.GetConfigString())
         .unwrap_or(null_mut())
 }
 

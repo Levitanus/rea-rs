@@ -92,7 +92,9 @@
 
 use rea_rs::{PluginContext, Reaper, Timer};
 use rea_rs_low::register_plugin_destroy_hook;
-use std::{error::Error, fmt::Debug, panic, process};
+use std::{
+    cell::RefCell, error::Error, fmt::Debug, panic, process, sync::Arc,
+};
 
 pub mod integration_test;
 pub use integration_test::*;
@@ -172,7 +174,7 @@ impl ReaperTest {
             .expect("Can not reigister test action");
         Self::make_available_globally(instance);
         if integration {
-            reaper.register_timer(Box::new(IntegrationTimer {}))
+            reaper.register_timer(Arc::new(RefCell::new(IntegrationTimer {})))
         }
         ReaperTest::get_mut()
     }

@@ -1,15 +1,22 @@
 use rea_rs_low::{
+    create_cpp_to_rust_control_surface,
     raw::{self, gaccel_register_t},
-    register_plugin_destroy_hook, PluginContext, Swell,
+    register_plugin_destroy_hook, IReaperControlSurface, PluginContext, Swell,
 };
 
-use crate::{errors::ReaperStaticResult, keys::KeyBinding};
+use crate::{
+    errors::ReaperStaticResult, keys::KeyBinding, ControlSurface,
+    ControlSurfaceWrap, ReaRsError,
+};
 use c_str_macro::c_str;
 use serde_derive::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
     collections::HashMap,
     error::Error,
     ffi::CString,
+    ptr::NonNull,
+    sync::Arc,
     time::{self, Duration, Instant},
 };
 
@@ -69,8 +76,8 @@ extern "C" fn timer_f() {
     let timers = &mut Reaper::get_mut().timers;
     for (_, (last_time, timer)) in timers.iter_mut() {
         let now = time::Instant::now();
-        if now.duration_since(last_time.clone()) > timer.interval() {
-            match timer.run() {
+        if now.duration_since(last_time.clone()) > timer.borrow().interval() {
+            match timer.borrow_mut().run() {
                 Ok(_) => (),
                 Err(e) => action_error(e),
             };
@@ -85,7 +92,15 @@ pub struct Reaper {
     actions: Vec<Action>,
     hook: extern "C" fn(i32, i32) -> bool,
     accels: Vec<Gaccel>,
-    timers: HashMap<String, (Instant, Box<dyn Timer>)>,
+    timers: HashMap<String, (Instant, Arc<RefCell<dyn Timer>>)>,
+    csurfases: HashMap<
+        String,
+        (
+            Box<Box<dyn IReaperControlSurface>>,
+            NonNull<dyn IReaperControlSurface>,
+            NonNull<raw::IReaperControlSurface>,
+        ),
+    >,
 }
 impl Reaper {
     pub fn load(context: PluginContext) -> Reaper {
@@ -105,6 +120,7 @@ impl Reaper {
             hook,
             accels: Vec::new(),
             timers: HashMap::new(),
+            csurfases: HashMap::new(),
         }
     }
     fn make_available_globally(reaper: Reaper) {
@@ -159,9 +175,9 @@ impl Reaper {
         }
     }
 
-    pub fn register_timer(&mut self, timer: Box<dyn Timer>) {
-        self.timers
-            .insert(timer.id_string(), (Instant::now(), timer));
+    pub fn register_timer(&mut self, timer: Arc<RefCell<dyn Timer>>) {
+        let string = timer.borrow().id_string();
+        self.timers.insert(string, (Instant::now(), timer));
         if self.timers.len() == 1 {
             unsafe {
                 self.low().plugin_register(
@@ -264,11 +280,59 @@ impl Reaper {
         Ok(accel)
     }
 
-    // fn check_action_hook(&mut self) {
-    //     if self.action_hook.is_none() {
+    pub fn register_control_surface(
+        &mut self,
+        csurf: Arc<RefCell<dyn ControlSurface>>,
+    ) {
+        let id_string = csurf.borrow().get_type_string();
+        let mut low_cs: Box<dyn IReaperControlSurface> =
+            Box::new(ControlSurfaceWrap::new(csurf));
+        // Create thin pointer of low_cs before making it a trait
+        // object (for being able to restore the original
+        // low_cs later).
+        let low_cs_thin_ptr = NonNull::new(low_cs.as_mut()).expect("null");
+        // Create the C++ counterpart surface (we need to box the Rust side
+        // twice in order to obtain a thin pointer for passing it to
+        // C++ as callback target).
+        let double_boxed_low_cs = Box::new(low_cs);
+        let cpp_cs = unsafe {
+            create_cpp_to_rust_control_surface(
+                double_boxed_low_cs.as_ref().into(),
+            )
+        };
+        println!("made cpp pointer");
+        let s = c_str!("csurf_inst");
+        let ret = unsafe {
+            self.low().plugin_register(s.as_ptr(), cpp_cs.as_ptr() as _)
+        };
 
-    //     };
-    // }
+        println!("registered: {ret}");
+        self.csurfases
+            .insert(id_string, (double_boxed_low_cs, low_cs_thin_ptr, cpp_cs));
+        println!("added to HashMap: {:#?}", self.csurfases);
+    }
+
+    pub fn has_control_surface(&self, id_string: &String) -> bool {
+        self.csurfases.contains_key(id_string)
+    }
+
+    pub fn unregister_control_surface(
+        &mut self,
+        id_string: String,
+    ) -> Result<(), ReaRsError> {
+        let (_, _, cpp_cs) =
+            self.csurfases.remove(&id_string).ok_or(ReaRsError::Key(
+                id_string,
+                format!("{:#?}", self.csurfases.keys()),
+            ))?;
+        unsafe {
+            self.low().plugin_register(
+                c_str!("-csurf_inst").as_ptr(),
+                cpp_cs.as_ptr() as _,
+            );
+        }
+        Ok(())
+    }
 }
 impl Drop for Reaper {
     fn drop(&mut self) {

@@ -219,5 +219,19 @@ pub use midi_editor::*;
 pub mod color;
 pub use color::*;
 
+pub mod control_surface;
+pub use control_surface::*;
+
 pub mod socket;
 
+#[derive(thiserror::Error, Debug)]
+pub enum ReaRsError {
+    #[error("The pointer to {0} is null.")]
+    NullPtr(&'static str),
+    #[error("Unexpected API:\n{0}")]
+    UnexpectedAPI(String),
+    #[error("No element with key '{0}'. Possible keys are:\n{1}")]
+    Key(String, String),
+    #[error("Socket error: {0}")]
+    Socket(String),
+}

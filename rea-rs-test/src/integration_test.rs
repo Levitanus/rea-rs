@@ -1,7 +1,7 @@
 use fs_extra::dir::CopyOptions;
 use std::error::Error;
 use std::fs::File;
-use std::io::{Cursor, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -141,16 +141,16 @@ fn build_on_macos(
 }
 
 /// Download file only if it is not exists.
-fn download_file(url: impl Into<String>, path: PathBuf) -> Result<()> {
-    if path.exists() {
-        return Ok(());
-    }
-    let resp = reqwest::blocking::get(url.into())?;
-    let mut f = File::create(path.clone())?;
-    let mut content = Cursor::new(resp.bytes()?);
-    std::io::copy(&mut content, &mut f)?;
-    Ok(())
-}
+// fn download_file(url: impl Into<String>, path: PathBuf) -> Result<()> {
+//     if path.exists() {
+//         return Ok(());
+//     }
+//     let resp = reqwest::blocking::get(url.into())?;
+//     let mut f = File::create(path.clone())?;
+//     let mut content = Cursor::new(resp.bytes()?);
+//     std::io::copy(&mut content, &mut f)?;
+//     Ok(())
+// }
 
 fn install_plugin(
     target_dir_path: &Path,
