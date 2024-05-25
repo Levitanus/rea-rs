@@ -50,6 +50,11 @@ impl Color {
         low.ColorToNative(self.r as i32, self.g as i32, self.b as i32)
     }
 }
+impl Default for Color {
+    fn default() -> Self {
+        Self::new(0, 0, 0)
+    }
+}
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, strum::Display)]
