@@ -5,12 +5,12 @@ use std::{
 
 use crate::{
     errors::{ReaperError, ReaperStaticResult},
-    ptr_wrappers::{self, MediaItemTake, PcmSource},
+    ptr_wrappers::{self, MediaItemTake, PcmSource, TrackEnvelope},
     utils::{
         as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
         WithNull,
     },
-    AudioAccessor, Color, FXParent, Immutable, Item, KnowsProject,
+    AudioAccessor, Color, Envelope, FXParent, Immutable, Item, KnowsProject,
     MidiEventBuilder, Mutable, Pan, PanLaw, Pitch, PlayRate, ProbablyMutable,
     Project, Reaper, Source, SourceOffset, TakeFX, Volume, WithReaperPtr, FX,
     GUID,
@@ -233,6 +233,18 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
         }
     }
 
+    pub fn get_envelope(&self, index: usize) -> Option<Envelope<Take<T>, T>> {
+        let rpr = Reaper::get();
+        let ptr = unsafe {
+            rpr.low().GetTakeEnvelope(self.get().as_ptr(), index as i32)
+        };
+        if let Some(env) = TrackEnvelope::new(ptr) {
+            Some(Envelope::new(env, self))
+        } else {
+            None
+        }
+    }
+
     pub fn start_offset(&self) -> SourceOffset {
         SourceOffset::from_secs_f64(self.get_info_value("D_STARTOFFS"))
     }
@@ -401,6 +413,21 @@ impl<'a> Take<'a, Mutable> {
             None
         } else {
             TakeFX::from_index(self, result as usize)
+        }
+    }
+
+    pub fn get_envelope_mut(
+        &mut self,
+        index: usize,
+    ) -> Option<Envelope<Take<Mutable>, Mutable>> {
+        let rpr = Reaper::get();
+        let ptr = unsafe {
+            rpr.low().GetTakeEnvelope(self.get().as_ptr(), index as i32)
+        };
+        if let Some(env) = TrackEnvelope::new(ptr) {
+            Some(Envelope::new(env, self))
+        } else {
+            None
         }
     }
 
