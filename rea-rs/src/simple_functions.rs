@@ -319,11 +319,16 @@ impl Reaper {
                 None => 1024,
                 Some(sz) => sz,
             };
+            let title = title.into();
+            let title_c =
+                CString::new(title).expect("CString construction failed");
+            let captions_c = CString::new(captions.join(","))
+                .expect("CString construction failed");
             let buf = make_string_buf(buf_size);
             let result = self.low().GetUserInputs(
-                as_c_char(title.into().as_str()),
+                title_c.as_ptr(),
                 captions.len() as i32,
-                as_mut_i8(captions.join(",").as_str()),
+                captions_c.as_ptr(),
                 buf,
                 buf_size as i32,
             );
