@@ -10,7 +10,8 @@ use std::{
 
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
-use ws::{connect, listen};
+pub use ws::Sender as Broadcaster;
+use ws::{connect, Builder};
 
 use crate::ReaRsError;
 
@@ -26,29 +27,31 @@ pub fn spawn_server<
         + std::clone::Clone,
 >(
     url: impl AsRef<str>,
-) -> Arc<Mutex<Vec<SocketHandle<T>>>> {
+) -> (Arc<Mutex<Vec<SocketHandle<T>>>>, Broadcaster) {
     let url = String::from(url.as_ref());
     let clients = Arc::new(Mutex::new(Vec::new()));
     let clcl = clients.clone();
-    spawn(move || {
-        listen(url, move |socket| {
+    let socket = Builder::new()
+        .build(move |out: ws::Sender| {
             let (ssend, crcv) = channel::<T>();
             let client = SocketHandle {
-                socket: socket.clone(),
+                socket: out.clone(),
                 reciever: crcv,
             };
             clcl.lock().expect("can not lock clients").push(client);
             let ssend_cl = ssend.clone();
-            move |msg| message_handler(msg, socket.clone(), ssend_cl.clone())
+            move |msg| message_handler(msg, out.clone(), ssend_cl.clone())
         })
-        .expect("can not run server")
-    });
-    clients
+        .expect("can not build server");
+    let broadcaster = socket.broadcaster();
+    spawn(move || socket.listen(url).expect("can not run server"));
+    (clients, broadcaster)
 }
 
 /// Spawn the thread with the client socket and get its handle.
 ///
 /// The function will wait for socket for 5 seconds.
+/// Note: url will be prefixed with `ws://` automatically
 pub fn spawn_client<
     T: Debug
         + Serialize
@@ -60,7 +63,7 @@ pub fn spawn_client<
     url: impl AsRef<str>,
 ) -> Result<SocketHandle<T>, Error> {
     let (ssend, crecv) = channel::<T>();
-    let url = String::from(url.as_ref());
+    let url = "ws://".to_string() + url.as_ref();
     let connection_result: Arc<Mutex<Option<Result<ws::Sender, ws::Error>>>> =
         Arc::new(Mutex::new(None));
     let cr_clone = connection_result.clone();
