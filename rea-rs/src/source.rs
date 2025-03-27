@@ -203,7 +203,18 @@ fn test_source_offset() {
     assert_eq!(offset.as_secs_f64(), -2.543);
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Hash, Copy, Clone)]
+#[derive(
+    Debug,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Eq,
+    Hash,
+    Copy,
+    Clone,
+    Serialize,
+    Deserialize,
+)]
 pub struct SourceOffset {
     offset: TimeDelta,
 }
