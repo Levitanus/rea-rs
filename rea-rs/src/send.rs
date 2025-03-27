@@ -1,9 +1,8 @@
 use crate::{
-    errors::{ReaperError, ReaperResult},
     ptr_wrappers::{MediaTrack, TrackEnvelope},
     utils::{as_c_str, WithNull},
     AutomationMode, Envelope, Immutable, KnowsProject, Mutable, Pan, PanLaw,
-    ProbablyMutable, Reaper, Track, Volume, WithReaperPtr, GUID,
+    ProbablyMutable, ReaRsError, Reaper, Track, Volume, WithReaperPtr, GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
@@ -270,7 +269,7 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
     /// # Note
     ///
     /// `drop(send)` will not remove send from track.
-    fn delete(self) -> ReaperResult<()>
+    fn delete(self) -> anyhow::Result<()>
     where
         Self: Sized,
     {
@@ -281,7 +280,7 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
                 self.index() as i32,
             ) {
                 true => Ok(()),
-                false => Err(ReaperError::UnsuccessfulOperation(
+                false => Err(ReaRsError::UnsuccessfulOperation(
                     "Can not delete send.",
                 )
                 .into()),
@@ -297,7 +296,7 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
         &mut self,
         param: impl Into<String>,
         value: f64,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         let mut param = param.into();
         let result = unsafe {
             Reaper::get().low().SetTrackSendInfo_Value(
@@ -310,14 +309,14 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
         };
         match result {
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set value.")
+                Err(ReaRsError::UnsuccessfulOperation("Can not set value.")
                     .into())
             }
             true => Ok(()),
         }
     }
 
-    fn set_mute(&mut self, mute: bool) -> ReaperResult<()> {
+    fn set_mute(&mut self, mute: bool) -> anyhow::Result<()> {
         let mute = match mute {
             true => 1.0,
             false => 0.0,
@@ -325,30 +324,30 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
         self.set_info_value("B_MUTE", mute)
     }
     /// Phase flipped if true.
-    fn set_phase(&mut self, phase: bool) -> ReaperResult<()> {
+    fn set_phase(&mut self, phase: bool) -> anyhow::Result<()> {
         let phase = match phase {
             true => 1.0,
             false => 0.0,
         };
         self.set_info_value("B_PHASE", phase)
     }
-    fn set_mono(&mut self, mono: bool) -> ReaperResult<()> {
+    fn set_mono(&mut self, mono: bool) -> anyhow::Result<()> {
         let mono = match mono {
             true => 1.0,
             false => 0.0,
         };
         self.set_info_value("B_MONO", mono)
     }
-    fn set_volume(&mut self, volume: impl Into<Volume>) -> ReaperResult<()> {
+    fn set_volume(&mut self, volume: impl Into<Volume>) -> anyhow::Result<()> {
         self.set_info_value("D_VOL", volume.into().into())
     }
-    fn set_pan(&mut self, pan: impl Into<Pan>) -> ReaperResult<()> {
+    fn set_pan(&mut self, pan: impl Into<Pan>) -> anyhow::Result<()> {
         self.set_info_value("D_PAN", pan.into().into())
     }
-    fn set_pan_law(&mut self, pan_law: PanLaw) -> ReaperResult<()> {
+    fn set_pan_law(&mut self, pan_law: PanLaw) -> anyhow::Result<()> {
         self.set_info_value("D_PANLAW", pan_law.into())
     }
-    fn set_send_mode(&mut self, send_mode: SendMode) -> ReaperResult<()> {
+    fn set_send_mode(&mut self, send_mode: SendMode) -> anyhow::Result<()> {
         self.set_info_value("I_SENDMODE", send_mode.into())
     }
 
@@ -357,14 +356,14 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
     fn set_automation_mode(
         &mut self,
         automation_mode: AutomationMode,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         self.set_info_value("I_AUTOMODE", automation_mode.int_value().into())
     }
     /// Pass `None` if want to turn audio off.
     fn set_source_channels(
         &mut self,
         channels: Option<SendSourceChannels>,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         let value = match channels {
             None => -1.0,
             Some(value) => value.into(),
@@ -372,13 +371,13 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
         self.set_info_value("I_SRCCHAN", value)
     }
     /// If source channels are off it will return
-    /// [ReaperError::InvalidObject]
+    /// [ReaRsError::InvalidObject]
     fn set_dest_channels(
         &mut self,
         channels: SendDestChannels,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         {
-            self.source_channels().ok_or(ReaperError::InvalidObject(
+            self.source_channels().ok_or(ReaRsError::InvalidObject(
                 "source channels are None. set them at first.",
             ))?;
         }
@@ -389,7 +388,7 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
     fn set_midi_properties(
         &mut self,
         properties: impl Into<Option<SendMIDIProps>>,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         let param = "I_MIDIFLAGS";
         match properties.into() {
             None => {

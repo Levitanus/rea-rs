@@ -4,7 +4,6 @@ use std::{
 };
 
 use crate::{
-    errors::{ReaperError, ReaperStaticResult},
     ptr_wrappers::{self, MediaItemTake, PcmSource, TrackEnvelope},
     utils::{
         as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
@@ -12,8 +11,8 @@ use crate::{
     },
     AudioAccessor, Color, Envelope, FXParent, Immutable, Item, KnowsProject,
     MidiEventBuilder, Mutable, Pan, PanLaw, Pitch, PlayRate, ProbablyMutable,
-    Project, Reaper, Source, SourceOffset, TakeFX, Volume, WithReaperPtr, FX,
-    GUID,
+    Project, ReaRsError, Reaper, ReaperResult, Source, SourceOffset,
+    TakeFX, Volume, WithReaperPtr, FX, GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
@@ -138,7 +137,7 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
     pub fn iter_midi(
         &self,
         buf_size_override: impl Into<Option<i32>>,
-    ) -> ReaperStaticResult<MidiEventBuilder> {
+    ) -> ReaperResult<MidiEventBuilder> {
         let buf = self.get_midi(buf_size_override)?;
         Ok(MidiEventBuilder::new(buf.into_iter()))
     }
@@ -168,7 +167,7 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
     pub fn get_midi(
         &self,
         buf_size_override: impl Into<Option<i32>>,
-    ) -> ReaperStaticResult<Vec<u8>> {
+    ) -> ReaperResult<Vec<u8>> {
         let size = buf_size_override.into().unwrap_or(i32::MAX - 100);
         let mut buf = vec![0_u8; size as usize];
         let raw = buf.as_mut_ptr() as *mut c_char;
@@ -184,7 +183,7 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
         buf.truncate(size as usize);
         match result {
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not get midi"))
+                Err(ReaRsError::UnsuccessfulOperation("Can not get midi"))
             }
             true => Ok(buf),
         }
@@ -194,7 +193,7 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
         &self,
         category: impl Into<String>,
         size: usize,
-    ) -> ReaperStaticResult<String> {
+    ) -> ReaperResult<String> {
         let mut category = category.into();
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
@@ -211,7 +210,7 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
                     .expect("Can not convert value to string."))
             }
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not get value"))
+                Err(ReaRsError::UnsuccessfulOperation("Can not get value"))
             }
         }
     }
@@ -460,7 +459,7 @@ impl<'a> Take<'a, Mutable> {
     pub fn set_source<T: ProbablyMutable>(
         &mut self,
         source: Source<T>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().SetMediaItemTake_Source(
                 self.get().as_ptr(),
@@ -470,7 +469,7 @@ impl<'a> Take<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("can not set source"))
+                Err(ReaRsError::UnsuccessfulOperation("can not set source"))
             }
         }
     }
@@ -481,7 +480,7 @@ impl<'a> Take<'a, Mutable> {
     /// - [crate::midi]
     /// - [Take::get_midi]
     /// - [Take::iter_midi]
-    pub fn set_midi(&mut self, mut midi: Vec<u8>) -> ReaperStaticResult<()> {
+    pub fn set_midi(&mut self, mut midi: Vec<u8>) -> ReaperResult<()> {
         let raw = midi.as_mut_ptr() as *mut c_char;
         let result = unsafe {
             Reaper::get().low().MIDI_SetAllEvts(
@@ -493,7 +492,7 @@ impl<'a> Take<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set midi"))
+                Err(ReaRsError::UnsuccessfulOperation("Can not set midi"))
             }
         }
     }
@@ -502,7 +501,7 @@ impl<'a> Take<'a, Mutable> {
         &mut self,
         category: impl Into<String>,
         string: impl Into<String>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let mut category = category.into();
         let string = string.into();
         let buf = as_c_string(&string).into_raw();
@@ -517,7 +516,7 @@ impl<'a> Take<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not get value"))
+                Err(ReaRsError::UnsuccessfulOperation("Can not get value"))
             }
         }
     }
@@ -534,7 +533,7 @@ impl<'a> Take<'a, Mutable> {
         &mut self,
         category: impl Into<String>,
         value: f64,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let category = category.into();
         let result = unsafe {
             Reaper::get().low().SetMediaItemTakeInfo_Value(
@@ -546,7 +545,7 @@ impl<'a> Take<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set value"))
+                Err(ReaRsError::UnsuccessfulOperation("Can not set value"))
             }
         }
     }
@@ -554,7 +553,7 @@ impl<'a> Take<'a, Mutable> {
     pub fn set_start_offset(
         &mut self,
         offset: SourceOffset,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         self.set_info_value("D_STARTOFFS", offset.as_secs_f64())
     }
 
@@ -576,13 +575,13 @@ impl<'a> Take<'a, Mutable> {
     pub fn set_play_rate(
         &mut self,
         play_rate: PlayRate,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         self.set_info_value("D_PLAYRATE", play_rate.into())
     }
 
     /// take pitch adjustment in semitones, -12=one octave down, 0=normal,
     /// +12=one octave up, etc
-    pub fn set_pitch(&mut self, pitch: Pitch) -> ReaperStaticResult<()> {
+    pub fn set_pitch(&mut self, pitch: Pitch) -> ReaperResult<()> {
         self.set_info_value("D_PITCH", pitch.get())
     }
 

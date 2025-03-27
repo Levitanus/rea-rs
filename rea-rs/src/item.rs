@@ -1,10 +1,10 @@
 use crate::{
-    errors::{ReaperError, ReaperStaticResult},
     ptr_wrappers::{MediaItem, MediaItemTake, MediaTrack},
     utils::{as_c_str, as_c_string, as_string_mut},
     utils::{make_c_string_buf, WithNull},
     Color, Immutable, KnowsProject, Mutable, Position, ProbablyMutable,
-    Project, Reaper, Take, TimeMode, Track, Volume, WithReaperPtr, GUID,
+    Project, ReaRsError, Reaper, ReaperResult, Take, TimeMode, Track,
+    Volume, WithReaperPtr, GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
@@ -231,7 +231,7 @@ impl<'a, T: ProbablyMutable> Item<'a, T> {
         &self,
         category: impl Into<String>,
         buf_size: usize,
-    ) -> ReaperStaticResult<String> {
+    ) -> ReaperResult<String> {
         let mut category = category.into();
         let buf = make_c_string_buf(buf_size).into_raw();
         let result = unsafe {
@@ -244,7 +244,7 @@ impl<'a, T: ProbablyMutable> Item<'a, T> {
         };
         match result {
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not get value!"))
+                Err(ReaRsError::UnsuccessfulOperation("Can not get value!"))
             }
             true => {
                 Ok(as_string_mut(buf).expect("can not convert buf to string"))
@@ -254,7 +254,7 @@ impl<'a, T: ProbablyMutable> Item<'a, T> {
     pub fn notes(
         &self,
         buf_size: impl Into<Option<u32>>,
-    ) -> ReaperStaticResult<String> {
+    ) -> ReaperResult<String> {
         let size = buf_size.into().unwrap_or(1024);
         self.get_info_string("P_NOTES", size as usize)
     }
@@ -338,7 +338,7 @@ impl<'a> Item<'a, Mutable> {
     pub fn split(
         self,
         position: impl Into<Position>,
-    ) -> ReaperStaticResult<ItemSplit<'a>> {
+    ) -> ReaperResult<ItemSplit<'a>> {
         let position: f64 = position.into().into();
         let ptr = unsafe {
             Reaper::get()
@@ -347,7 +347,7 @@ impl<'a> Item<'a, Mutable> {
         };
         let ptr = match MediaItem::new(ptr) {
             None => {
-                return Err(ReaperError::InvalidObject(
+                return Err(ReaRsError::InvalidObject(
                     "Can not split item, probably, bad position.",
                 ))
             }
@@ -364,10 +364,10 @@ impl<'a> Item<'a, Mutable> {
         unsafe { Reaper::get().low().UpdateItemInProject(self.get().as_ptr()) }
     }
 
-    pub fn move_to_track(&self, track_index: usize) -> ReaperStaticResult<()> {
+    pub fn move_to_track(&self, track_index: usize) -> ReaperResult<()> {
         let track =
             Track::<Immutable>::from_index(self.project(), track_index)
-                .ok_or(ReaperError::InvalidObject(
+                .ok_or(ReaRsError::InvalidObject(
                     "No track with given index!",
                 ))?;
         let track_ptr = track.get().as_ptr();
@@ -378,7 +378,7 @@ impl<'a> Item<'a, Mutable> {
         };
         match result {
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not move item."))
+                Err(ReaRsError::UnsuccessfulOperation("Can not move item."))
             }
             true => Ok(()),
         }
@@ -388,7 +388,7 @@ impl<'a> Item<'a, Mutable> {
         &mut self,
         category: impl Into<String>,
         value: f64,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let mut category = category.into();
         let result = unsafe {
             Reaper::get().low().SetMediaItemInfo_Value(
@@ -400,7 +400,7 @@ impl<'a> Item<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set value."))
+                Err(ReaRsError::UnsuccessfulOperation("Can not set value."))
             }
         }
     }
@@ -446,10 +446,10 @@ impl<'a> Item<'a, Mutable> {
     pub fn set_snap_offset(
         &mut self,
         offset: Duration,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         self.set_info_value("D_SNAPOFFSET", offset.as_secs_f64())
     }
-    pub fn set_fade_in(&mut self, fade: ItemFade) -> ReaperStaticResult<()> {
+    pub fn set_fade_in(&mut self, fade: ItemFade) -> ReaperResult<()> {
         self.set_info_value("D_FADEINLEN", fade.length.as_secs_f64())?;
         self.set_info_value("D_FADEINDIR", fade.curve)?;
         self.set_info_value("C_FADEINSHAPE", fade.shape.int_value() as f64)?;
@@ -459,7 +459,7 @@ impl<'a> Item<'a, Mutable> {
         )?;
         Ok(())
     }
-    pub fn set_fade_out(&mut self, fade: ItemFade) -> ReaperStaticResult<()> {
+    pub fn set_fade_out(&mut self, fade: ItemFade) -> ReaperResult<()> {
         self.set_info_value("D_FADEOUTLEN", fade.length.as_secs_f64())?;
         self.set_info_value("D_FADEOUTDIR", fade.curve)?;
         self.set_info_value("C_FADEOUTSHAPE", fade.shape.int_value() as f64)?;
@@ -469,7 +469,7 @@ impl<'a> Item<'a, Mutable> {
         )?;
         Ok(())
     }
-    pub fn set_group_id(&mut self, id: usize) -> ReaperStaticResult<()> {
+    pub fn set_group_id(&mut self, id: usize) -> ReaperResult<()> {
         self.set_info_value("I_GROUPID", id as f64)
     }
     /// Y-position (relative to top of track) in pixels when track is in free
@@ -479,7 +479,7 @@ impl<'a> Item<'a, Mutable> {
     pub fn set_y_pos_free_mode(
         &mut self,
         y_pos: f64,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         assert!((0.0..1.0).contains(&y_pos));
         self.set_info_value("F_FREEMODE_Y", y_pos as f64)
     }
@@ -503,7 +503,7 @@ impl<'a> Item<'a, Mutable> {
         &self,
         category: impl Into<String>,
         value: impl Into<String>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let mut category = category.into();
         let value = value.into();
         let buf = as_c_string(&value).into_raw();
@@ -517,7 +517,7 @@ impl<'a> Item<'a, Mutable> {
         };
         match result {
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not get value!"))
+                Err(ReaRsError::UnsuccessfulOperation("Can not get value!"))
             }
             true => Ok(()),
         }
@@ -525,11 +525,11 @@ impl<'a> Item<'a, Mutable> {
     pub fn set_notes(
         &self,
         notes: impl Into<String>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let notes: String = notes.into();
         self.set_info_string("P_NOTES", notes)
     }
-    pub fn set_guid(&self, guid: GUID) -> ReaperStaticResult<()> {
+    pub fn set_guid(&self, guid: GUID) -> ReaperResult<()> {
         let guid_str = guid.to_string();
         self.set_info_string("GUID", guid_str)
     }

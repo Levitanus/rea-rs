@@ -32,7 +32,7 @@
 //! The Common entry point should look like this:
 //!
 //! ```no_run
-//! use rea_rs::{errors::ReaperResult, ActionKind, Reaper, PluginContext};
+//! use rea_rs::{ActionKind, Reaper, PluginContext};
 //! use rea_rs_macros::reaper_extension_plugin;
 //! use std::error::Error;
 //!
@@ -53,6 +53,7 @@
 //! use rea_rs::{PluginContext, Reaper, RegisteredAccel, Timer};
 //! use rea_rs_macros::reaper_extension_plugin;
 //! use std::error::Error;
+//! use std::{cell::RefCell, sync::Arc};
 //!
 //! #[derive(Debug)]
 //! struct Listener {
@@ -88,7 +89,7 @@
 //!         None
 //!     )?;
 //!
-//!     reaper.register_timer(Box::new(Listener{action}));
+//!     reaper.register_timer(Arc::new(RefCell::new(Listener{action})));
 //!     Ok(())
 //! }
 //! ```
@@ -149,6 +150,7 @@
 //!
 //! Enjoy the coding!
 
+use anyhow::Error;
 pub use chrono::Duration;
 pub use int_enum::IntEnum;
 pub use rea_rs_low::PluginContext;
@@ -174,7 +176,7 @@ pub use utils::WithReaperPtr;
 pub mod misc_enums;
 pub use misc_enums::*;
 
-pub mod errors;
+// pub mod errors;
 pub mod keys;
 
 pub mod misc_types;
@@ -234,4 +236,20 @@ pub enum ReaRsError {
     Key(String, String),
     #[error("Socket error: {0}")]
     Socket(String),
+    #[error(
+        "Found wrong ExtState by key:{0}, value:{1}\n original error:{2}"
+    )]
+    ExtStateDeserializtion(String, String, Error),
+    #[error("User aborted operation.")]
+    UserAborted,
+    #[error("Unexpected error happened.")]
+    Unexpected,
+    #[error("Invalid object: {0}")]
+    InvalidObject(&'static str),
+    #[error("Unsuccessful operation: {0}")]
+    UnsuccessfulOperation(&'static str),
+    #[error("Error: {0}")]
+    Str(&'static str),
 }
+
+pub type ReaperResult<T> = Result<T, ReaRsError>;

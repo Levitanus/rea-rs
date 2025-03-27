@@ -5,8 +5,8 @@ use rea_rs_low::{
 };
 
 use crate::{
-    errors::ReaperStaticResult, keys::KeyBinding, ControlSurface,
-    ControlSurfaceWrap, ReaRsError,
+    keys::KeyBinding, ControlSurface, ControlSurfaceWrap, ReaRsError,
+    ReaperResult,
 };
 use c_str_macro::c_str;
 use serde_derive::{Deserialize, Serialize};
@@ -190,7 +190,7 @@ impl Reaper {
     pub fn unregister_timer(
         &mut self,
         id_string: String,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         match self.timers.remove(&id_string) {
             Some(_) => {
                 if self.timers.len() == 0 {
@@ -203,7 +203,7 @@ impl Reaper {
                 }
                 Ok(())
             }
-            None => Err(crate::errors::ReaperError::InvalidObject(
+            None => Err(crate::ReaRsError::InvalidObject(
                 "No timer with the given string",
             )),
         }

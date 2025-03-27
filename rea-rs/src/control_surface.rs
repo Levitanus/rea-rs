@@ -280,7 +280,7 @@ impl ControlSurfaceWrap {
     }
     fn error(&self, error: Error) {
         let formatted = format!("Error in control surface:\n{:#?}", error);
-        log::error!("{}", formatted);
+        log::error!("{:?}", error);
         Reaper::get().show_console_msg(formatted)
     }
     fn check_for_error(&self, result: Result<()>) {

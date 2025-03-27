@@ -1,8 +1,10 @@
 use crate::{
     utils::{as_c_str, as_string, make_c_string_buf, WithNull},
     Envelope, GenericSend, Item, KnowsProject, Mutable, ProbablyMutable,
-    Project, Reaper, SendIntType, Take, Track, TrackSend, WithReaperPtr,
+    Project, ReaRsError, Reaper, SendIntType, Take, Track, TrackSend,
+    WithReaperPtr,
 };
+use log::debug;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::{
@@ -42,29 +44,30 @@ use std::{
 /// use rea_rs::{ExtState, HasExtState, Reaper, Project};
 /// let rpr = Reaper::get();
 /// let mut state =
-///     ExtState::new("test section", "first", Some(10), true, rpr);
-/// assert_eq!(state.get().expect("can not get value"), 10);
+///     ExtState::new("test section", "first", Some(10), true, rpr, None);
+/// assert_eq!(state.get()?.expect("can not get value"), 10);
 /// state.set(56);
-/// assert_eq!(state.get().expect("can not get value"), 56);
+/// assert_eq!(state.get()?.expect("can not get value"), 56);
 /// state.delete();
-/// assert!(state.get().is_none());
+/// assert!(state.get()?.is_none());
 ///
 /// let mut pr = rpr.current_project();
 /// let mut state: ExtState<u32, Project> =
-///     ExtState::new("test section", "first", None, true, &pr);
-/// assert_eq!(state.get().expect("can not get value"), 10);
+///     ExtState::new("test section", "first", None, true, &pr, None);
+/// assert_eq!(state.get()?.expect("can not get value"), 10);
 /// state.set(56);
-/// assert_eq!(state.get().expect("can not get value"), 56);
+/// assert_eq!(state.get()?.expect("can not get value"), 56);
 /// state.delete();
-/// assert!(state.get().is_none());
+/// assert!(state.get()?.is_none());
 ///
 /// let tr = pr.get_track_mut(0).unwrap();
-/// let mut state = ExtState::new("testsection", "first", 45, false, &tr);
-/// assert_eq!(state.get().expect("can not get value"), 45);
+/// let mut state = ExtState::new("testsection", "first", 45, false, &tr, None);
+/// assert_eq!(state.get()?.expect("can not get value"), 45);
 /// state.set(15);
-/// assert_eq!(state.get().expect("can not get value"), 15);
+/// assert_eq!(state.get()?.expect("can not get value"), 15);
 /// state.delete();
-/// assert_eq!(state.get(), None);
+/// assert_eq!(state.get()?, None);
+/// Ok::<(), anyhow::Error>(())
 /// ```
 #[derive(Debug, PartialEq)]
 pub struct ExtState<
@@ -93,29 +96,35 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
         value: impl Into<Option<T>>,
         persist: bool,
         object: &'a O,
+        buf_size: impl Into<Option<usize>>,
     ) -> Self {
         let value = value.into();
+        let buf_size = if let Some(s) = buf_size.into() {
+            s
+        } else {
+            4096
+        };
         let mut obj = Self {
             section: section.into(),
             key: key.into(),
             value,
             persist,
             object: object,
-            buf_size: 4096,
+            buf_size,
         };
         match obj.value.as_ref() {
             None => {
                 if persist {
                     match obj.get() {
-                        None => (),
-                        Some(val) => obj.set(val),
+                        Err(_) | Ok(None) => (),
+                        Ok(Some(val)) => obj.set(val),
                     }
                 } else {
                     obj.delete()
                 }
             }
             Some(val) => {
-                if persist && obj.get().is_none() || !persist {
+                if persist && obj.get().unwrap_or(None).is_none() || !persist {
                     obj.set(val.clone())
                 }
             }
@@ -134,16 +143,16 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
     ///
     /// Returns None if no value saved in REAPER.
     ///
-    /// # Panics
+    /// # Error
     ///
     /// If value of the wrong type stored in the
     /// same section/key.
-    pub fn get(&self) -> Option<T> {
+    pub fn get(&self) -> Result<Option<T>, ReaRsError> {
         let (section_str, key_str) = (self.section(), self.key());
         let (section, key) = (as_c_str(&section_str), as_c_str(&key_str));
         let result = self.object.get_ext_value(section, key, self.buf_size);
         let value_obj = match result {
-            None => return None,
+            None => return Ok(None),
             Some(value) => value,
         };
         let value = value_obj.to_string_lossy();
@@ -152,9 +161,18 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
         //     .expect("This value was not serialized by ExtState");
         // let value: T = serde_pickle::from_slice(value, Default::default())
         //     .expect("This value was not serialized by ExtState");
-        let value: T = serde_json::from_str(&*value)
-            .expect("This value was not serialized by ExtState");
-        Some(value)
+        debug!("got value: {:#?}", value);
+        let value: T = match serde_json::from_str(&*value) {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(ReaRsError::ExtStateDeserializtion(
+                    self.section.clone(),
+                    self.key.clone(),
+                    e.into(),
+                ))
+            }
+        };
+        Ok(Some(value))
     }
 
     /// Set the value to ext state.
@@ -170,6 +188,7 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
         //     .expect("can not serialize to string");
         let value =
             serde_json::to_string(&value).expect("Can not serialize value!");
+        debug!("set value: {:#?}", value);
         let value = CString::new(value.as_str())
             .expect("Can not convert ExtValue String to CString");
         self.object.set_ext_value(section, key, value.into_raw())

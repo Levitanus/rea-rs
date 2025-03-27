@@ -1,7 +1,7 @@
 use crate::{
-    errors::{ReaperError, ReaperStaticResult},
     utils::{as_c_str, as_string_mut, make_c_string_buf, WithNull},
-    Direction, Project, Reaper, Take, WithReaperPtr,
+    Direction, Project, ReaRsError, Reaper, ReaperResult, Take,
+    WithReaperPtr,
 };
 use int_enum::IntEnum;
 use rea_rs_low::raw;
@@ -680,7 +680,7 @@ const ZERO_GUID: raw::GUID = raw::GUID {
 };
 
 impl GUID {
-    pub fn from_string(mut value: String) -> ReaperStaticResult<Self> {
+    pub fn from_string(mut value: String) -> ReaperResult<Self> {
         let mut g = MaybeUninit::zeroed();
         unsafe {
             Reaper::get().low().stringToGuid(
@@ -690,7 +690,7 @@ impl GUID {
             let g = g.assume_init();
             match g {
                 ZERO_GUID => {
-                    Err(ReaperError::InvalidObject("Can not convert to GUID"))
+                    Err(ReaRsError::InvalidObject("Can not convert to GUID"))
                 }
                 ptr => Ok(Self { raw: ptr }),
             }

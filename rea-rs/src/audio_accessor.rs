@@ -1,9 +1,8 @@
 use std::marker::PhantomData;
 
 use crate::{
-    errors::{ReaperError, ReaperResult},
-    ptr_wrappers, KnowsProject, Mutable, Position, ProbablyMutable, Reaper,
-    SampleAmount, WithReaperPtr,
+    ptr_wrappers, KnowsProject, Mutable, Position, ProbablyMutable,
+    ReaRsError, Reaper, SampleAmount, WithReaperPtr,
 };
 
 #[derive(Debug, PartialEq)]
@@ -94,7 +93,7 @@ impl<'a, T: KnowsProject, P: ProbablyMutable> AudioAccessor<'a, T, P> {
         samples_per_channel: u32,
         n_channels: u8,
         samplerate: u32,
-    ) -> ReaperResult<Option<Vec<f64>>> {
+    ) -> anyhow::Result<Option<Vec<f64>>> {
         let mut sample_buffer =
             vec![0.0; (samples_per_channel * n_channels as u32) as usize];
         let start = start.as_time(samplerate) + self.start().as_duration();
@@ -110,7 +109,7 @@ impl<'a, T: KnowsProject, P: ProbablyMutable> AudioAccessor<'a, T, P> {
         };
         match result {
             -1 => {
-                Err(ReaperError::UnsuccessfulOperation("Can not get samples.")
+                Err(ReaRsError::UnsuccessfulOperation("Can not get samples.")
                     .into())
             }
             0 => Ok(None),

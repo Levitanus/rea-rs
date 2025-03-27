@@ -3,7 +3,6 @@ use bitvec::prelude::*;
 use c_str_macro::c_str;
 use float_eq::assert_float_eq;
 use log::{debug, info, warn};
-use rea_rs::errors::{ReaperError, ReaperResult};
 use rea_rs::project_info::{
     BoundsMode, RenderMode, RenderSettings, RenderTail, RenderTailFlags,
 };
@@ -12,12 +11,12 @@ use rea_rs::{
     EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo, ExtState,
     GenericSend, GenericSendMut, HardwareSocket, Immutable, ItemFade,
     MarkerRegionInfo, MessageBoxValue, Mutable, Pan, PanLaw, Pitch, PlayRate,
-    PluginContext, Position, Project, RazorEdit, Reaper, RecInput, RecMode,
-    RecMonitoring, RecOutMode, SampleAmount, SendDestChannels, SendMIDIProps,
-    SendMode, SendSourceChannels, SoloMode, SourceOffset, TakeChannelMode,
-    TakePitchMode, TimeMode, Track, TrackFolderState, TrackGroupParam,
-    TrackPan, TrackPerformanceFlags, TrackPlayOffset, TrackSend, UndoFlags,
-    VUMode, Volume, WithReaperPtr, FX, GUID,
+    PluginContext, Position, Project, RazorEdit, ReaRsError, Reaper, RecInput,
+    RecMode, RecMonitoring, RecOutMode, SampleAmount, SendDestChannels,
+    SendMIDIProps, SendMode, SendSourceChannels, SoloMode, SourceOffset,
+    TakeChannelMode, TakePitchMode, TimeMode, Track, TrackFolderState,
+    TrackGroupParam, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
+    TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX, GUID,
 };
 use rea_rs_macros::reaper_extension_plugin;
 use rea_rs_test::{TestStep, TestStepResult};
@@ -270,7 +269,7 @@ fn browse_for_file() -> TestStep {
             result
                 .expect_err("should be user aborted error")
                 .to_string(),
-            ReaperError::UserAborted.to_string()
+            ReaRsError::UserAborted.to_string()
         );
         let result = rpr.browse_for_file("Choose Cargo.toml!", "toml")?;
         assert_eq!(
@@ -350,7 +349,7 @@ fn misc() -> TestStep {
             "Add track and shake hand",
             UndoFlags::TRACK_FX | UndoFlags::TRACK_ITEMS,
             None,
-            || -> ReaperResult<()> {
+            || -> anyhow::Result<()> {
                 let rpr = Reaper::get();
                 rpr.show_console_msg("testing flags");
                 // rpr.current_project().add_track(2, "shake hand");
@@ -430,44 +429,45 @@ fn ext_state() -> TestStep {
         debug!("test on integer and in reaper");
         let rpr = Reaper::get();
         let mut state =
-            ExtState::new("test section", "first", Some(10), false, rpr);
-        assert_eq!(state.get().expect("can not get value"), 10);
+            ExtState::new("test section", "first", Some(10), false, rpr, None);
+        assert_eq!(state.get()?.expect("can not get value"), 10);
         state.set(56);
-        assert_eq!(state.get().expect("can not get value"), 56);
+        assert_eq!(state.get()?.expect("can not get value"), 56);
         state.delete();
-        assert!(state.get().is_none());
+        assert!(state.get()?.is_none());
         state.set(56);
 
         debug!("test on struct and in reaper");
         let mut state: ExtState<SampleAmount, Reaper> =
-            ExtState::new("test section", "second", None, false, rpr);
-        assert_eq!(state.get(), None);
+            ExtState::new("test section", "second", None, false, rpr, None);
+        assert_eq!(state.get()?, None);
         state.set(SampleAmount::new(35896));
-        assert_eq!(state.get().expect("can not get value").get(), 35896);
+        assert_eq!(state.get()?.expect("can not get value").get(), 35896);
         state.delete();
-        assert!(state.get().is_none());
+        assert!(state.get()?.is_none());
         state.set(SampleAmount::new(35896));
 
         debug!("test on struct and in project");
         let mut pr = rpr.current_project();
         let mut state: ExtState<SampleAmount, Project> =
-            ExtState::new("test section", "third", None, true, &pr);
+            ExtState::new("test section", "third", None, true, &pr, None);
         state.delete();
-        assert!(state.get().is_none());
+        assert!(state.get()?.is_none());
         state.set(SampleAmount::new(3344));
 
-        assert_eq!(state.get().expect("can not get value").get(), 3344);
+        assert_eq!(state.get()?.expect("can not get value").get(), 3344);
         state.delete();
-        assert!(state.get().is_none());
+        assert!(state.get()?.is_none());
 
         debug!("test on int and track");
         let tr = pr.get_track_mut(0).unwrap();
-        let mut state = ExtState::new("test section", "first", 45, false, &tr);
-        assert_eq!(state.get().expect("can not get value"), 45);
+        let mut state =
+            ExtState::new("test section", "first", 45, false, &tr, None);
+        assert_eq!(state.get()?.expect("can not get value"), 45);
         state.set(15);
-        assert_eq!(state.get().expect("can not get value"), 15);
+        assert_eq!(state.get()?.expect("can not get value"), 15);
         state.delete();
-        assert_eq!(state.get(), None);
+        assert_eq!(state.get()?, None);
 
         debug!("test on int and send");
         pr.add_track(1, "second");
@@ -475,12 +475,12 @@ fn ext_state() -> TestStep {
         let destination = pr.get_track(1).unwrap();
         let send = TrackSend::create_new(&source, &destination);
         let mut state =
-            ExtState::new("test section", "first", 45, false, &send);
-        assert_eq!(state.get().expect("can not get value"), 45);
+            ExtState::new("test section", "first", 45, false, &send, None);
+        assert_eq!(state.get()?.expect("can not get value"), 45);
         state.set(15);
-        assert_eq!(state.get().expect("can not get value"), 15);
+        assert_eq!(state.get()?.expect("can not get value"), 15);
         state.delete();
-        assert_eq!(state.get(), None);
+        assert_eq!(state.get()?, None);
 
         debug!("test on int and envelope");
         pr.add_track(1, "second");
@@ -491,24 +491,24 @@ fn ext_state() -> TestStep {
             ))
             .expect("expect envelope");
         let mut state =
-            ExtState::new("test section", "first", 45, false, &env);
-        assert_eq!(state.get().expect("can not get value"), 45);
+            ExtState::new("test section", "first", 45, false, &env, None);
+        assert_eq!(state.get()?.expect("can not get value"), 45);
         state.set(15);
-        assert_eq!(state.get().expect("can not get value"), 15);
+        assert_eq!(state.get()?.expect("can not get value"), 15);
         state.delete();
-        assert_eq!(state.get(), None);
+        assert_eq!(state.get()?, None);
 
         debug!("test on int and item");
         pr.add_track(1, "second");
         let mut tr = pr.get_track_mut(0).unwrap();
         let item = tr.add_item(0.0, Duration::from_secs(3));
         let mut state =
-            ExtState::new("test section", "first", 45, false, &item);
-        assert_eq!(state.get().expect("can not get value"), 45);
+            ExtState::new("test section", "first", 45, false, &item, None);
+        assert_eq!(state.get()?.expect("can not get value"), 45);
         state.set(15);
-        assert_eq!(state.get().expect("can not get value"), 15);
+        assert_eq!(state.get()?.expect("can not get value"), 15);
         state.delete();
-        assert_eq!(state.get(), None);
+        assert_eq!(state.get()?, None);
 
         debug!("test on int and take");
         pr.add_track(1, "second");
@@ -516,12 +516,12 @@ fn ext_state() -> TestStep {
         let mut item = tr.add_item(0.0, Duration::from_secs(3));
         let take = item.add_take();
         let mut state =
-            ExtState::new("test section", "first", 45, false, &take);
-        assert_eq!(state.get().expect("can not get value"), 45);
+            ExtState::new("test section", "first", 45, false, &take, None);
+        assert_eq!(state.get()?.expect("can not get value"), 45);
         state.set(15);
-        assert_eq!(state.get().expect("can not get value"), 15);
+        assert_eq!(state.get()?.expect("can not get value"), 15);
         state.delete();
-        assert_eq!(state.get(), None);
+        assert_eq!(state.get()?, None);
 
         Ok(())
     })

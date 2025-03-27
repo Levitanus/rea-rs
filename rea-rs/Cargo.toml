@@ -29,11 +29,6 @@ strum = { version = "0.26", features = ["derive"] }
 thiserror = "1.0.5"
 anyhow = "1.0.8"
 
-# tungstenite = "0.21.0"
-# tokio-tungstenite = "0.21.0"
-# tokio = {version="1.37.0"}
-# futures-util = "0.3.30"
-# url = "2.5.0"
 ws = "0.9.2"
 
 [dev-dependencies]

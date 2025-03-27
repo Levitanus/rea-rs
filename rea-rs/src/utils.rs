@@ -1,8 +1,4 @@
-use crate::{
-    errors::{ReaperError, ReaperResult},
-    reaper_pointer::ReaperPointer,
-    Project, Reaper,
-};
+use crate::{reaper_pointer::ReaperPointer, Project, ReaRsError, Reaper};
 use std::{
     ffi::{c_char, CStr, CString},
     str::Utf8Error,
@@ -117,49 +113,49 @@ pub trait WithReaperPtr {
     /// State of validity checks.
     fn should_check(&self) -> bool;
 
-    /// Return [ReaperError::NullPtr] if check failed.
+    /// Return [ReaRsError::NullPtr] if check failed.
     ///
     /// # Note
     ///
     /// Will not check if turned off by
     /// [`WithReaperPtr::make_unchecked`].
-    fn require_valid(&self) -> ReaperResult<()> {
+    fn require_valid(&self) -> anyhow::Result<()> {
         if !self.should_check() {
             return Ok(());
         }
         let ptr = self.get_pointer();
         match Reaper::get().validate_ptr(ptr) {
             true => Ok(()),
-            false => Err(Box::new(ReaperError::NullPtr)),
+            false => Err(ReaRsError::NullPtr("reaper object").into()),
         }
     }
 
-    /// Return [ReaperError::NullPtr] if check failed.
+    /// Return [ReaRsError::NullPtr] if check failed.
     ///
     /// # Note
     ///
     /// Will not check if turned off by
     /// [`WithReaperPtr::make_unchecked`].
-    fn require_valid_2(&self, project: &Project) -> ReaperResult<()> {
+    fn require_valid_2(&self, project: &Project) -> anyhow::Result<()> {
         if !self.should_check() {
             return Ok(());
         }
         let ptr = self.get_pointer();
         match Reaper::get().validate_ptr_2(project, ptr) {
             true => Ok(()),
-            false => Err(Box::new(ReaperError::NullPtr)),
+            false => Err(ReaRsError::NullPtr("reaper object").into()),
         }
     }
 
     /// Perform function with only one validity check.
     ///
-    /// Returns [ReaperError::NullPtr] if the first check
+    /// Returns [ReaRsError::NullPtr] if the first check
     /// failed. Also propagates any error returned from
     /// function.
     fn with_valid_ptr(
         &mut self,
-        mut f: impl FnMut(&mut Self) -> ReaperResult<()>,
-    ) -> ReaperResult<()> {
+        mut f: impl FnMut(&mut Self) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
         self.require_valid()?;
         self.make_unchecked();
         (f)(self)?;

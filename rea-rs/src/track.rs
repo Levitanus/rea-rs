@@ -12,7 +12,6 @@ use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
-    errors::{ReaperError, ReaperResult, ReaperStaticResult},
     ptr_wrappers::{MediaItem, MediaTrack, TrackEnvelope},
     utils::{
         as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
@@ -21,10 +20,10 @@ use crate::{
     AudioAccessor, AutomationMode, Color, Envelope, EnvelopeSelector,
     FXParent, GenericSend, GetLength, HardwareSend, HardwareSocket, Immutable,
     Item, KnowsProject, Mutable, Pan, PanLaw, PanLawMode, Position,
-    PositionPixel, ProbablyMutable, Project, Reaper, RecInput, RecMode,
-    RecOutMode, RectPixel, SendIntType, SoloMode, TimeMode, TrackFX,
-    TrackFolderState, TrackReceive, TrackSend, VUMode, Volume, WithReaperPtr,
-    FX, GUID,
+    PositionPixel, ProbablyMutable, Project, ReaRsError, Reaper,
+    ReaperResult, RecInput, RecMode, RecOutMode, RectPixel, SendIntType,
+    SoloMode, TimeMode, TrackFX, TrackFolderState, TrackReceive, TrackSend,
+    VUMode, Volume, WithReaperPtr, FX, GUID,
 };
 
 #[derive(Debug, PartialEq)]
@@ -64,7 +63,7 @@ impl<'a, T: ProbablyMutable> FXParent<'a, TrackFX<'a, Immutable>>
             Reaper::get().low().TrackFX_GetCount(self.get().as_ptr()) as usize
         }
     }
-    fn get_fx(&'a self, index: usize) -> Option<TrackFX<Immutable>> {
+    fn get_fx(&'a self, index: usize) -> Option<TrackFX<'a, Immutable>> {
         let fx = TrackFX::from_index(unsafe { transmute(self) }, index);
         fx
     }
@@ -123,7 +122,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     fn get_info_string(
         &self,
         category: impl Into<String>,
-    ) -> ReaperResult<String> {
+    ) -> anyhow::Result<String> {
         unsafe {
             let buf = make_c_string_buf(self.info_buf_size).into_raw();
             let result = Reaper::get().low().GetSetMediaTrackInfo_String(
@@ -133,7 +132,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
                 false,
             );
             match result {
-                false => Err(ReaperError::UnsuccessfulOperation(
+                false => Err(ReaRsError::UnsuccessfulOperation(
                     "Can not get info string",
                 )
                 .into()),
@@ -178,7 +177,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     pub fn ui_element_rect(
         &self,
         element: impl Into<String>,
-    ) -> ReaperResult<RectPixel> {
+    ) -> anyhow::Result<RectPixel> {
         let mut category = String::from("P_UI_RECT:");
         category += &element.into();
         let result = self.get_info_string(category)?;
@@ -564,7 +563,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         }
     }
 
-    pub fn chunk(&self) -> ReaperStaticResult<String> {
+    pub fn chunk(&self) -> ReaperResult<String> {
         let size = i32::MAX;
         let buf = make_c_string_buf(size as usize).into_raw();
         let result = unsafe {
@@ -577,7 +576,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         };
         match result {
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not get chunk"))
+                Err(ReaRsError::UnsuccessfulOperation("Can not get chunk"))
             }
             true => {
                 Ok(as_string_mut(buf)
@@ -774,7 +773,7 @@ impl<'a> Track<'a, Mutable> {
         &mut self,
         chunk: impl Into<String>,
         need_undo: bool,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let mut chunk = chunk.into();
         let result = unsafe {
             Reaper::get().low().SetTrackStateChunk(
@@ -786,7 +785,7 @@ impl<'a> Track<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set chunk!"))
+                Err(ReaRsError::UnsuccessfulOperation("Can not set chunk!"))
             }
         }
     }
@@ -797,7 +796,7 @@ impl<'a> Track<'a, Mutable> {
         channel: u8,
         pitch: u16,
         note_name: impl Into<String>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let mut note_name = note_name.into();
         let result = unsafe {
             Reaper::get().low().SetTrackMIDINoteNameEx(
@@ -810,7 +809,7 @@ impl<'a> Track<'a, Mutable> {
         };
         match result {
             true => Ok(()),
-            false => Err(ReaperError::UnsuccessfulOperation(
+            false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not set note name.",
             )),
         }
@@ -820,7 +819,7 @@ impl<'a> Track<'a, Mutable> {
         &mut self,
         category: impl Into<String>,
         value: impl Into<String>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let mut category = category.into();
         let value = value.into();
         let result = unsafe {
@@ -832,7 +831,7 @@ impl<'a> Track<'a, Mutable> {
             )
         };
         match result {
-            false => Err(ReaperError::UnsuccessfulOperation(
+            false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not set info string.",
             )),
             true => Ok(()),
@@ -849,7 +848,7 @@ impl<'a> Track<'a, Mutable> {
     pub fn set_razor_edits(
         &mut self,
         edits: Vec<RazorEdit>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let edits: Vec<String> =
             edits.into_iter().map(|e| e.to_string()).collect();
         let edits = edits.join(",");
@@ -865,14 +864,14 @@ impl<'a> Track<'a, Mutable> {
     pub fn set_name(
         &mut self,
         name: impl Into<String>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         self.set_info_string("P_NAME", name)
     }
 
-    pub fn set_icon(&mut self, path: PathBuf) -> ReaperStaticResult<()> {
+    pub fn set_icon(&mut self, path: PathBuf) -> ReaperResult<()> {
         self.set_info_string(
             "P_ICON",
-            path.to_str().ok_or(ReaperError::InvalidObject(
+            path.to_str().ok_or(ReaRsError::InvalidObject(
                 "can not convert path to string",
             ))?,
         )
@@ -881,25 +880,26 @@ impl<'a> Track<'a, Mutable> {
     pub fn set_mcp_layout(
         &mut self,
         layout: impl Into<String>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         self.set_info_string("P_MCP_LAYOUT", layout)
     }
     pub fn set_tcp_layout(
         &mut self,
         layout: impl Into<String>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         self.set_info_string("P_TCP_LAYOUT", layout)
     }
 
     pub fn add_audio_accessor(
         &mut self,
-    ) -> ReaperResult<AudioAccessor<Self, Mutable>> {
+    ) -> anyhow::Result<AudioAccessor<Self, Mutable>> {
         let ptr = unsafe {
             Reaper::get()
                 .low()
                 .CreateTrackAudioAccessor(self.get().as_ptr())
         };
-        let ptr = NonNull::new(ptr).ok_or(ReaperError::NullPtr)?;
+        let ptr =
+            NonNull::new(ptr).ok_or(ReaRsError::NullPtr("Audio Accessors"))?;
         Ok(AudioAccessor::new(self, ptr))
     }
 
@@ -1021,7 +1021,7 @@ impl<'a> Track<'a, Mutable> {
         &mut self,
         param: impl Into<String>,
         value: f64,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         let mut param_name: String = param.into();
         let result = unsafe {
             Reaper::get().low().SetMediaTrackInfo_Value(
@@ -1033,7 +1033,7 @@ impl<'a> Track<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set value.")
+                Err(ReaRsError::UnsuccessfulOperation("Can not set value.")
                     .into())
             }
         }
@@ -1046,7 +1046,7 @@ impl<'a> Track<'a, Mutable> {
         &mut self,
         channel: u8,
         socket: Option<HardwareSocket>,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         let mut value = match socket {
             None => -1,
             Some(socket) => socket.index() as i32,
@@ -1058,53 +1058,59 @@ impl<'a> Track<'a, Mutable> {
         self.set_info_value("I_MIDIHWOUT", value as f64)
     }
 
-    pub fn set_muted(&mut self, state: bool) -> ReaperResult<()> {
+    pub fn set_muted(&mut self, state: bool) -> anyhow::Result<()> {
         let value = match state {
             true => 1.0,
             false => 0.0,
         };
         self.set_info_value("B_MUTE", value)
     }
-    pub fn set_phase_flipped(&mut self, state: bool) -> ReaperResult<()> {
+    pub fn set_phase_flipped(&mut self, state: bool) -> anyhow::Result<()> {
         let value = match state {
             true => 1.0,
             false => 0.0,
         };
         self.set_info_value("B_PHASE", value)
     }
-    pub fn set_solo(&mut self, mode: SoloMode) -> ReaperResult<()> {
+    pub fn set_solo(&mut self, mode: SoloMode) -> anyhow::Result<()> {
         self.set_info_value("I_SOLO", mode.int_value() as f64)
     }
     /// when set, if anything else is soloed and this track is not muted, this
     /// track acts soloed
-    pub fn set_solo_defeat(&mut self, state: bool) -> ReaperResult<()> {
+    pub fn set_solo_defeat(&mut self, state: bool) -> anyhow::Result<()> {
         self.set_info_value("B_SOLO_DEFEAT", state as i32 as f64)
     }
-    pub fn set_fx_bypassed(&mut self, state: bool) -> ReaperResult<()> {
+    pub fn set_fx_bypassed(&mut self, state: bool) -> anyhow::Result<()> {
         self.set_info_value("I_FXEN", !state as i32 as f64)
     }
-    pub fn set_rec_armed(&mut self, state: bool) -> ReaperResult<()> {
+    pub fn set_rec_armed(&mut self, state: bool) -> anyhow::Result<()> {
         let value = match state {
             true => 1.0,
             false => 0.0,
         };
         self.set_info_value("I_RECARM", value)
     }
-    pub fn set_rec_input(&mut self, rec_input: RecInput) -> ReaperResult<()> {
+    pub fn set_rec_input(
+        &mut self,
+        rec_input: RecInput,
+    ) -> anyhow::Result<()> {
         self.set_info_value("I_RECINPUT", rec_input.to_raw() as f64)
     }
-    pub fn set_rec_mode(&mut self, rec_mode: RecMode) -> ReaperResult<()> {
+    pub fn set_rec_mode(&mut self, rec_mode: RecMode) -> anyhow::Result<()> {
         self.set_info_value("I_RECMODE", rec_mode.int_value() as f64)
     }
 
     /// If rec_mode records output. Otherwise — None.
-    pub fn set_rec_out_mode(&mut self, flags: RecOutMode) -> ReaperResult<()> {
+    pub fn set_rec_out_mode(
+        &mut self,
+        flags: RecOutMode,
+    ) -> anyhow::Result<()> {
         self.set_info_value("I_RECMODE_FLAGS", flags.to_raw() as f64)
     }
     pub fn set_rec_monitoring(
         &mut self,
         value: RecMonitoring,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         self.set_info_value("I_RECMON", value.mode as f64)?;
         self.set_info_value("I_RECMONITEMS", value.monitor_items as i32 as f64)
     }
@@ -1113,23 +1119,23 @@ impl<'a> Track<'a, Mutable> {
     ///
     /// If track is already selected and not rec armed — it will not
     /// arm track.
-    pub fn set_auto_rec_arm(&mut self, value: bool) -> ReaperResult<()> {
+    pub fn set_auto_rec_arm(&mut self, value: bool) -> anyhow::Result<()> {
         self.set_info_value("B_AUTO_RECARM", value as i32 as f64)
     }
 
-    pub fn set_vu_mode(&mut self, value: VUMode) -> ReaperResult<()> {
+    pub fn set_vu_mode(&mut self, value: VUMode) -> anyhow::Result<()> {
         self.set_info_value("I_VUMODE", value.to_raw() as f64)
     }
-    pub fn set_n_channels(&mut self, amount: usize) -> ReaperResult<()> {
+    pub fn set_n_channels(&mut self, amount: usize) -> anyhow::Result<()> {
         self.set_info_value("I_NCHAN", amount as f64)
     }
-    pub fn set_selected(&mut self, selected: bool) -> ReaperResult<()> {
+    pub fn set_selected(&mut self, selected: bool) -> anyhow::Result<()> {
         self.set_info_value("I_SELECTED", selected as i32 as f64)
     }
     pub fn set_folder_state(
         &mut self,
         state: TrackFolderState,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         let (depth, compact) = state.to_raw();
         self.set_info_value("I_FOLDERDEPTH", depth as f64)?;
         match compact {
@@ -1143,7 +1149,7 @@ impl<'a> Track<'a, Mutable> {
     pub fn set_performance_flags(
         &mut self,
         flags: TrackPerformanceFlags,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         self.set_info_value("I_PERFFLAGS", flags.bits() as f64)
     }
 
@@ -1151,21 +1157,21 @@ impl<'a> Track<'a, Mutable> {
     pub fn set_height_override(
         &mut self,
         height: impl Into<Option<u32>>,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         let value = match height.into() {
             Some(x) => x,
             None => 0,
         };
         self.set_info_value("I_HEIGHTOVERRIDE", value as f64)
     }
-    pub fn set_height_lock(&mut self, value: bool) -> ReaperResult<()> {
+    pub fn set_height_lock(&mut self, value: bool) -> anyhow::Result<()> {
         self.set_info_value("B_HEIGHTLOCK", value as i32 as f64)
     }
 
-    pub fn set_volume(&mut self, volume: Volume) -> ReaperResult<()> {
+    pub fn set_volume(&mut self, volume: Volume) -> anyhow::Result<()> {
         self.set_info_value("D_VOL", volume.into())
     }
-    pub fn set_pan(&mut self, track_pan: TrackPan) -> ReaperResult<()> {
+    pub fn set_pan(&mut self, track_pan: TrackPan) -> anyhow::Result<()> {
         match track_pan {
             TrackPan::BalanceLegacy(pan) => {
                 self.set_info_value("I_PANMODE", 0 as f64)?;
@@ -1189,26 +1195,26 @@ impl<'a> Track<'a, Mutable> {
         Ok(())
     }
 
-    pub fn set_pan_law(&mut self, law: PanLaw) -> ReaperResult<()> {
+    pub fn set_pan_law(&mut self, law: PanLaw) -> anyhow::Result<()> {
         self.set_info_value("D_PANLAW", law.into())
     }
     pub fn set_pan_law_mode(
         &mut self,
         law_mode: PanLawMode,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         self.set_info_value("I_PANLAW_FLAGS", law_mode.int_value() as f64)
     }
 
-    pub fn set_visible_in_mcp(&mut self, value: bool) -> ReaperResult<()> {
+    pub fn set_visible_in_mcp(&mut self, value: bool) -> anyhow::Result<()> {
         self.set_info_value("B_SHOWINMIXER", value as i32 as f64)
     }
-    pub fn set_visible_in_tcp(&mut self, value: bool) -> ReaperResult<()> {
+    pub fn set_visible_in_tcp(&mut self, value: bool) -> anyhow::Result<()> {
         self.set_info_value("B_SHOWINTCP", value as i32 as f64)
     }
     pub fn set_parent_send(
         &mut self,
         parent_ch_offset: impl Into<Option<u32>>,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         let value: Option<u32> = parent_ch_offset.into();
         match value {
             None => {
@@ -1227,7 +1233,7 @@ impl<'a> Track<'a, Mutable> {
         &mut self,
         free: bool,
         update_timeline: bool,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         self.set_info_value("B_FREEMODE", free as i32 as f64)?;
         if update_timeline {
             Reaper::get().update_timeline()
@@ -1235,17 +1241,20 @@ impl<'a> Track<'a, Mutable> {
         Ok(())
     }
 
-    pub fn set_time_base(&mut self, mode: TimeMode) -> ReaperResult<()> {
+    pub fn set_time_base(&mut self, mode: TimeMode) -> anyhow::Result<()> {
         self.set_info_value("C_BEATATTACHMODE", mode.int_value() as f64)
     }
 
     /// scale of fx+send area in MCP (0=minimum allowed, 1=maximum allowed)
-    pub fn set_mcp_fx_send_scale(&mut self, value: f64) -> ReaperResult<()> {
+    pub fn set_mcp_fx_send_scale(&mut self, value: f64) -> anyhow::Result<()> {
         self.set_info_value("F_MCP_FXSEND_SCALE", value)
     }
     /// scale of fx parameter area in MCP (0=minimum allowed, 1=maximum
     /// allowed)
-    pub fn set_mcp_fx_param_scale(&mut self, value: f64) -> ReaperResult<()> {
+    pub fn set_mcp_fx_param_scale(
+        &mut self,
+        value: f64,
+    ) -> anyhow::Result<()> {
         self.set_info_value("F_MCP_FXPARM_SCALE", value)
     }
     /// scale of send area as proportion of the fx+send total area (0=minimum
@@ -1253,19 +1262,22 @@ impl<'a> Track<'a, Mutable> {
     pub fn set_mcp_fx_send_region_scale(
         &mut self,
         value: f64,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         self.set_info_value("F_MCP_SENDRGN_SCALE", value)
     }
     /// scale of TCP parameter area when TCP FX are embedded (0=min allowed,
     /// default, 1=max allowed)
-    pub fn set_tcp_fx_param_scale(&mut self, value: f64) -> ReaperResult<()> {
+    pub fn set_tcp_fx_param_scale(
+        &mut self,
+        value: f64,
+    ) -> anyhow::Result<()> {
         self.set_info_value("F_TCP_FXPARM_SCALE", value)
     }
 
     pub fn set_play_offset(
         &mut self,
         play_offset: Option<TrackPlayOffset>,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         match play_offset {
             None => self.set_info_value("I_PLAY_OFFSET_FLAG", 1.0),
             Some(mode) => {

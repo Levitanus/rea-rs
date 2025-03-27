@@ -8,10 +8,9 @@ use std::{
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
-    errors::{ReaperError, ReaperStaticResult},
     utils::{as_c_str, as_string_mut, make_c_string_buf, WithNull},
-    Envelope, Immutable, KnowsProject, Mutable, ProbablyMutable, Reaper, Take,
-    Track, WithReaperPtr,
+    Envelope, Immutable, KnowsProject, Mutable, ProbablyMutable, ReaRsError,
+    Reaper, ReaperResult, Take, Track, WithReaperPtr,
 };
 
 /// Parametrizes FX functionality for [TrackFX] asn [TakeFX].
@@ -28,10 +27,10 @@ where
     fn n_inputs(&self) -> usize;
     fn n_outputs(&self) -> usize;
     fn n_params(&self) -> usize;
-    fn n_presets(&self) -> ReaperStaticResult<usize>;
+    fn n_presets(&self) -> ReaperResult<usize>;
     /// FX Preset name
-    fn preset(&self) -> ReaperStaticResult<String>;
-    fn preset_index(&self) -> ReaperStaticResult<usize>;
+    fn preset(&self) -> ReaperResult<String>;
+    fn preset_index(&self) -> ReaperResult<usize>;
     fn copy_to_take(&self, take: &mut Take<Mutable>, desired_index: usize);
     fn copy_to_track(&self, track: &mut Track<Mutable>, desired_index: usize);
 }
@@ -55,10 +54,10 @@ where
     fn set_preset(
         &mut self,
         preset: impl Into<String>,
-    ) -> ReaperStaticResult<()>;
-    fn set_preset_index(&mut self, preset: usize) -> ReaperStaticResult<()>;
-    fn previous_preset(&mut self) -> ReaperStaticResult<()>;
-    fn next_preset(&mut self) -> ReaperStaticResult<()>;
+    ) -> ReaperResult<()>;
+    fn set_preset_index(&mut self, preset: usize) -> ReaperResult<()>;
+    fn previous_preset(&mut self) -> ReaperResult<()>;
+    fn next_preset(&mut self) -> ReaperResult<()>;
 }
 
 pub struct TrackFX<'a, T: ProbablyMutable> {
@@ -183,7 +182,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
         result as usize
     }
 
-    fn n_presets(&self) -> ReaperStaticResult<usize> {
+    fn n_presets(&self) -> ReaperResult<usize> {
         let mut presets = MaybeUninit::zeroed();
         let result = unsafe {
             Reaper::get().low().TrackFX_GetPresetIndex(
@@ -193,13 +192,13 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
             )
         };
         if result < 0 {
-            Err(ReaperError::UnsuccessfulOperation("Can not get n_presets."))
+            Err(ReaRsError::UnsuccessfulOperation("Can not get n_presets."))
         } else {
             Ok(unsafe { presets.assume_init() } as usize)
         }
     }
 
-    fn preset(&self) -> ReaperStaticResult<String> {
+    fn preset(&self) -> ReaperResult<String> {
         let size = 250;
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
@@ -215,13 +214,13 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
                 Ok(as_string_mut(buf)
                     .expect("Can not convert result to string."))
             }
-            false => Err(ReaperError::UnsuccessfulOperation(
+            false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not get preset name",
             )),
         }
     }
 
-    fn preset_index(&self) -> ReaperStaticResult<usize> {
+    fn preset_index(&self) -> ReaperResult<usize> {
         let mut presets = MaybeUninit::zeroed();
         let result = unsafe {
             Reaper::get().low().TrackFX_GetPresetIndex(
@@ -231,7 +230,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
             )
         };
         if result < 0 {
-            Err(ReaperError::UnsuccessfulOperation("Can not get n_presets."))
+            Err(ReaRsError::UnsuccessfulOperation("Can not get n_presets."))
         } else {
             Ok(result as usize)
         }
@@ -362,7 +361,7 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
     fn set_preset(
         &mut self,
         preset: impl Into<String>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let mut name = preset.into();
         let result = unsafe {
             Reaper::get().low().TrackFX_SetPreset(
@@ -374,12 +373,12 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set preset."))
+                Err(ReaRsError::UnsuccessfulOperation("Can not set preset."))
             }
         }
     }
 
-    fn set_preset_index(&mut self, preset: usize) -> ReaperStaticResult<()> {
+    fn set_preset_index(&mut self, preset: usize) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TrackFX_SetPresetByIndex(
                 self.parent.get().as_ptr(),
@@ -390,12 +389,12 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set preset."))
+                Err(ReaRsError::UnsuccessfulOperation("Can not set preset."))
             }
         }
     }
 
-    fn previous_preset(&mut self) -> ReaperStaticResult<()> {
+    fn previous_preset(&mut self) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TrackFX_NavigatePresets(
                 self.parent.get().as_ptr(),
@@ -406,12 +405,12 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set preset."))
+                Err(ReaRsError::UnsuccessfulOperation("Can not set preset."))
             }
         }
     }
 
-    fn next_preset(&mut self) -> ReaperStaticResult<()> {
+    fn next_preset(&mut self) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TrackFX_NavigatePresets(
                 self.parent.get().as_ptr(),
@@ -422,7 +421,7 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set preset."))
+                Err(ReaRsError::UnsuccessfulOperation("Can not set preset."))
             }
         }
     }
@@ -596,7 +595,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
     fn param_step_sizes(
         &self,
         param: usize,
-    ) -> ReaperStaticResult<FXParamStepSizes> {
+    ) -> ReaperResult<FXParamStepSizes> {
         let (mut step, mut small_step, mut large_step, mut is_toggle) = (
             MaybeUninit::zeroed(),
             MaybeUninit::zeroed(),
@@ -615,9 +614,9 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
             )
         };
         match result {
-            false => Err(ReaperError::UnsuccessfulOperation(
-                "Can not get set sizes",
-            )),
+            false => {
+                Err(ReaRsError::UnsuccessfulOperation("Can not get set sizes"))
+            }
             true => unsafe {
                 Ok(FXParamStepSizes {
                     step: step.assume_init(),
@@ -685,7 +684,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Track<'a, Mutable>>
         &self,
         param: usize,
         value: f64,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TrackFX_SetParam(
                 self.parent.get().as_ptr(),
@@ -695,7 +694,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Track<'a, Mutable>>
             )
         };
         match result {
-            false => Err(ReaperError::InvalidObject(
+            false => Err(ReaRsError::InvalidObject(
                 "Can not set value. Probably, bad value.",
             )),
             true => Ok(()),
@@ -706,7 +705,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Track<'a, Mutable>>
         &self,
         param: usize,
         value: f64,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TrackFX_SetParamNormalized(
                 self.parent.get().as_ptr(),
@@ -716,7 +715,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Track<'a, Mutable>>
             )
         };
         match result {
-            false => Err(ReaperError::InvalidObject(
+            false => Err(ReaRsError::InvalidObject(
                 "Can not set value. Probably, bad value.",
             )),
             true => Ok(()),
@@ -842,7 +841,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
         result as usize
     }
 
-    fn n_presets(&self) -> ReaperStaticResult<usize> {
+    fn n_presets(&self) -> ReaperResult<usize> {
         let mut presets = MaybeUninit::zeroed();
         let result = unsafe {
             Reaper::get().low().TakeFX_GetPresetIndex(
@@ -852,13 +851,13 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
             )
         };
         if result < 0 {
-            Err(ReaperError::UnsuccessfulOperation("Can not get n_presets."))
+            Err(ReaRsError::UnsuccessfulOperation("Can not get n_presets."))
         } else {
             Ok(unsafe { presets.assume_init() } as usize)
         }
     }
 
-    fn preset(&self) -> ReaperStaticResult<String> {
+    fn preset(&self) -> ReaperResult<String> {
         let size = 250;
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
@@ -874,13 +873,13 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
                 Ok(as_string_mut(buf)
                     .expect("Can not convert result to string."))
             }
-            false => Err(ReaperError::UnsuccessfulOperation(
+            false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not get preset name",
             )),
         }
     }
 
-    fn preset_index(&self) -> ReaperStaticResult<usize> {
+    fn preset_index(&self) -> ReaperResult<usize> {
         let mut presets = MaybeUninit::zeroed();
         let result = unsafe {
             Reaper::get().low().TakeFX_GetPresetIndex(
@@ -890,7 +889,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
             )
         };
         if result < 0 {
-            Err(ReaperError::UnsuccessfulOperation("Can not get n_presets."))
+            Err(ReaRsError::UnsuccessfulOperation("Can not get n_presets."))
         } else {
             Ok(result as usize)
         }
@@ -1019,7 +1018,7 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
     fn set_preset(
         &mut self,
         preset: impl Into<String>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let mut name = preset.into();
         let result = unsafe {
             Reaper::get().low().TakeFX_SetPreset(
@@ -1031,12 +1030,12 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set preset."))
+                Err(ReaRsError::UnsuccessfulOperation("Can not set preset."))
             }
         }
     }
 
-    fn set_preset_index(&mut self, preset: usize) -> ReaperStaticResult<()> {
+    fn set_preset_index(&mut self, preset: usize) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TakeFX_SetPresetByIndex(
                 self.parent.get().as_ptr(),
@@ -1047,11 +1046,11 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set preset."))
+                Err(ReaRsError::UnsuccessfulOperation("Can not set preset."))
             }
         }
     }
-    fn previous_preset(&mut self) -> ReaperStaticResult<()> {
+    fn previous_preset(&mut self) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TakeFX_NavigatePresets(
                 self.parent.get().as_ptr(),
@@ -1062,12 +1061,12 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set preset."))
+                Err(ReaRsError::UnsuccessfulOperation("Can not set preset."))
             }
         }
     }
 
-    fn next_preset(&mut self) -> ReaperStaticResult<()> {
+    fn next_preset(&mut self) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TakeFX_NavigatePresets(
                 self.parent.get().as_ptr(),
@@ -1078,7 +1077,7 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
         match result {
             true => Ok(()),
             false => {
-                Err(ReaperError::UnsuccessfulOperation("Can not set preset."))
+                Err(ReaRsError::UnsuccessfulOperation("Can not set preset."))
             }
         }
     }
@@ -1252,7 +1251,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
     fn param_step_sizes(
         &self,
         param: usize,
-    ) -> ReaperStaticResult<FXParamStepSizes> {
+    ) -> ReaperResult<FXParamStepSizes> {
         let (mut step, mut small_step, mut large_step, mut is_toggle) = (
             MaybeUninit::zeroed(),
             MaybeUninit::zeroed(),
@@ -1271,9 +1270,9 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
             )
         };
         match result {
-            false => Err(ReaperError::UnsuccessfulOperation(
-                "Can not get set sizes",
-            )),
+            false => {
+                Err(ReaRsError::UnsuccessfulOperation("Can not get set sizes"))
+            }
             true => unsafe {
                 Ok(FXParamStepSizes {
                     step: step.assume_init(),
@@ -1342,7 +1341,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Take<'a, Mutable>>
         &self,
         param: usize,
         value: f64,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TakeFX_SetParam(
                 self.parent.get().as_ptr(),
@@ -1352,7 +1351,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Take<'a, Mutable>>
             )
         };
         match result {
-            false => Err(ReaperError::InvalidObject(
+            false => Err(ReaRsError::InvalidObject(
                 "Can not set value. Probably, bad value.",
             )),
             true => Ok(()),
@@ -1363,7 +1362,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Take<'a, Mutable>>
         &self,
         param: usize,
         value: f64,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TakeFX_SetParamNormalized(
                 self.parent.get().as_ptr(),
@@ -1373,7 +1372,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Take<'a, Mutable>>
             )
         };
         match result {
-            false => Err(ReaperError::InvalidObject(
+            false => Err(ReaRsError::InvalidObject(
                 "Can not set value. Probably, bad value.",
             )),
             true => Ok(()),
@@ -1442,7 +1441,7 @@ impl<
     pub fn value_normalized(&self) -> f64 {
         self.parent.param_value_normalized(self.index)
     }
-    pub fn step_sizes(&self) -> ReaperStaticResult<FXParamStepSizes> {
+    pub fn step_sizes(&self) -> ReaperResult<FXParamStepSizes> {
         self.parent.param_step_sizes(self.index)
     }
 }
@@ -1453,14 +1452,14 @@ impl<
             + param_parent::FXParamParent<'a, Mutable, P>,
     > FXParam<'a, Mutable, P, F>
 {
-    pub fn set_value(&mut self, value: f64) -> ReaperStaticResult<()> {
+    pub fn set_value(&mut self, value: f64) -> ReaperResult<()> {
         self.parent.set_param_value(self.index, value)
     }
     /// Set value as it was scaled to be in `0.0..1.0` range.
     pub fn set_value_normalized(
         &mut self,
         value: f64,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         assert!((0.0..1.0).contains(&value));
         self.parent.set_param_value_normalized(self.index, value)
     }
@@ -1478,9 +1477,8 @@ mod param_parent {
     use std::ops::Range;
 
     use crate::{
-        errors::ReaperStaticResult, Envelope, FXMut, FXParam,
-        FXParamStepSizes, Immutable, KnowsProject, Mutable, ProbablyMutable,
-        FX,
+        Envelope, FXMut, FXParam, FXParamStepSizes, Immutable, KnowsProject,
+        Mutable, ProbablyMutable, ReaperResult, FX,
     };
 
     pub trait FXParamParent<'a, M: ProbablyMutable, P: KnowsProject>:
@@ -1506,7 +1504,7 @@ mod param_parent {
         fn param_step_sizes(
             &self,
             param: usize,
-        ) -> ReaperStaticResult<FXParamStepSizes>;
+        ) -> ReaperResult<FXParamStepSizes>;
     }
     pub trait FXParamParentMut<'a, P: KnowsProject>: FXMut
     where
@@ -1529,12 +1527,12 @@ mod param_parent {
             &self,
             param: usize,
             value: f64,
-        ) -> ReaperStaticResult<()>;
+        ) -> ReaperResult<()>;
         fn set_param_value_normalized(
             &self,
             param: usize,
             value: f64,
-        ) -> ReaperStaticResult<()>;
+        ) -> ReaperResult<()>;
     }
 }
 

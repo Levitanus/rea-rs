@@ -1,14 +1,13 @@
 pub use crate::utils::WithReaperPtr;
 use crate::{
-    errors::{ReaperError, ReaperResult},
     ptr_wrappers::{MediaItem, MediaTrack, ReaProject},
     utils::{
         as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
         make_string_buf, WithNull,
     },
     Color, CommandId, Immutable, Item, MarkerRegionInfo, MarkerRegionIterator,
-    Mutable, PlayRate, Position, ProjectContext, Reaper, TimeRange,
-    TimeRangeKind, TimeSignature, Track, UndoFlags,
+    Mutable, PlayRate, Position, ProjectContext, ReaRsError, Reaper,
+    TimeRange, TimeRangeKind, TimeSignature, Track, UndoFlags,
 };
 use c_str_macro::c_str;
 use int_enum::IntEnum;
@@ -89,7 +88,7 @@ impl<'a> Project {
     ///
     /// This operation, probably, of O(n³) complexity in the worst case,
     /// do not use a lot.
-    pub fn from_name(name: impl Into<String>) -> ReaperResult<Self> {
+    pub fn from_name(name: impl Into<String>) -> anyhow::Result<Self> {
         let name: String = name.into();
         for project in Reaper::get().iter_projects() {
             let mut pr_name = project.name();
@@ -98,9 +97,7 @@ impl<'a> Project {
                 return Ok(project);
             }
         }
-        Err(Box::new(ReaperError::InvalidObject(
-            "No project with the given name",
-        )))
+        Err(ReaRsError::InvalidObject("No project with the given name").into())
     }
 
     /// Get [reaper_medium::ProjectContext] to use with
@@ -130,8 +127,8 @@ impl<'a> Project {
 
     pub fn with_current_project(
         &self,
-        mut f: impl FnMut() -> ReaperResult<()>,
-    ) -> ReaperResult<()> {
+        mut f: impl FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
         let rpr = Reaper::get();
         let current = rpr.current_project();
         let ret = self == &current;
@@ -193,7 +190,7 @@ impl<'a> Project {
     ///
     /// This is sugar on top of the cation invocation.
     pub fn record(&mut self) {
-        self.with_current_project(|| -> ReaperResult<()> {
+        self.with_current_project(|| -> anyhow::Result<()> {
             Reaper::get().perform_action(CommandId::new(1013), 0, Some(self));
             Ok(())
         })
@@ -304,7 +301,7 @@ impl<'a> Project {
 
     /// Create new marker and return its index.
     ///
-    /// Return [ReaperError::Unexpected] if reaper can't add marker.
+    /// Return [ReaRsError::Unexpected] if reaper can't add marker.
     ///
     /// If it is possible, the index will be the same as desired,
     /// but if it is busy, new index will be returned.
@@ -319,7 +316,7 @@ impl<'a> Project {
         name: Option<impl Into<String>>,
         color: impl Into<Option<Color>>,
         desired_index: impl Into<Option<usize>>,
-    ) -> ReaperResult<usize> {
+    ) -> anyhow::Result<usize> {
         self.add_marker_or_region(
             false,
             name,
@@ -332,7 +329,7 @@ impl<'a> Project {
 
     /// Create new region and return its index.
     ///
-    /// Return [ReaperError::Unexpected] if reaper can't add marker.
+    /// Return [ReaRsError::Unexpected] if reaper can't add marker.
     ///
     /// If it is possible, the index will be the same as desired,
     /// but if it is busy, new index will be returned.
@@ -348,7 +345,7 @@ impl<'a> Project {
         name: Option<impl Into<String>>,
         color: impl Into<Option<Color>>,
         desired_index: impl Into<Option<usize>>,
-    ) -> ReaperResult<usize> {
+    ) -> anyhow::Result<usize> {
         self.add_marker_or_region(true, name, color, desired_index, start, end)
     }
 
@@ -360,7 +357,7 @@ impl<'a> Project {
         desired_index: impl Into<Option<usize>>,
         start: Position,
         end: Position,
-    ) -> ReaperResult<usize> {
+    ) -> anyhow::Result<usize> {
         let rpr = Reaper::get();
         let mut name = match name {
             None => String::from(""),
@@ -387,7 +384,7 @@ impl<'a> Project {
                 color,
             );
             match result {
-                -1 => Err(Box::new(ReaperError::Unexpected)),
+                -1 => Err(ReaRsError::Unexpected.into()),
                 _ => Ok(result as usize),
             }
         }
@@ -397,7 +394,7 @@ impl<'a> Project {
     pub fn set_marker_or_region(
         &mut self,
         info: MarkerRegionInfo,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         unsafe {
             match Reaper::get().low().SetProjectMarker3(
                 self.context.to_raw(),
@@ -409,16 +406,16 @@ impl<'a> Project {
                 info.color.to_native(),
             ) {
                 true => Ok(()),
-                false => Err(Box::new(ReaperError::Unexpected)),
+                false => Err(ReaRsError::Unexpected.into()),
             }
         }
     }
 
-    pub fn delete_marker(&mut self, user_index: usize) -> ReaperResult<()> {
+    pub fn delete_marker(&mut self, user_index: usize) -> anyhow::Result<()> {
         self.delete_marker_or_region(user_index, false)
     }
 
-    pub fn delete_region(&mut self, user_index: usize) -> ReaperResult<()> {
+    pub fn delete_region(&mut self, user_index: usize) -> anyhow::Result<()> {
         self.delete_marker_or_region(user_index, true)
     }
 
@@ -426,7 +423,7 @@ impl<'a> Project {
         &mut self,
         user_index: usize,
         region: bool,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         unsafe {
             match Reaper::get().low().DeleteProjectMarker(
                 self.context.to_raw(),
@@ -434,7 +431,7 @@ impl<'a> Project {
                 region,
             ) {
                 true => Ok(()),
-                false => Err(Box::new(ReaperError::Unexpected)),
+                false => Err(ReaRsError::Unexpected.into()),
             }
         }
     }
@@ -631,8 +628,8 @@ impl<'a> Project {
     }
     pub fn iter_tracks_mut(
         &mut self,
-        mut f: impl FnMut(Track<Mutable>) -> ReaperResult<()>,
-    ) -> ReaperResult<()> {
+        mut f: impl FnMut(Track<Mutable>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
         for track in TracksIterator::new(self) {
             let track = Track::<Mutable>::new(self, track.get());
             f(track)?
@@ -645,8 +642,8 @@ impl<'a> Project {
     }
     pub fn iter_selected_tracks_mut(
         &mut self,
-        mut f: impl FnMut(Track<Mutable>) -> ReaperResult<()>,
-    ) -> ReaperResult<()> {
+        mut f: impl FnMut(Track<Mutable>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
         for track in SelectedTracksIterator::new(self) {
             let track = Track::<Mutable>::new(self, track.get());
             f(track)?
@@ -761,30 +758,26 @@ impl<'a> Project {
         &mut self,
         undo_name: impl Into<String>,
         flags: UndoFlags,
-        f: impl FnMut() -> ReaperResult<()>,
-    ) -> ReaperResult<()> {
+        f: impl FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
         Reaper::get().with_undo_block(undo_name, flags, Some(self), f)
     }
 
     /// Try to undo last action.
-    pub fn undo(&mut self) -> Result<(), ReaperError> {
+    pub fn undo(&mut self) -> Result<(), ReaRsError> {
         unsafe {
             match Reaper::get().low().Undo_DoUndo2(self.context().to_raw()) {
-                0 => {
-                    Err(ReaperError::UnsuccessfulOperation("can not do undo"))
-                }
+                0 => Err(ReaRsError::UnsuccessfulOperation("can not do undo")),
                 _ => Ok(()),
             }
         }
     }
 
     /// Try to redo last undone action.
-    pub fn redo(&mut self) -> Result<(), ReaperError> {
+    pub fn redo(&mut self) -> Result<(), ReaRsError> {
         unsafe {
             match Reaper::get().low().Undo_DoRedo2(self.context().to_raw()) {
-                0 => {
-                    Err(ReaperError::UnsuccessfulOperation("can not do redo"))
-                }
+                0 => Err(ReaRsError::UnsuccessfulOperation("can not do redo")),
                 _ => Ok(()),
             }
         }
@@ -818,7 +811,7 @@ impl<'a> Project {
 
     /// Bypass (`true`) or un-bypass (`false`) FX on all tracks.
     pub fn bypass_fx_on_all_tracks(&mut self, bypass: bool) {
-        self.with_current_project(|| -> ReaperResult<()> {
+        self.with_current_project(|| -> anyhow::Result<()> {
             Reaper::get().low().BypassFxAllTracks(bypass as i32);
             Ok(())
         })
@@ -883,7 +876,7 @@ impl<'a> Project {
 
     /// Disarm record on all tracks.
     pub fn disarm_rec_on_all_tracks(&mut self) {
-        self.with_current_project(|| -> ReaperResult<()> {
+        self.with_current_project(|| -> anyhow::Result<()> {
             Reaper::get().low().ClearAllRecArmed();
             Ok(())
         })
@@ -959,7 +952,7 @@ impl<'a> Project {
     fn get_info_string(
         &self,
         param_name: impl Into<String>,
-    ) -> ReaperResult<String> {
+    ) -> anyhow::Result<String> {
         unsafe {
             let size = 1024;
             let mut param_name: String = param_name.into();
@@ -975,9 +968,10 @@ impl<'a> Project {
             debug!("{}", result_string);
             match result {
                 true => Ok(result_string),
-                false => Err(Box::new(ReaperError::InvalidObject(
-                    "Can not get Project info.",
-                ))),
+                false => {
+                    Err(ReaRsError::InvalidObject("Can not get Project info.")
+                        .into())
+                }
             }
         }
     }
@@ -986,7 +980,7 @@ impl<'a> Project {
         &mut self,
         param_name: impl Into<String>,
         value: impl Into<String>,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         unsafe {
             let mut param_name: String = param_name.into();
             let value: String = value.into();
@@ -998,9 +992,10 @@ impl<'a> Project {
                 true,
             );
             match result {
-                false => Err(Box::new(ReaperError::InvalidObject(
+                false => Err(ReaRsError::InvalidObject(
                     "can not set value to project.",
-                ))),
+                )
+                .into()),
                 true => Ok(()),
             }
             // Ok(())
@@ -1021,17 +1016,20 @@ impl<'a> Project {
     }
 
     ///  title field from Project Settings/Notes dialog
-    pub fn get_title(&self) -> ReaperResult<String> {
+    pub fn get_title(&self) -> anyhow::Result<String> {
         self.get_info_string("PROJECT_TITLE")
     }
 
     ///  title field from Project Settings/Notes dialog
-    pub fn set_title(&mut self, title: impl Into<String>) -> ReaperResult<()> {
+    pub fn set_title(
+        &mut self,
+        title: impl Into<String>,
+    ) -> anyhow::Result<()> {
         self.set_info_string("PROJECT_TITLE", title)
     }
 
     ///  author field from Project Settings/Notes dialog
-    pub fn get_author(&self) -> ReaperResult<String> {
+    pub fn get_author(&self) -> anyhow::Result<String> {
         self.get_info_string("PROJECT_AUTHOR")
     }
 
@@ -1039,14 +1037,14 @@ impl<'a> Project {
     pub fn set_author(
         &mut self,
         author: impl Into<String>,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         self.set_info_string("PROJECT_AUTHOR", author)
     }
 
     pub fn get_marker_guid(
         &self,
         marker_index: usize,
-    ) -> ReaperResult<String> {
+    ) -> anyhow::Result<String> {
         let pattern = format!("MARKER_GUID:{:?}", marker_index);
         warn!("this function, probably, not working properly");
         self.get_info_string(pattern)
@@ -1055,13 +1053,14 @@ impl<'a> Project {
     pub fn get_track_group_name(
         &self,
         group_index: usize,
-    ) -> ReaperResult<String> {
+    ) -> anyhow::Result<String> {
         let group_index = match group_index {
             0..=63 => group_index + 1,
             _ => {
-                return Err(Box::new(ReaperError::InvalidObject(
+                return Err(ReaRsError::InvalidObject(
                     "group_index must be in range 0..64",
-                )))
+                )
+                .into())
             }
         };
         let pattern = format!("TRACK_GROUP_NAME:{:?}", group_index);
@@ -1073,13 +1072,14 @@ impl<'a> Project {
         &mut self,
         group_index: usize,
         track_group_name: impl Into<String>,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         let group_index = match group_index {
             0..=63 => group_index + 1,
             _ => {
-                return Err(Box::new(ReaperError::InvalidObject(
+                return Err(ReaRsError::InvalidObject(
                     "group_index must be in range 0..64",
-                )))
+                )
+                .into())
             }
         };
         let pattern = format!("TRACK_GROUP_NAME:{:?}", group_index);
@@ -1090,7 +1090,7 @@ impl<'a> Project {
     pub fn get_record_path(
         &self,
         secondary_path: bool,
-    ) -> ReaperResult<PathBuf> {
+    ) -> anyhow::Result<PathBuf> {
         let param_name = match secondary_path {
             false => "RECORD_PATH",
             true => "RECORD_PATH_SECONDARY",
@@ -1099,7 +1099,7 @@ impl<'a> Project {
     }
 
     /// Project path.
-    pub fn get_path(&self) -> ReaperResult<PathBuf> {
+    pub fn get_path(&self) -> anyhow::Result<PathBuf> {
         unsafe {
             let buf = make_c_string_buf(self.info_buf_size).into_raw();
             Reaper::get().low().GetProjectPathEx(
@@ -1116,7 +1116,7 @@ impl<'a> Project {
         &mut self,
         secondary_path: bool,
         directory: impl Into<PathBuf>,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         let param_name = match secondary_path {
             false => "RECORD_PATH",
             true => "RECORD_PATH_SECONDARY",
@@ -1124,27 +1124,31 @@ impl<'a> Project {
         let directory: PathBuf = directory.into();
         self.set_info_string(
             param_name,
-            directory.to_str().ok_or("Can not convert path to str")?,
+            directory
+                .to_str()
+                .ok_or(ReaRsError::Str("Can not convert path to str"))?,
         )
     }
 
-    pub fn get_render_directory(&self) -> ReaperResult<PathBuf> {
+    pub fn get_render_directory(&self) -> anyhow::Result<PathBuf> {
         Ok(PathBuf::from(self.get_info_string("RENDER_FILE")?))
     }
 
     pub fn set_render_directory(
         &mut self,
         directory: impl Into<PathBuf>,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         let directory: PathBuf = directory.into();
         self.set_info_string(
             "RENDER_FILE",
-            directory.to_str().ok_or("Can not convert path to str")?,
+            directory
+                .to_str()
+                .ok_or(ReaRsError::Str("Can not convert path to str"))?,
         )
     }
 
     ///  render file name (may contain wildcards)
-    pub fn get_render_file(&self) -> ReaperResult<String> {
+    pub fn get_render_file(&self) -> anyhow::Result<String> {
         self.get_info_string("RENDER_PATTERN")
     }
 
@@ -1152,7 +1156,7 @@ impl<'a> Project {
     pub fn set_render_file(
         &mut self,
         file: impl Into<String>,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         self.set_info_string("RENDER_PATTERN", file)
     }
 
@@ -1163,7 +1167,7 @@ impl<'a> Project {
     pub fn get_render_format(
         &self,
         secondary_format: bool,
-    ) -> ReaperResult<String> {
+    ) -> anyhow::Result<String> {
         let param = match secondary_format {
             false => "RENDER_FORMAT",
             true => "RENDER_FORMAT2",
@@ -1186,7 +1190,7 @@ impl<'a> Project {
         &mut self,
         format: impl Into<String>,
         secondary_format: bool,
-    ) -> ReaperResult<()> {
+    ) -> anyhow::Result<()> {
         let param = match secondary_format {
             false => "RENDER_FORMAT",
             true => "RENDER_FORMAT2",
@@ -1195,7 +1199,7 @@ impl<'a> Project {
     }
 
     /// Filenames, that will be rendered.
-    pub fn get_render_targets(&self) -> ReaperResult<Vec<String>> {
+    pub fn get_render_targets(&self) -> anyhow::Result<Vec<String>> {
         Ok(self
             .get_info_string("RENDER_TARGETS")?
             .split(",")

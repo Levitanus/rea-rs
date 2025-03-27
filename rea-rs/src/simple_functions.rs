@@ -1,5 +1,4 @@
 use crate::{
-    errors::{ReaperError, ReaperResult},
     misc_enums::ProjectContext,
     ptr_wrappers::Hwnd,
     reaper_pointer::ReaperPointer,
@@ -7,7 +6,8 @@ use crate::{
         as_c_char, as_c_str, as_mut_i8, as_string, make_string_buf, WithNull,
     },
     AutomationMode, Color, CommandId, MIDIEditor, MessageBoxType,
-    MessageBoxValue, Project, Reaper, Section, ThemeColor, UndoFlags,
+    MessageBoxValue, Project, ReaRsError, Reaper, Section, ThemeColor,
+    UndoFlags,
 };
 use int_enum::IntEnum;
 use log::debug;
@@ -149,22 +149,26 @@ impl Reaper {
         section: Section,
         commit: bool,
         add: bool,
-    ) -> ReaperResult<Option<CommandId>> {
+    ) -> anyhow::Result<Option<CommandId>> {
         if !file.is_file() {
-            return Err("path is not file!".into());
+            return Err(ReaRsError::Str("path is not file!").into());
         }
         let abs = canonicalize(file)?;
         unsafe {
             let id = self.low().AddRemoveReaScript(
                 add,
                 section.id() as i32,
-                as_mut_i8(abs.to_str().ok_or("can not resolve path")?),
+                as_mut_i8(
+                    abs.to_str()
+                        .ok_or(ReaRsError::Str("can not resolve path"))?,
+                ),
                 commit,
             );
             if id <= 0 {
-                return Err(Box::new(ReaperError::Str(
+                return Err(ReaRsError::Str(
                     "Failed to add or remove reascript.",
-                )));
+                )
+                .into());
             }
             match add {
                 true => Ok(Some(CommandId::new(id as u32))),
@@ -189,7 +193,7 @@ impl Reaper {
                 as_mut_i8(extension.into().as_str()),
             );
             match result {
-                false => Err(Box::new(ReaperError::UserAborted)),
+                false => Err(Box::new(ReaRsError::UserAborted)),
                 true => {
                     let filename = CString::from_raw(buf).into_string()?;
                     Ok(Path::new(&filename).into())
@@ -313,7 +317,7 @@ impl Reaper {
         title: impl Into<String>,
         captions: Vec<&'a str>,
         buf_size: impl Into<Option<usize>>,
-    ) -> ReaperResult<HashMap<String, String>> {
+    ) -> anyhow::Result<HashMap<String, String>> {
         unsafe {
             let buf_size = match buf_size.into() {
                 None => 1024,
@@ -333,7 +337,7 @@ impl Reaper {
                 buf_size as i32,
             );
             if result == false {
-                return Err(Box::new(ReaperError::UserAborted));
+                return Err(ReaRsError::UserAborted.into());
             }
             let mut map = HashMap::new();
             let values =
@@ -427,8 +431,8 @@ impl Reaper {
         undo_name: impl Into<String>,
         flags: UndoFlags,
         project: Option<&Project>,
-        mut f: impl FnMut() -> ReaperResult<()>,
-    ) -> ReaperResult<()> {
+        mut f: impl FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
         let low = self.low();
         let undo_name: String = undo_name.into();
         match project {
@@ -462,7 +466,7 @@ impl Reaper {
         title: impl Into<String>,
         text: impl Into<String>,
         box_type: MessageBoxType,
-    ) -> ReaperResult<MessageBoxValue> {
+    ) -> anyhow::Result<MessageBoxValue> {
         unsafe {
             let low = self.low();
             let status = low.ShowMessageBox(

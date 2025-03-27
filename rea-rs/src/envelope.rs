@@ -1,9 +1,8 @@
 use crate::{
-    errors::{ReaperError, ReaperStaticResult},
     ptr_wrappers::TrackEnvelope,
     utils::{as_c_str, as_string_mut, make_c_string_buf, WithNull},
-    GetLength, KnowsProject, Mutable, Position, ProbablyMutable, Reaper,
-    WithReaperPtr, GUID,
+    GetLength, KnowsProject, Mutable, Position, ProbablyMutable, ReaRsError,
+    Reaper, ReaperResult, WithReaperPtr, GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
@@ -178,7 +177,7 @@ impl<'a, P: KnowsProject, T: ProbablyMutable> Envelope<'a, P, T> {
     pub fn get_point(
         &self,
         point_index: usize,
-    ) -> ReaperStaticResult<EnvelopePoint> {
+    ) -> ReaperResult<EnvelopePoint> {
         self.get_point_ex(None, false, point_index)
     }
 
@@ -187,7 +186,7 @@ impl<'a, P: KnowsProject, T: ProbablyMutable> Envelope<'a, P, T> {
         automation_item_index: Option<usize>,
         only_visible: bool,
         point_index: usize,
-    ) -> ReaperStaticResult<EnvelopePoint> {
+    ) -> ReaperResult<EnvelopePoint> {
         let a_itm = automation_item_idx(only_visible, automation_item_index);
         let mut time = MaybeUninit::zeroed();
         let mut value = MaybeUninit::zeroed();
@@ -218,7 +217,7 @@ impl<'a, P: KnowsProject, T: ProbablyMutable> Envelope<'a, P, T> {
                     selected: selected.assume_init(),
                 })
             },
-            false => Err(ReaperError::UnsuccessfulOperation(
+            false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not set envelope point!",
             )
             .into()),
@@ -229,7 +228,7 @@ impl<'a, P: KnowsProject, T: ProbablyMutable> Envelope<'a, P, T> {
     pub fn get_point_by_time(
         &self,
         position: impl Into<Position>,
-    ) -> ReaperStaticResult<EnvelopePoint> {
+    ) -> ReaperResult<EnvelopePoint> {
         self.get_point_by_time_ex(None, false, position)
     }
 
@@ -238,7 +237,7 @@ impl<'a, P: KnowsProject, T: ProbablyMutable> Envelope<'a, P, T> {
         automation_item_index: Option<usize>,
         only_visible: bool,
         position: impl Into<Position>,
-    ) -> ReaperStaticResult<EnvelopePoint> {
+    ) -> ReaperResult<EnvelopePoint> {
         let a_itm = automation_item_idx(only_visible, automation_item_index);
         let point_index = unsafe {
             Reaper::get().low().GetEnvelopePointByTimeEx(
@@ -248,7 +247,7 @@ impl<'a, P: KnowsProject, T: ProbablyMutable> Envelope<'a, P, T> {
             )
         };
         if point_index < 0 {
-            return Err(ReaperError::UnsuccessfulOperation(
+            return Err(ReaRsError::UnsuccessfulOperation(
                 "Can not find point at the given time",
             ));
         }
@@ -433,7 +432,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
         position: Option<Position>,
         point: EnvelopePoint,
         sort: bool,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         self.set_point_ex(None, false, point_index, position, point, sort)
     }
     fn set_point_ex(
@@ -444,7 +443,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
         position: Option<Position>,
         point: EnvelopePoint,
         sort: bool,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let mut sort = MaybeUninit::new(!sort);
         let a_itm = automation_item_idx(only_visible, automation_item_index);
         let mut time = match position {
@@ -470,7 +469,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
         };
         match result {
             true => Ok(()),
-            false => Err(ReaperError::UnsuccessfulOperation(
+            false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not set envelope point!",
             )
             .into()),
@@ -482,7 +481,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
         position: Position,
         point: EnvelopePoint,
         sort: bool,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         self.insert_point_ex(None, false, position, point, sort)
     }
     fn insert_point_ex(
@@ -492,7 +491,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
         position: Position,
         point: EnvelopePoint,
         sort: bool,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let mut sort = MaybeUninit::new(!sort);
         let a_itm = automation_item_idx(only_visible, automation_item_index);
         let result = unsafe {
@@ -509,14 +508,14 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
         };
         match result {
             true => Ok(()),
-            false => Err(ReaperError::UnsuccessfulOperation(
+            false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not insert envelope point!",
             )
             .into()),
         }
     }
 
-    pub fn delete_point(&mut self, index: usize) -> ReaperStaticResult<()> {
+    pub fn delete_point(&mut self, index: usize) -> ReaperResult<()> {
         self.delete_point_ex(None, false, index)
     }
     fn delete_point_ex(
@@ -524,7 +523,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
         automation_item_index: Option<usize>,
         only_visible: bool,
         index: usize,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let a_itm = automation_item_idx(only_visible, automation_item_index);
         let result = unsafe {
             Reaper::get().low().DeleteEnvelopePointEx(
@@ -535,7 +534,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
         };
         match result {
             true => Ok(()),
-            false => Err(ReaperError::UnsuccessfulOperation(
+            false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not delete envelope point!",
             )
             .into()),
@@ -546,7 +545,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
         &mut self,
         start: impl Into<Position>,
         end: impl Into<Position>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         self.delete_point_range_ex(None, false, start, end)
     }
     fn delete_point_range_ex(
@@ -555,7 +554,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
         only_visible: bool,
         start: impl Into<Position>,
         end: impl Into<Position>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let a_itm = automation_item_idx(only_visible, automation_item_index);
         let result = unsafe {
             Reaper::get().low().DeleteEnvelopePointRangeEx(
@@ -567,7 +566,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
         };
         match result {
             true => Ok(()),
-            false => Err(ReaperError::UnsuccessfulOperation(
+            false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not delete envelope points!",
             )
             .into()),
@@ -594,7 +593,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
         &mut self,
         state: impl Into<String>,
         with_undo: bool,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let mut state = state.into();
         let result = unsafe {
             Reaper::get().low().SetEnvelopeStateChunk(
@@ -605,7 +604,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P, Mutable> {
         };
         match result {
             true => Ok(()),
-            false => Err(ReaperError::UnsuccessfulOperation(
+            false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not set envelope state",
             )),
         }
@@ -708,7 +707,7 @@ impl<'a, P: KnowsProject, T: ProbablyMutable> AutomationItem<'a, P, T> {
         &self,
         only_visible: bool,
         point_index: usize,
-    ) -> ReaperStaticResult<EnvelopePoint> {
+    ) -> ReaperResult<EnvelopePoint> {
         self.envelope().get_point_ex(
             Some(self.index()),
             only_visible,
@@ -727,7 +726,7 @@ impl<'a, P: KnowsProject, T: ProbablyMutable> AutomationItem<'a, P, T> {
         &self,
         only_visible: bool,
         position: impl Into<Position>,
-    ) -> ReaperStaticResult<EnvelopePoint> {
+    ) -> ReaperResult<EnvelopePoint> {
         self.envelope().get_point_by_time_ex(
             Some(self.index()),
             only_visible,
@@ -880,7 +879,7 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P, Mutable> {
         position: Option<Position>,
         point: EnvelopePoint,
         sort: bool,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let index = self.index();
         self.envelope().set_point_ex(
             Some(index),
@@ -903,7 +902,7 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P, Mutable> {
         position: Position,
         point: EnvelopePoint,
         sort: bool,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let index = self.index();
         self.envelope().insert_point_ex(
             Some(index),
@@ -923,7 +922,7 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P, Mutable> {
         &mut self,
         only_visible: bool,
         index: usize,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let self_index = self.index();
         self.envelope()
             .delete_point_ex(Some(self_index), only_visible, index)
@@ -939,7 +938,7 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P, Mutable> {
         only_visible: bool,
         start: impl Into<Position>,
         end: impl Into<Position>,
-    ) -> ReaperStaticResult<()> {
+    ) -> ReaperResult<()> {
         let index = self.index();
         self.envelope().delete_point_range_ex(
             Some(index),

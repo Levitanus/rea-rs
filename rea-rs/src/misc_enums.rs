@@ -4,11 +4,7 @@ use bitflags::bitflags;
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
 
-use crate::{
-    errors::{ReaperError, ReaperResult},
-    ptr_wrappers::ReaProject,
-    HardwareSocket, Reaper,
-};
+use crate::{ptr_wrappers::ReaProject, HardwareSocket, ReaRsError, Reaper};
 
 /// Determines the project in which a function should be executed.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -155,9 +151,9 @@ impl RecInput {
         }
     }
 
-    pub fn from_raw(value: f64) -> ReaperResult<Self> {
+    pub fn from_raw(value: f64) -> anyhow::Result<Self> {
         if value < 0.0 {
-            return Err(ReaperError::InvalidObject(
+            return Err(ReaRsError::InvalidObject(
                 "Can not convert to RecordingInput",
             )
             .into());
