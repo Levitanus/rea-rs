@@ -1202,7 +1202,7 @@ impl<'a> Project {
     pub fn get_render_targets(&self) -> anyhow::Result<Vec<String>> {
         Ok(self
             .get_info_string("RENDER_TARGETS")?
-            .split(",")
+            .split(";")
             .map(|i| String::from(i))
             .collect::<Vec<String>>())
     }
