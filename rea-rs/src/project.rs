@@ -14,7 +14,7 @@ use int_enum::IntEnum;
 use log::{debug, warn};
 use serde_derive::{Deserialize, Serialize};
 use std::{
-    ffi::CString, mem::MaybeUninit, path::PathBuf, ptr::NonNull,
+    ffi::CString, iter::Rev, mem::MaybeUninit, path::PathBuf, ptr::NonNull,
     time::Duration,
 };
 
@@ -1512,6 +1512,19 @@ impl<'a> Iterator for TracksIterator<'a> {
         let track = self.project.get_track(self.index);
         self.index += 1;
         track
+    }
+}
+impl<'a> DoubleEndedIterator for TracksIterator<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.index == 0 {
+            self.index = self.project.n_tracks();
+        }
+        let track = self.project.get_track(self.index - 1);
+        self.index -= 1;
+        if self.index == 0 {
+            self.index = self.project.n_tracks() + 2;
+        }
+        return track;
     }
 }
 
