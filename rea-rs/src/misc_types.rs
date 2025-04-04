@@ -1,9 +1,9 @@
 use crate::{
     utils::{as_c_str, as_string_mut, make_c_string_buf, WithNull},
-    Direction, Project, ReaRsError, Reaper, ReaperResult, Take,
-    WithReaperPtr,
+    Direction, Project, ReaRsError, Reaper, ReaperResult, Take, WithReaperPtr,
 };
 use int_enum::IntEnum;
+use log::debug;
 use rea_rs_low::raw;
 use serde_derive::{Deserialize, Serialize};
 use std::{
@@ -159,7 +159,10 @@ impl HardwareSocket {
 mod tests {
     use std::time::Duration;
 
-    use crate::SampleAmount;
+    use crate::{
+        misc_types::{TruncDuration, POSITION_PRECISION},
+        SampleAmount,
+    };
 
     #[test]
     fn test_sample_amount() {
@@ -167,6 +170,28 @@ mod tests {
             SampleAmount::from_time(Duration::from_secs(1), 44100).get(),
             44100
         );
+    }
+
+    #[test]
+    fn test_duration_trunc() {
+        assert_eq!(
+            Duration::new(5, 687253432).trunc(POSITION_PRECISION),
+            Duration::new(5, 687253400)
+        );
+    }
+}
+
+static POSITION_PRECISION: u32 = 1000;
+
+trait TruncDuration {
+    fn trunc(&self, precision: u32) -> Duration;
+}
+impl TruncDuration for Duration {
+    fn trunc(&self, precision: u32) -> Duration {
+        Duration::new(
+            self.as_secs(),
+            self.subsec_nanos() / precision * precision,
+        )
     }
 }
 
@@ -179,23 +204,33 @@ mod tests {
     Debug,
     Clone,
     Copy,
-    PartialEq,
+    // PartialEq,
     Eq,
-    PartialOrd,
+    // PartialOrd,
     Ord,
     Hash,
-    Default,
+    // Default,
     Serialize,
     Deserialize,
 )]
 pub struct Position {
     as_duration: Duration,
+    precision: u32,
+}
+impl Default for Position {
+    fn default() -> Self {
+        Self {
+            as_duration: Duration::default(),
+            precision: POSITION_PRECISION,
+        }
+    }
 }
 impl From<f64> for Position {
     fn from(value: f64) -> Self {
         let duration = Duration::from_secs_f64(value);
         Self {
             as_duration: duration,
+            precision: POSITION_PRECISION,
         }
     }
 }
@@ -206,7 +241,10 @@ impl Into<f64> for Position {
 }
 impl From<Duration> for Position {
     fn from(value: Duration) -> Self {
-        Self { as_duration: value }
+        Self {
+            as_duration: value,
+            precision: POSITION_PRECISION,
+        }
     }
 }
 impl Into<Duration> for Position {
@@ -215,10 +253,28 @@ impl Into<Duration> for Position {
     }
 }
 impl Position {
+    /// for avoiding floating-point mistakes on manipulating positions, inner
+    /// duration will be laways truncated to 8 signs after the point (100us),
+    /// if it's not explicitely set with [Position::new_with_precision]
     pub fn new(duration_from_project_start: Duration) -> Self {
         Self {
             as_duration: duration_from_project_start,
+            precision: POSITION_PRECISION,
         }
+    }
+    /// for avoiding floating-point mistakes on manipulating positions, inner
+    /// duration will be laways truncated to the chosen value
+    pub fn new_with_precision(
+        duration_from_project_start: Duration,
+        precision: u32,
+    ) -> Self {
+        Self {
+            as_duration: duration_from_project_start,
+            precision,
+        }
+    }
+    pub fn with_precision(&self, precision: u32) -> Position {
+        Self::new_with_precision(self.as_duration, precision)
     }
     pub fn as_duration(&self) -> Duration {
         self.as_duration
@@ -267,15 +323,33 @@ impl Position {
 impl Add for Position {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
-        let dur = self.as_duration + rhs.as_duration;
-        Self::from(dur)
+        let dur = (self.as_duration + rhs.as_duration).trunc(self.precision);
+        Self::new_with_precision(dur, self.precision.max(rhs.precision))
     }
 }
 impl Sub for Position {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
-        let dur = self.as_duration - rhs.as_duration;
-        Self::from(dur)
+        let dur = (self.as_duration - rhs.as_duration).trunc(self.precision);
+        Self::new_with_precision(dur, self.precision.max(rhs.precision))
+    }
+}
+impl PartialEq for Position {
+    fn eq(&self, other: &Self) -> bool {
+        debug!("self: {:?}, other: {:?}", self, other);
+        self.as_duration.trunc(self.precision)
+            == other.as_duration.trunc(other.precision)
+    }
+    fn ne(&self, other: &Self) -> bool {
+        self.as_duration.trunc(self.precision)
+            != other.as_duration.trunc(other.precision)
+    }
+}
+impl PartialOrd for Position {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let left = self.as_duration.trunc(self.precision);
+        let right = other.as_duration.trunc(other.precision);
+        left.partial_cmp(&right)
     }
 }
 
