@@ -16,12 +16,29 @@ use std::{
     marker::PhantomData, path::Path, ptr::NonNull, str::Utf8Error,
 };
 
+
 impl Reaper {
+    /// Returns the REAPER main window handle (HWND).
+    ///
+    /// On Linux/macOS this is a SWELL window handle, not a native X11 or
+    /// NSView handle directly. Use [`Reaper::main_window()`] (with feature
+    /// `egui-baseview`) to obtain a handle that implements
+    /// `raw_window_handle::HasWindowHandle` for use with GUI toolkits.
+    pub fn main_hwnd(&self) -> Hwnd {
+        let raw = self.low().GetMainHwnd();
+        NonNull::new(raw).expect("Reaper main window handle must be non-null")
+    }
+
+    /// Returns a [`gui::ReaperParentWindow`] that can be used as a parent
+    /// window handle for GUI toolkits such as egui-baseview.
+    ///
+    /// Requires the `egui-baseview` Cargo feature.
+    #[cfg(feature = "egui-baseview")]
+    pub fn main_window(&self) -> crate::gui::ReaperParentWindow {
+        crate::gui::ReaperParentWindow::new(self.main_hwnd())
+    }
+
     /// Show message in console.
-    ///
-    /// # Note
-    ///
-    /// `\n` will be added in the end.
     pub fn show_console_msg(&self, msg: impl Into<String>) {
         let mut msg: String = msg.into();
         msg.push_str("\n");
