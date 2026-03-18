@@ -1,19 +1,41 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 // #[cfg(feature = "generate-stage-one")]
 use std::process::Command;
 
+const WDL_REPO_URL: &str = "https://github.com/justinfrankel/WDL.git";
+#[cfg(feature = "update-sources")]
+const REAPER_SDK_REPO_URL: &str =
+    "https://github.com/justinfrankel/reaper-sdk.git";
+#[cfg(feature = "update-sources")]
+const REAPER_SDK_HEADERS: &[&str] = &[
+    "localize-import.h",
+    "reaper_plugin_functions.h",
+    "reaper_plugin_fx_embed.h",
+    "reaper_plugin.h",
+    "reaper_vst3_interfaces.h",
+    "video_frame.h",
+    "video_processor.h",
+];
+#[cfg(feature = "update-sources")]
+const REAPER_CUSTOM_HEADERS: &[&str] = &[
+    "coolscroll_reaper_plugin_functions.h",
+    "more_reaper_plugin_functions.h",
+];
+
 /// Executed whenever Cargo builds reaper-rs
 fn main() {
+    let manifest_dir = PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR")
+            .expect("CARGO_MANIFEST_DIR is not set"),
+    );
+
+    #[cfg(feature = "update-sources")]
+    update_sources(&manifest_dir);
+
     #[cfg(target_family = "unix")]
     // #[cfg(feature = "generate-stage-one")]
-    if !PathBuf::from("/lib/WDL").exists() {
-        Command::new("git")
-            .arg("clone")
-            .arg("https://github.com/justinfrankel/WDL.git")
-            .arg("lib/WDL")
-            .output()
-            .expect("Can not clone WDL");
-    }
+    ensure_wdl_exists(&manifest_dir);
+
     #[cfg(feature = "generate-stage-one")]
     codegen::stage_one::generate_bindings();
 
@@ -24,6 +46,220 @@ fn main() {
     compile_swell_dialog_generator_support();
 
     compile_glue_code();
+}
+
+#[cfg(target_family = "unix")]
+fn ensure_wdl_exists(manifest_dir: &Path) {
+    let wdl_dir = manifest_dir.join("lib/WDL");
+    if !wdl_dir.exists() {
+        println!("cargo:warning=lib/WDL is missing, cloning Cockos WDL...");
+        run_or_panic(
+            Command::new("git")
+                .arg("clone")
+                .arg("--depth")
+                .arg("1")
+                .arg(WDL_REPO_URL)
+                .arg(&wdl_dir),
+            "clone Cockos WDL",
+        );
+    }
+    normalize_wdl_layout(&wdl_dir);
+    sanitize_wdl_checkout(&wdl_dir);
+}
+
+fn normalize_wdl_layout(wdl_dir: &Path) {
+    if wdl_dir.join("swell").is_dir() {
+        return;
+    }
+    let nested_wdl_dir = wdl_dir.join("WDL");
+    if !nested_wdl_dir.join("swell").is_dir() {
+        return;
+    }
+    println!(
+        "cargo:warning=Detected nested WDL layout, flattening lib/WDL/WDL into lib/WDL"
+    );
+
+    let entries = std::fs::read_dir(&nested_wdl_dir)
+        .expect("Failed to read nested WDL directory");
+    for entry_result in entries {
+        let entry = entry_result
+            .expect("Failed to iterate nested WDL directory entries");
+        let from = entry.path();
+        let to = wdl_dir.join(entry.file_name());
+        if to.exists() {
+            if to.is_dir() {
+                std::fs::remove_dir_all(&to).unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to remove target directory while flattening WDL {}: {}",
+                        to.display(),
+                        e
+                    )
+                });
+            } else {
+                std::fs::remove_file(&to).unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to remove target file while flattening WDL {}: {}",
+                        to.display(),
+                        e
+                    )
+                });
+            }
+        }
+        std::fs::rename(&from, &to).unwrap_or_else(|e| {
+            panic!(
+                "Failed to move {} to {} while flattening WDL: {}",
+                from.display(),
+                to.display(),
+                e
+            )
+        });
+    }
+    std::fs::remove_dir_all(&nested_wdl_dir)
+        .expect("Failed to remove nested WDL directory after flattening");
+}
+
+fn sanitize_wdl_checkout(wdl_dir: &Path) {
+    let git_dir = wdl_dir.join(".git");
+    if git_dir.exists() {
+        std::fs::remove_dir_all(&git_dir)
+            .expect("Failed to remove nested WDL .git directory");
+    }
+    let ds_store = wdl_dir.join(".DS_Store");
+    if ds_store.exists() {
+        std::fs::remove_file(&ds_store)
+            .expect("Failed to remove .DS_Store from WDL checkout");
+    }
+}
+
+#[cfg(feature = "update-sources")]
+fn update_sources(manifest_dir: &Path) {
+    println!(
+        "cargo:warning=Updating vendored REAPER SDK and Cockos WDL sources..."
+    );
+    update_wdl(manifest_dir);
+    update_reaper_sdk(manifest_dir);
+}
+
+#[cfg(feature = "update-sources")]
+fn update_wdl(manifest_dir: &Path) {
+    let lib_dir = manifest_dir.join("lib");
+    let wdl_dir = lib_dir.join("WDL");
+    let wdl_tmp_dir = lib_dir.join("WDL.__rea_rs_update_tmp");
+
+    if wdl_tmp_dir.exists() {
+        std::fs::remove_dir_all(&wdl_tmp_dir)
+            .expect("Failed to remove stale temporary WDL directory");
+    }
+
+    run_or_panic(
+        Command::new("git")
+            .arg("clone")
+            .arg("--depth")
+            .arg("1")
+            .arg(WDL_REPO_URL)
+            .arg(&wdl_tmp_dir),
+        "clone latest Cockos WDL",
+    );
+
+    normalize_wdl_layout(&wdl_tmp_dir);
+    sanitize_wdl_checkout(&wdl_tmp_dir);
+
+    if wdl_dir.exists() {
+        std::fs::remove_dir_all(&wdl_dir)
+            .expect("Failed to remove existing lib/WDL directory");
+    }
+    std::fs::rename(&wdl_tmp_dir, &wdl_dir)
+        .expect("Failed to replace lib/WDL with updated sources");
+}
+
+#[cfg(feature = "update-sources")]
+fn update_reaper_sdk(manifest_dir: &Path) {
+    let lib_dir = manifest_dir.join("lib");
+    let reaper_dir = lib_dir.join("reaper");
+    let sdk_clone_dir = lib_dir.join("reaper-sdk.__rea_rs_update_tmp");
+    let reaper_tmp_dir = lib_dir.join("reaper.__rea_rs_update_tmp");
+
+    if sdk_clone_dir.exists() {
+        std::fs::remove_dir_all(&sdk_clone_dir)
+            .expect("Failed to remove stale temporary REAPER SDK clone");
+    }
+    if reaper_tmp_dir.exists() {
+        std::fs::remove_dir_all(&reaper_tmp_dir)
+            .expect("Failed to remove stale temporary REAPER SDK directory");
+    }
+
+    run_or_panic(
+        Command::new("git")
+            .arg("clone")
+            .arg("--depth")
+            .arg("1")
+            .arg(REAPER_SDK_REPO_URL)
+            .arg(&sdk_clone_dir),
+        "clone latest REAPER SDK",
+    );
+
+    std::fs::create_dir_all(&reaper_tmp_dir)
+        .expect("Failed to create temporary REAPER SDK directory");
+
+    let sdk_dir = sdk_clone_dir.join("sdk");
+    for header in REAPER_SDK_HEADERS {
+        let source_file = sdk_dir.join(header);
+        let target_file = reaper_tmp_dir.join(header);
+        if !source_file.exists() {
+            panic!(
+                "Missing expected SDK header in upstream repository: {}",
+                source_file.display()
+            );
+        }
+        std::fs::copy(&source_file, &target_file).unwrap_or_else(|e| {
+            panic!(
+                "Failed to copy {} to {}: {}",
+                source_file.display(),
+                target_file.display(),
+                e
+            )
+        });
+    }
+
+    for header in REAPER_CUSTOM_HEADERS {
+        let source_file = reaper_dir.join(header);
+        if source_file.exists() {
+            let target_file = reaper_tmp_dir.join(header);
+            std::fs::copy(&source_file, &target_file).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to preserve custom REAPER header {}: {}",
+                    source_file.display(),
+                    e
+                )
+            });
+        }
+    }
+
+    if reaper_dir.exists() {
+        std::fs::remove_dir_all(&reaper_dir)
+            .expect("Failed to remove existing lib/reaper directory");
+    }
+    std::fs::rename(&reaper_tmp_dir, &reaper_dir)
+        .expect("Failed to replace lib/reaper with updated SDK headers");
+    if sdk_clone_dir.exists() {
+        std::fs::remove_dir_all(&sdk_clone_dir)
+            .expect("Failed to remove temporary REAPER SDK clone directory");
+    }
+}
+
+fn run_or_panic(command: &mut Command, action: &str) {
+    let output = command
+        .output()
+        .unwrap_or_else(|e| panic!("Failed to {action}: {e}"));
+    if output.status.success() {
+        return;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    panic!(
+        "Failed to {action}. Exit status: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status, stdout, stderr
+    );
 }
 
 /// This makes SWELL dialogs via "swell-dlggen.h" possible (on C++ side only,

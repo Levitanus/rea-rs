@@ -360,6 +360,11 @@ impl Swell {
                             c_str_macro::c_str!(stringify!(ListView_SetColumn)).as_ptr(),
                         ),
                     ),
+                    ListView_GetColumn: std::mem::transmute(
+                        get_func(
+                            c_str_macro::c_str!(stringify!(ListView_GetColumn)).as_ptr(),
+                        ),
+                    ),
                     ListView_GetColumnWidth: std::mem::transmute(
                         get_func(
                             c_str_macro::c_str!(stringify!(ListView_GetColumnWidth))
@@ -1873,6 +1878,9 @@ impl Swell {
             if pointers.ListView_SetColumn.is_some() {
                 loaded_count += 1;
             }
+            if pointers.ListView_GetColumn.is_some() {
+                loaded_count += 1;
+            }
             if pointers.ListView_GetColumnWidth.is_some() {
                 loaded_count += 1;
             }
@@ -3251,7 +3259,7 @@ impl Swell {
         hwnd: root::HWND,
         idx: ::std::os::raw::c_int,
         check: ::std::os::raw::c_int,
-    ) {
+    ) -> root::BOOL {
         match self.pointers.CheckDlgButton {
             None => {
                 panic!(
@@ -4032,6 +4040,26 @@ impl Swell {
                 panic!(
                     "Attempt to use a function that has not been loaded: {}",
                     stringify!(ListView_SetColumn)
+                )
+            }
+            Some(f) => f(h, pos, lvc),
+        }
+    }
+    #[cfg(target_family = "unix")]
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn ListView_GetColumn(
+        &self,
+        h: root::HWND,
+        pos: ::std::os::raw::c_int,
+        lvc: *mut root::LVCOLUMN,
+    ) {
+        match self.pointers.ListView_GetColumn {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(ListView_GetColumn)
                 )
             }
             Some(f) => f(h, pos, lvc),
@@ -8814,7 +8842,7 @@ impl Swell {
         hwnd: root::HWND,
         idx: ::std::os::raw::c_int,
         check: ::std::os::raw::c_int,
-    ) {
+    ) -> root::BOOL {
         unsafe { windows::CheckDlgButton(hwnd, idx, check) }
     }
     #[cfg(target_family = "windows")]
@@ -9582,7 +9610,7 @@ pub struct SwellFunctionPointers {
             hwnd: root::HWND,
             idx: ::std::os::raw::c_int,
             check: ::std::os::raw::c_int,
-        ),
+        ) -> root::BOOL,
     >,
     pub IsDlgButtonChecked: Option<
         unsafe extern "C" fn(
@@ -9783,6 +9811,13 @@ pub struct SwellFunctionPointers {
             h: root::HWND,
             pos: ::std::os::raw::c_int,
             lvc: *const root::LVCOLUMN,
+        ),
+    >,
+    pub ListView_GetColumn: Option<
+        unsafe extern "C" fn(
+            h: root::HWND,
+            pos: ::std::os::raw::c_int,
+            lvc: *mut root::LVCOLUMN,
         ),
     >,
     pub ListView_GetColumnWidth: Option<
@@ -11030,7 +11065,7 @@ pub struct SwellFunctionPointers {
     >,
 }
 impl SwellFunctionPointers {
-    pub(crate) const TOTAL_COUNT: u32 = 336u32;
+    pub(crate) const TOTAL_COUNT: u32 = 337u32;
 }
 #[cfg(target_family = "windows")]
 mod windows {
@@ -11065,7 +11100,7 @@ mod windows {
             hwnd: root::HWND,
             idx: ::std::os::raw::c_int,
             check: ::std::os::raw::c_int,
-        );
+        ) -> root::BOOL;
     }
     extern "system" {
         pub fn IsDlgButtonChecked(

@@ -1,5 +1,8 @@
 [package]
-authors = ["Benjamin Klum <benjamin.klum@helgoboss.org>", "Timofei Kazantsev aka Levitanus <pianoist@ya.ru>"]
+authors = [
+  "Benjamin Klum <benjamin.klum@helgoboss.org>",
+  "Timofei Kazantsev aka Levitanus <pianoist@ya.ru>",
+]
 build = "build.rs"
 categories = ["api-bindings", "multimedia", "multimedia::audio"]
 description = "Bindings for the REAPER C++ API - low-level API"
@@ -24,6 +27,12 @@ version = "0.1.31"
 [features]
 default = []
 
+# Refreshes vendored REAPER SDK headers and Cockos WDL sources from upstream.
+update-sources = []
+
+# One-shot maintenance switch: update sources and regenerate bindings/wrappers.
+update = ["update-sources", "generate"]
+
 # Regenerates `bindings.rs` from C++ header files and right after that `reaper.rs` and `swell.rs` from `bindings.rs`.
 generate = ["generate-stage-one", "generate-stage-two"]
 
@@ -41,7 +50,7 @@ downcast-rs = "1.1.1"
 vst = "0.3"
 
 [target.'cfg(windows)'.dependencies]
-winapi = {version = "0.3", features = ["winuser"]}
+winapi = { version = "0.3", features = ["winuser"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -50,10 +59,10 @@ libc = "0.2"
 version-sync = "0.9.2"
 
 [build-dependencies]
-bindgen = {version = "0.69", optional = true}
+bindgen = { version = "0.69", optional = true }
 cc = "1.0.65"
-phf = {version = "0.8", features = ["macros"], optional = true}
-proc-macro2 = {version = "1.0.8", optional = true}
-quote = {version = "1.0.2", optional = true}
-prettyplease = {version="0.1.25", optional = true}
-syn = {version = "1.0.14", features = ["full"], optional = true}
+phf = { version = "0.8", features = ["macros"], optional = true }
+proc-macro2 = { version = "1.0.8", optional = true }
+quote = { version = "1.0.2", optional = true }
+prettyplease = { version = "0.1.25", optional = true }
+syn = { version = "1.0.14", features = ["full"], optional = true }
