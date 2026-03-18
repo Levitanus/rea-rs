@@ -3,6 +3,7 @@ use bitvec::prelude::*;
 use c_str_macro::c_str;
 use float_eq::assert_float_eq;
 use log::{debug, info, warn};
+use rea_rs::gui::{baseview, egui, egui_baseview};
 use rea_rs::project_info::{
     BoundsMode, RenderMode, RenderSettings, RenderTail, RenderTailFlags,
 };
@@ -27,6 +28,46 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::Duration;
+
+#[derive(Default)]
+struct ManualEguiDemoState {
+    clicks: usize,
+}
+
+fn open_egui_baseview_window_action(_flag: i32) -> TestStepResult {
+    std::thread::spawn(|| {
+        egui_baseview::EguiWindow::open_blocking(
+            baseview::WindowOpenOptions {
+                title: "rea-rs egui-baseview test".to_string(),
+                size: baseview::Size::new(520.0, 340.0),
+                scale: baseview::WindowScalePolicy::SystemScaleFactor,
+                gl_config: None,
+            },
+            egui_baseview::GraphicsConfig::default(),
+            ManualEguiDemoState::default(),
+            |_ctx, _queue, _state| {},
+            |ctx, queue, state| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.label(
+                        "This window is floating (not parented to REAPER).",
+                    );
+                    if ui.button("Click me").clicked() {
+                        state.clicks += 1;
+                    }
+                    ui.label(format!("Clicks: {}", state.clicks));
+                    if ui.button("Close").clicked() {
+                        queue.close_window();
+                    }
+                });
+            },
+        );
+    });
+    // Reaper::get().show_console_msg(
+    //     "Opened egui-baseview test window via action:
+    // open_egui_baseview_test_window", );
+    Ok(())
+}
+
 //
 #[reaper_extension_plugin]
 fn test_main(context: PluginContext) -> TestStepResult {
@@ -36,6 +77,12 @@ fn test_main(context: PluginContext) -> TestStepResult {
     for step in steps {
         test.push_test_step(step);
     }
+    Reaper::get_mut().register_action(
+        "open_egui_baseview_test_window",
+        "Open egui-baseview test window",
+        open_egui_baseview_window_action,
+        None,
+    )?;
     Ok(())
 }
 

@@ -107,6 +107,8 @@ impl Reaper {
         let low = rea_rs_low::Reaper::load(context);
         let actions = Vec::new();
         let hook = action_hook;
+        let swell = Swell::load(context);
+        Swell::make_available_globally(swell);
         unsafe {
             low.plugin_register(
                 c_str!("hookcommand").as_ptr(),
@@ -115,7 +117,7 @@ impl Reaper {
         }
         Self {
             low,
-            swell: Swell::load(context),
+            swell: swell,
             actions,
             hook,
             accels: Vec::new(),
@@ -187,10 +189,7 @@ impl Reaper {
             };
         }
     }
-    pub fn unregister_timer(
-        &mut self,
-        id_string: String,
-    ) -> ReaperResult<()> {
+    pub fn unregister_timer(&mut self, id_string: String) -> ReaperResult<()> {
         match self.timers.remove(&id_string) {
             Some(_) => {
                 if self.timers.len() == 0 {

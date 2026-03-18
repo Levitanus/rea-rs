@@ -16,7 +16,6 @@ use std::{
     marker::PhantomData, path::Path, ptr::NonNull, str::Utf8Error,
 };
 
-
 impl Reaper {
     /// Returns the REAPER main window handle (HWND).
     ///
