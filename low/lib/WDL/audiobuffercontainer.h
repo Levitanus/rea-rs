@@ -8,7 +8,7 @@
 #include "queue.h"
 
 
-#define CHANNELPINMAPPER_MAXPINS 64
+#define CHANNELPINMAPPER_MAXPINS 128
 
 
 struct PinMapPin
@@ -106,6 +106,11 @@ struct PinMapPin
     return *this;
   }
 
+  void invert()
+  {
+    for (int x = 0; x < STATE_SIZE; x ++) state[x]^=full_mask();
+  }
+
   bool equal_to(const PinMapPin &v, unsigned int nch_top = PINMAP_PIN_MAX_CHANNELS) const
   {
     if (WDL_NOT_NORMALLY(nch_top > PINMAP_PIN_MAX_CHANNELS)) nch_top = PINMAP_PIN_MAX_CHANNELS;
@@ -118,20 +123,21 @@ struct PinMapPin
     return true;
   }
 };
-typedef char assert_pinmappin_is_sizeofuint64[sizeof(PinMapPin) == sizeof(WDL_UINT64) ? 1 : -1];
 
 
 class ChannelPinMapper
 {
 public: 
 
-  ChannelPinMapper() : m_nCh(0), m_nPins(0) {}
+  ChannelPinMapper() : m_nCh(0), m_nPins(0) { Reset(); }
   ~ChannelPinMapper() {}
 
   void SetNPins(int nPins);
   void SetNChannels(int nCh, bool auto_passthru=true);
   // or ...
   void Init(const PinMapPin * pMapping, int nPins);
+  // or ...
+  void Reset(); // set to full passthrough
 
   int GetNPins() const { return m_nPins; }
   int GetNChannels() const { return m_nCh; }

@@ -39,7 +39,8 @@ extern bool WDL_STYLE_GetBackgroundGradient(double *gradstart, double *gradslope
 
 // for slider
 extern LICE_IBitmap *WDL_STYLE_GetSliderBitmap2(bool vert);
-extern bool WDL_STYLE_AllowSliderMouseWheel();
+extern int WDL_STYLE_AllowSliderMouseWheel(WDL_VWnd *, double *scale); // returns 1 to allow, -1 to eat
+extern bool WDL_STYLE_AllowSliderClickOutsideHandle(WDL_VWnd *vs); // false if slider handle must be clicked/dragged directly
 extern int WDL_STYLE_GetSliderDynamicCenterPos();
 
 
@@ -54,7 +55,8 @@ int WDL_STYLE_WantGlobalButtonBorders() { return 0; }
 bool WDL_STYLE_WantGlobalButtonBackground(int *col) { return false; }
 bool WDL_STYLE_GetBackgroundGradient(double *gradstart, double *gradslope) { return false; }
 LICE_IBitmap *WDL_STYLE_GetSliderBitmap2(bool vert) { return NULL; }
-bool WDL_STYLE_AllowSliderMouseWheel() { return true; }
+int WDL_STYLE_AllowSliderMouseWheel(WDL_VWnd *vw, double *scale) { if (GetAsyncKeyState(VK_CONTROL)&0x8000) *scale /= 16.0; return 1; }
+bool WDL_STYLE_AllowSliderClickOutsideHandle(WDL_VWnd *wv) { return true; }
 int WDL_STYLE_GetSliderDynamicCenterPos() { return 500; }
 
 */
@@ -114,7 +116,7 @@ class WDL_VirtualIconButton : public WDL_VWnd
     bool GetForceText() { return m_forcetext; }
     void SetTextLabelAlign(char align) { m_textalign=align; }
 
-    void SetFont(LICE_IFont *font, LICE_IFont *vfont=NULL) { m_textfont=font; m_textfontv=vfont; }
+    virtual void SetFont(LICE_IFont *font, LICE_IFont *vfont=NULL) { m_textfont=font; m_textfontv=vfont; }
     LICE_IFont *GetFont(bool vfont=false) { return vfont?m_textfontv:m_textfont; }
 
   protected:
@@ -185,6 +187,8 @@ class WDL_VirtualStaticText : public WDL_VWnd
     int m_didalign; // the actual alignment used on the last paint
 
   public:
+    int m_scale_for_text;
+
     void (*calculate_text)(WDL_VirtualStaticText *ctl, void *ctx, WDL_FastString *fs); // if set, this will be called from paint
     void *calculate_text_ctx;
 };
@@ -236,8 +240,10 @@ class WDL_VirtualSlider : public WDL_VWnd
     virtual void OnMouseMove(int xpos, int ypos);
     virtual void OnMouseUp(int xpos, int ypos);
     virtual bool OnMouseDblClick(int xpos, int ypos);
-    virtual bool OnMouseWheel(int xpos, int ypos, int amt);
+    virtual bool OnMouseWheel(int xpos, int ypos, int amt) { return OnMouseWheelInternal(xpos,ypos,amt,0); }
     virtual void GetPositionPaintExtent(RECT *r, int rscale);
+
+    bool OnMouseWheelInternal(int xpos, int ypos, int amt, int sc);
 
     virtual void OnCaptureLost();
 
@@ -302,6 +308,8 @@ class WDL_VirtualSlider : public WDL_VWnd
     bool m_grayed;
     bool m_is_knob;
 
+    bool ProcessMouseClick(int xpos, int ypos,  bool *wantKnob, int *pos, double *moveOffset); // returns true if handle clicked
+
   public:
     int (*calculate_slider_position)(WDL_VirtualSlider *ctl, void *ctx); // if set, this will be called from paint (unless captured)
     void *calculate_slider_position_ctx;
@@ -325,6 +333,7 @@ class WDL_VirtualListBox : public WDL_VWnd
 
     void SetFont(LICE_IFont *font, int lsadj=-1000) { m_font=font; m_lsadj=lsadj; }
     LICE_IFont *GetFont() { return m_font; }
+    int GetLineSpacingAdjust() const { return m_lsadj; }
     void SetAlign(int align) { m_align=align; } // -1=left,0=center,1=right
     void SetRowHeight(int rh) { m_rh=rh; }
     void SetMaxColWidth(int cw) { m_maxcolwidth=cw; } // 0 = default = allow any sized columns

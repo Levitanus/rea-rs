@@ -1,7 +1,7 @@
 #ifndef __WDL_EEL_EDITOR_H_
 #define __WDL_EEL_EDITOR_H_
 
-#define STATE_BEFORE_CODE -1
+#define STATE_BEFORE_CODE 255
 
 #include "curses_editor.h"
 #include "../assocarray.h"
@@ -114,7 +114,7 @@ public:
   virtual const char *sh_tokenize(const char **ptr, const char *endptr, int *lenOut, int *state);
 
   virtual bool peek_want_VM_funcs() { return false; } // implement if syntax highlighting should (and can safely) call peek_get_VM()
-  virtual void *peek_get_VM() { return NULL; } // returns NSEEL_VMCTX (if supported)
+  virtual void *peek_get_VM(const char *forCode) { return NULL; } // returns NSEEL_VMCTX (if supported)
   virtual int peek_get_named_string_value(const char *name, char *sstr, size_t sstr_sz) { return -1; } // returns >=0 (index) if found
   virtual bool peek_get_numbered_string_value(double idx, char *sstr, size_t sstr_sz) { return false; }
 
@@ -150,7 +150,8 @@ public:
   int m_suggestion_x,m_suggestion_y;
   HWND m_suggestion_hwnd;
   suggested_matchlist m_suggestion_list;
-  int m_suggestion_hwnd_sel;
+  int m_suggestion_hwnd_sel, m_suggestion_hwnd_scroll;
+  POINT m_suggestion_hwnd_initmousepos;
   int m_suggestion_tokpos, m_suggestion_toklen; // bytepos/len
   int m_suggestion_curline_comment_state;
 

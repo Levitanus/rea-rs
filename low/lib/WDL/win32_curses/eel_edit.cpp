@@ -28,6 +28,8 @@ EEL_Editor::EEL_Editor(void *cursesCtx) : WDL_CursesEditor(cursesCtx)
   m_function_prefix = "function ";
 
   m_suggestion_hwnd=NULL;
+  m_suggestion_hwnd_scroll=0;
+  m_suggestion_hwnd_sel=-1;
   m_code_func_cache_lines=0;
   m_code_func_cache_time=0;
 }
@@ -56,10 +58,11 @@ int EEL_Editor::namedTokenHighlight(const char *tokStart, int len, int state)
 
   if (len == 17 && !strnicmp(tokStart,"__denormal_likely",17)) return SYNTAX_FUNC;
   if (len == 19 && !strnicmp(tokStart,"__denormal_unlikely",19)) return SYNTAX_FUNC;
+  if (len == 3 && !strnicmp(tokStart,"pow",3)) return SYNTAX_FUNC;
 
   char buf[512];
   lstrcpyn_safe(buf,tokStart,wdl_min(sizeof(buf),len+1));
-  NSEEL_VMCTX vm = peek_want_VM_funcs() ? peek_get_VM() : NULL;
+  NSEEL_VMCTX vm = peek_want_VM_funcs() ? peek_get_VM(buf) : NULL;
   if (nseel_getFunctionByName((compileContext*)vm,buf,NULL)) return SYNTAX_FUNC;
 
   return A_NORMAL;
@@ -76,7 +79,7 @@ int EEL_Editor::parse_format_specifier(const char *fmt_in, int *var_offs, int *v
   {
     const char c = *fmt++;
 
-    if (c>0 && isalpha(c)) 
+    if (c>0 && isalpha_safe(c)) 
     {
       return (int) (fmt - fmt_in);
     }
@@ -193,7 +196,7 @@ void EEL_Editor::draw_string_urlchk(int *skipcnt, const char *str, int amt, int 
         str_scan += l;
         l=0;
         while (*str_scan &&
-               (strncmp(str_scan,"http://",7) || (sstr != str_scan && str_scan[-1] > 0 && isalnum(str_scan[-1]))) &&
+               (strncmp(str_scan,"http://",7) || (sstr != str_scan && str_scan[-1] > 0 && isalnum_safe(str_scan[-1]))) &&
                str_scan < str+amt) str_scan++;
         if (!*str_scan || str_scan >= str+amt) break;
         while (str_scan[l] && str_scan[l] != ')' && str_scan[l] != '\"' && str_scan[l] != ')' && str_scan[l] != ' ' && str_scan[l] != '\t') l++;
@@ -265,16 +268,29 @@ bool EEL_Editor::sh_draw_parenttokenstack_pop(char c)
 
       return true;
       case '(':
+        if (tc == 'P') return true;
         if (tc == '[') return true;
       break;
       case '[':
+        if (tc == 'P') return true;
         if (tc == '(') return true;
+      break;
+      case 'P':
+        if (tc != '?' && tc != ';') return true;
       break;
     }
   }
 
   return true;
 }
+
+static int is_preproc_token(const char *tok)
+{
+  if (tok[0] == '<') return tok[1] == '?' ? 1 : 0;
+  if (tok[0] == '?') return tok[1] == '>' ? -1 : 0;
+  return 0;
+}
+
 bool EEL_Editor::sh_draw_parentokenstack_update(const char *tok, int toklen)
 {
   if (toklen == 1)
@@ -290,6 +306,14 @@ bool EEL_Editor::sh_draw_parentokenstack_update(const char *tok, int toklen)
       case ':': return sh_draw_parenttokenstack_pop('?');
       case ')': return sh_draw_parenttokenstack_pop('(');
       case ']': return sh_draw_parenttokenstack_pop('[');
+    }
+  }
+  else if (toklen == 2)
+  {
+    switch (is_preproc_token(tok))
+    {
+      case 1: s_draw_parentokenstack.Add('P'); break;
+      case -1: return sh_draw_parenttokenstack_pop('P');
     }
   }
   return false;
@@ -309,17 +333,27 @@ void EEL_Editor::draw_line_highlight(int y, const char *p, int *c_comment_state,
   if (rv < 0) attrset(A_NORMAL);
 }
 
+#define STATE_PREPROC                         (0x20000000)
+#define STATE_PREPROC_SINGLELINEMODE          (0x10000000)
+#define STATE_PREPROC_MASK                    (0x3ff00000)
+#define STATE_PREPROC_ENCODE_OLD(x) (((x)<<20)&0x0ff00000)
+#define STATE_PREPROC_DECODE_OLD(x)      (((x)&0x0ff00000)>>20)
+
+
 int EEL_Editor::do_draw_line(const char *p, int *c_comment_state, int last_attr)
 {
-  //skipcnt = m_offs_x
-  if (is_code_start_line(p)) 
+  if (!(*c_comment_state & STATE_PREPROC) && is_code_start_line(p))
   {
     *c_comment_state=0;
     s_draw_parentokenstack.Resize(0,false);
   }
 
   int skipcnt = m_offs_x;
-  int ignoreSyntaxState = overrideSyntaxDrawingForLine(&skipcnt, &p, c_comment_state, &last_attr);
+  int ignoreSyntaxState = 0;
+
+  const int initial_state = *c_comment_state;
+  if (!(initial_state & STATE_PREPROC))
+    ignoreSyntaxState = overrideSyntaxDrawingForLine(&skipcnt, &p, c_comment_state, &last_attr);
 
   if (ignoreSyntaxState>0)
   {
@@ -328,24 +362,40 @@ int EEL_Editor::do_draw_line(const char *p, int *c_comment_state, int last_attr)
         ignoreSyntaxState==2 ? SYNTAX_COMMENT : A_NORMAL);
     return len-m_offs_x < COLS;
   }
+  if (ignoreSyntaxState<0 && initial_state == STATE_BEFORE_CODE) *c_comment_state=0;
 
+  if ((initial_state & STATE_PREPROC) && (initial_state & STATE_PREPROC_SINGLELINEMODE))
+    ignoreSyntaxState = -1;
 
   // syntax highlighting
   const char *endptr = p+strlen(p);
   const char *tok;
   const char *lp = p;
   int toklen=0;
-  int last_comment_state=*c_comment_state;
+  int last_comment_state=*c_comment_state & ~STATE_PREPROC_MASK;
   while (NULL != (tok = sh_tokenize(&p,endptr,&toklen,c_comment_state)) || lp < endptr)
   {
+    if (initial_state == STATE_BEFORE_CODE && !(*c_comment_state & STATE_PREPROC) && !ignoreSyntaxState)
+      *c_comment_state = initial_state;
     if (tok && *tok < 0 && toklen == 1)
     {
       while (tok[toklen] < 0) {p++; toklen++; } // utf-8 skip
     }
-    if (last_comment_state>0) // if in a multi-line string or comment
+    if (ignoreSyntaxState == -2 && tok && tok[0] == '/' && toklen > 1 && (tok[1] == '*' || tok[1] == '/'))
+    {
+      p -= toklen-1;
+      toklen = 1;
+    }
+
+    bool is_pp = toklen == 2 && is_preproc_token(tok);
+    if (!is_pp && (last_comment_state>0 || *c_comment_state == STATE_BEFORE_CODE)) // if in a multi-line string or comment
     {
       // draw empty space between lp and p as a string. in this case, tok/toklen includes our string, so we quickly finish after
-      draw_string(&skipcnt,lp,(int)(p-lp),&last_attr, last_comment_state==1 ? SYNTAX_COMMENT:SYNTAX_STRING, last_comment_state);
+      draw_string(&skipcnt,lp,(int)(p-lp),&last_attr,
+          last_comment_state == 1 ||
+          last_comment_state == STATE_BEFORE_CODE ||
+          *c_comment_state == STATE_BEFORE_CODE ? SYNTAX_COMMENT : SYNTAX_STRING,
+          last_comment_state);
       last_comment_state=0;
       lp = p;
       continue;
@@ -372,8 +422,9 @@ int EEL_Editor::do_draw_line(const char *p, int *c_comment_state, int last_attr)
     {
       attr = SYNTAX_COMMENT;
     }
-    else if (tok[0] > 0 && (isalpha(tok[0]) || tok[0] == '_' || tok[0] == '#'))
+    else if (tok[0] > 0 && (isalpha_safe(tok[0]) || tok[0] == '_' || (ignoreSyntaxState != -2 && tok[0] == '#')))
     {
+      if (ignoreSyntaxState == -2) goto dostr;
       int def_attr = A_NORMAL;
       bool isf=true;
       if (tok[0] == '#')
@@ -425,7 +476,11 @@ int EEL_Editor::do_draw_line(const char *p, int *c_comment_state, int last_attr)
                 break;
         }
       }
-      if (x<toklen) err_right=toklen-x;
+      if (x<toklen && ignoreSyntaxState != -2) err_right=toklen-x;
+    }
+    else if (ignoreSyntaxState == -2)
+    {
+      attr = SYNTAX_HIGHLIGHT1;
     }
     else if (tok[0] == '\'' || tok[0] == '\"')
     {
@@ -452,6 +507,13 @@ int EEL_Editor::do_draw_line(const char *p, int *c_comment_state, int last_attr)
     {
       attr = SYNTAX_HIGHLIGHT1;
     }
+    else if (is_pp)
+    {
+      if (tok[0] == '?')
+        last_comment_state = *c_comment_state;
+      if (sh_draw_parentokenstack_update(tok,toklen)) attr = SYNTAX_ERROR;
+      else attr = SYNTAX_KEYWORD;
+    }
     else
     {
       const char *h="()+*-=/,|&%;!<>?:^!~[]";
@@ -469,6 +531,7 @@ int EEL_Editor::do_draw_line(const char *p, int *c_comment_state, int last_attr)
         if (tok[0] < 0) while (err_left < toklen && tok[err_left]<0) err_left++; // utf-8 skip
       }
     }
+dostr:
 
     if (ignoreSyntaxState) err_left = err_right = 0;
 
@@ -486,10 +549,23 @@ int EEL_Editor::do_draw_line(const char *p, int *c_comment_state, int last_attr)
     if (err_right > 0)
       draw_string(&skipcnt,tok+toklen-err_right,err_right,&last_attr,SYNTAX_ERROR);
 
-    if (ignoreSyntaxState == -1 && tok[0] == '>')
+    if (tok[0] == '>' && (ignoreSyntaxState == -2 || ignoreSyntaxState == -1))
     {
       draw_string(&skipcnt,p,strlen(p),&last_attr,ignoreSyntaxState==2 ? SYNTAX_COMMENT : A_NORMAL);
       break;
+    }
+  }
+  if (ignoreSyntaxState<0)
+  {
+    if (initial_state == STATE_BEFORE_CODE ||
+        ((initial_state & STATE_PREPROC) &&
+         (initial_state & STATE_PREPROC_SINGLELINEMODE))
+        )
+    {
+      if (*c_comment_state & STATE_PREPROC)
+        *c_comment_state |= STATE_PREPROC_SINGLELINEMODE;
+      else
+        *c_comment_state=STATE_BEFORE_CODE;
     }
   }
   return 1;
@@ -498,73 +574,120 @@ int EEL_Editor::do_draw_line(const char *p, int *c_comment_state, int last_attr)
 int EEL_Editor::GetCommentStateForLineStart(int line)
 {
   if (m_write_leading_tabs<=0) m_indent_size=2;
+
   const bool uses_code_start_lines = !!is_code_start_line(NULL);
-
-  int state=0;
-  int x=0;
-
-  if (uses_code_start_lines)
-  {
-    state=STATE_BEFORE_CODE;
-    for (;;x++)
-    {
-      WDL_FastString *t = m_text.Get(x);
-      if (!t || is_code_start_line(t->Get())) break;
-    
-      const char *p=t->Get();
-
-      if (!strnicmp(p,"tabsize:",8))
-      {
-        int a = atoi(p+8);
-        if (a>0 && a < 32) m_indent_size = a;
-      }
-    }
-
-
-    // scan backwards to find line starting with @
-    for (x=line;x>=0;x--)
-    {
-      WDL_FastString *t = m_text.Get(x);
-      if (!t) break;
-      if (is_code_start_line(t->Get()))
-      {
-        state=0;
-        break;
-      }
-    }
-    x++;
-  }
+  int state=uses_code_start_lines ? STATE_BEFORE_CODE : 0;
 
   s_draw_parentokenstack.Resize(0,false);
 
-  for (;x<line;x++)
+  int state_ret = state;
+  bool need_code = uses_code_start_lines; // we're also searching for tabsize:
+  for (int x=0;x<line || need_code;x++)
   {
     WDL_FastString *t = m_text.Get(x);
-    const char *p = t?t->Get():"";
-    if (is_code_start_line(p)) 
+    if (!t) break;
+
+    const char *p = t->Get();
+    if (state == STATE_BEFORE_CODE && !strnicmp(p,"tabsize:",8))
     {
+      int a = atoi(p+8);
+      if (a>0 && a < 32) m_indent_size = a;
+    }
+    if (!(state & STATE_PREPROC) && uses_code_start_lines && is_code_start_line(p))
+    {
+      need_code = false;
+      if (x>=line) break;
       s_draw_parentokenstack.Resize(0,false);
       state=0; 
     }
-    else if (state != STATE_BEFORE_CODE)
+    else
     {
       const int ll=t?t->GetLength():0;
       const char *endp = p+ll;
       int toklen;
       const char *tok;
+      const int initial_state = state;
+      // to be maximally correct here with the preprocessor here, we need to call overrideSyntaxDrawingForLine()
+      // without drawing to detect special lines, but meh corner cases
       while (NULL != (tok=sh_tokenize(&p,endp,&toklen,&state))) // eat all tokens, updating state
       {
-        sh_func_ontoken(tok,toklen);
-        sh_draw_parentokenstack_update(tok,toklen);
+        if (initial_state == STATE_BEFORE_CODE && !(state & STATE_PREPROC))
+          state = STATE_BEFORE_CODE;
+        if (x<line && (state != STATE_BEFORE_CODE || (toklen == 2 && is_preproc_token(tok))))
+        {
+          sh_func_ontoken(tok,toklen);
+          sh_draw_parentokenstack_update(tok,toklen);
+        }
       }
     }
+    if (x<line) state_ret = state;
   }
-  return state;
+  return state_ret;
 }
 
 const char *EEL_Editor::sh_tokenize(const char **ptr, const char *endptr, int *lenOut, int *state)
 {
-  return nseel_simple_tokenizer(ptr, endptr, lenOut, state);
+  int in_preproc = 0, prev_state = state ? *state : 0;
+  if (prev_state & STATE_PREPROC)
+  {
+    in_preproc = prev_state & STATE_PREPROC_MASK;
+    *state &= ~STATE_PREPROC_MASK;
+  }
+  const char *p = nseel_simple_tokenizer(ptr, endptr, lenOut, state);
+  if (in_preproc) *state |= in_preproc;
+
+  if (!p || !state) return p;
+
+  if (in_preproc)
+  {
+    if (*lenOut >= 1 && p+1 < endptr && is_preproc_token(p) < 0)
+    {
+      *ptr += 2 - *lenOut;
+      *lenOut = 2;
+      *state = STATE_PREPROC_DECODE_OLD(prev_state); // caller will have to be aware and highlight this token correctly
+    }
+    else
+    {
+      for (int x = 0; x < *lenOut - 1; x ++)
+        if (is_preproc_token(p+x) < 0)
+        {
+          int adj = x - *lenOut;
+          *ptr += adj;
+          *lenOut += adj;
+          break;
+        }
+    }
+  }
+  else
+  {
+    if (*state == STATE_BEFORE_CODE && *lenOut == 4 && p + 7 < endptr && !strnicmp(p,"http://",7))
+    {
+      int nl = 7;
+      while (p+nl < endptr && p[nl] && p[nl] != ' ' && p[nl] != '\t') nl++;
+      *ptr += nl-*lenOut;
+      *lenOut = nl;
+    }
+
+    if (*lenOut >= 1 && p+1 < endptr && is_preproc_token(p) > 0)
+    {
+      *ptr += 2 - *lenOut;
+      *lenOut = 2;
+      *state = STATE_PREPROC_ENCODE_OLD(prev_state) | STATE_PREPROC;
+    }
+    else
+    {
+      for (int x = 0; x < *lenOut - 1; x ++)
+        if (is_preproc_token(p+x) > 0)
+        {
+          int adj = x - *lenOut;
+          *ptr += adj;
+          *lenOut += adj;
+          if (p[0] == '"' || p[0] == '\'') *state = p[0];
+          break;
+        }
+    }
+  }
+  return p;
 }
 
 
@@ -580,6 +703,7 @@ bool EEL_Editor::LineCanAffectOtherLines(const char *txt, int spos, int slen) //
       if (c == '*' && txt[1] == '/') return true;
       if (c == '/' && (txt[1] == '/' || txt[1] == '*')) return true;
       if (c == '\\' && (txt[1] == '\"' || txt[1] == '\'')) return true;
+      if (is_preproc_token(txt)) return true;
 
       if (txt >= special_start)
       {
@@ -676,6 +800,7 @@ static void eel_sh_generate_token_list(const WDL_PtrList<WDL_FastString> *lines,
   }
   
 
+  int last_state_save = 0;
   for (l=start_line;l<end_line;l++)
   {
     WDL_FastString *t = lines->Get(l);
@@ -685,15 +810,62 @@ static void eel_sh_generate_token_list(const WDL_PtrList<WDL_FastString> *lines,
     const char *endp = start_p+ll;
    
     const char *tok;
-    int last_state=state;
+    int last_state=state & ~STATE_PREPROC;
     int toklen;
     while (NULL != (tok=editor->sh_tokenize(&p,endp,&toklen,&state))||last_state)
     {
+      if (tok && toklen == 2 && is_preproc_token(tok) > 0)
+      {
+        bool ok = true;
+        for (int x = toklist->GetSize()-1; x>=0; x--)
+        {
+          char c = toklist->Get()[x].get_c();
+          if (c == 'p') break; // ?>
+          if (c == 'P') { ok = false; break; } // <?
+        }
+        if (WDL_NORMALLY(ok))
+        {
+          eel_sh_token t(l,(int)(tok-start_p),2,'P');
+          toklist->Add(t);
+          last_state_save = STATE_PREPROC_DECODE_OLD(state);
+          last_state = 0;
+          continue;
+        }
+      }
+      if (tok && toklen == 2 && is_preproc_token(tok) < 0)
+      {
+        bool ok = false;
+        for (int x = toklist->GetSize()-1; x>=0; x--)
+        {
+          char c = toklist->Get()[x].get_c();
+          if (c == 'p') break; // ?>
+          if (c == 'P') { ok = true; break; } // <?
+        }
+        if (WDL_NORMALLY(ok))
+        {
+          eel_sh_token t(l,(int)(tok-start_p),2,'p');
+          toklist->Add(t);
+          last_state = last_state_save;
+          last_state_save = 0;
+          continue;
+        }
+      }
       if (last_state == '\'' || last_state == '"' || last_state==1)
       {
         const int sz=toklist->GetSize();
         // update last token to include this data
-        if (sz) toklist->Get()[sz-1].add_linecnt((int) ((tok ? p:endp) - start_p));
+        if (sz)
+        {
+          char c = last_state == 1 ? '/' : last_state;
+          if (toklist->Get()[sz-1].get_c() == c)
+            toklist->Get()[sz-1].add_linecnt((int) ((tok ? p:endp) - start_p));
+          else if (tok)
+          {
+            // usually indicates continuation after a preprocessor block
+            eel_sh_token t(l,(int)(tok-start_p),toklen,c);
+            toklist->Add(t);
+          }
+        }
       }
       else
       {
@@ -796,8 +968,8 @@ static bool eel_sh_get_matching_pos_for_pos(WDL_PtrList<WDL_FastString> *text, i
   int tokpos = hit_tokidx;
   int pc1=0,pc2=0; // (, [ count
   int pc3=0; // : or ? count depending on mode
-  int dir=-1, mode=0;  // default to scan to previous [(
-  if (!is_after) 
+  int dir=-1, mode=0;  // default to scan to previous [( or <?
+  if (!is_after)
   {
     switch (hit_tok->get_c())
     {
@@ -808,6 +980,8 @@ static bool eel_sh_get_matching_pos_for_pos(WDL_PtrList<WDL_FastString> *text, i
       case '?': mode=5; dir=1; break;
       case ':': mode=6; break;
       case ';': mode=7; break;
+      case 'P': mode=8; dir=1; break;
+      case 'p': mode=9; dir=-1; break;
     }
     // if hit a token, exclude this token from scanning
     tokpos += dir;
@@ -817,7 +991,39 @@ static bool eel_sh_get_matching_pos_for_pos(WDL_PtrList<WDL_FastString> *text, i
   {
     const eel_sh_token *tok = toklist.Get() + tokpos;
     const char this_c = tok->get_c();
-    if (!pc1 && !pc2)
+    if (mode != 8 && mode != 9)
+    {
+      if (dir < 0)
+      {
+        if (this_c == 'P') // <?
+        {
+          if (mode == 0)
+          {
+            *newx=tok->col;
+            *newy=tok->line;
+            return true;
+          }
+          break;
+        }
+        if (this_c == 'p')
+        {
+          while (--tokpos >= 0 && toklist.Get()[tokpos].get_c() != 'P');
+          tokpos--;
+          continue;
+        }
+      }
+      else
+      {
+        if (this_c == 'p') break; // ?>
+        if (this_c == 'P')
+        {
+          while (++tokpos < toksz && toklist.Get()[tokpos].get_c() != 'p');
+          tokpos++;
+          continue;
+        }
+      }
+    }
+    if ((!pc1 && !pc2) || mode == 8 || mode == 9)
     {
       bool match=false, want_abort=false;
       switch (mode)
@@ -854,6 +1060,8 @@ static bool eel_sh_get_matching_pos_for_pos(WDL_PtrList<WDL_FastString> *text, i
             want_abort=true;
           }
         break;
+        case 8: match = this_c == 'p'; break;
+        case 9: match = this_c == 'P'; break;
       }
 
       if (want_abort) break;
@@ -872,7 +1080,7 @@ static bool eel_sh_get_matching_pos_for_pos(WDL_PtrList<WDL_FastString> *text, i
       case ')': pc1--; break;
     }
     tokpos+=dir;
-  }    
+  }
 
   if (errmsg)
   {
@@ -971,7 +1179,7 @@ static int fuzzy_match2(const char *codestr, int codelen, const char *refstr, in
     const int wordlen = word_len(word);
     if (!wordlen) break;
     char word_buf[128];
-    lstrcpyn_safe(word_buf,word,wordlen+1);
+    lstrcpyn_safe(word_buf,word,wdl_min(wordlen+1,sizeof(word_buf)));
 
     if (WDL_stristr(refstr,word_buf)==word)
     {
@@ -1015,7 +1223,7 @@ void EEL_Editor::get_suggested_token_names(const char *fname, int chkmask, sugge
   if (chkmask & (KEYWORD_MASK_BUILTIN_FUNC|KEYWORD_MASK_USER_VAR))
   {
     peek_lock();
-    NSEEL_VMCTX vm = peek_get_VM();
+    NSEEL_VMCTX vm = peek_get_VM("");
     compileContext *fvm = vm && peek_want_VM_funcs() ? (compileContext*)vm : NULL;
     if (chkmask&KEYWORD_MASK_BUILTIN_FUNC) for (x=0;;x++)
     {
@@ -1082,8 +1290,16 @@ int EEL_Editor::peek_get_token_info(const char *name, char *sstr, size_t sstr_sz
   {
     int rv = 0;
     peek_lock();
-    NSEEL_VMCTX vm = peek_want_VM_funcs() ? peek_get_VM() : NULL;
+    NSEEL_VMCTX vm = peek_want_VM_funcs() ? peek_get_VM("") : NULL;
     functionType *f = (chkmask&KEYWORD_MASK_BUILTIN_FUNC) ? nseel_getFunctionByName((compileContext*)vm,name,NULL) : NULL;
+    functionType tmp;
+    if (!f && (chkmask&KEYWORD_MASK_BUILTIN_FUNC) && !stricmp(name,"pow"))
+    {
+      memset(&tmp,0,sizeof(tmp));
+      tmp.name = "pow";
+      tmp.nParams = 2;
+      f = &tmp;
+    }
     double v;
     if (f)
     {
@@ -1092,7 +1308,7 @@ int EEL_Editor::peek_get_token_info(const char *name, char *sstr, size_t sstr_sz
     }
     else if (chkmask & KEYWORD_MASK_USER_VAR)
     {
-      if (!vm) vm = peek_get_VM();
+      if (!vm) vm = peek_get_VM("");
       EEL_F *vptr=NSEEL_VM_getvar(vm,name);
       if (vptr)
       {
@@ -1228,7 +1444,7 @@ void EEL_Editor::doWatchInfo(int c)
         {
           peek_lock();
           NSEEL_CODEHANDLE ch;
-          NSEEL_VMCTX vm = peek_get_VM();
+          NSEEL_VMCTX vm = peek_get_VM("");
 
           if (vm && (ch = NSEEL_code_compile_ex(vm,code.Get(),1,0)))
           {
@@ -1267,7 +1483,7 @@ void EEL_Editor::doWatchInfo(int c)
       
           peek_lock();
 
-          NSEEL_VMCTX vm = peek_get_VM();
+          NSEEL_VMCTX vm = peek_get_VM(code.Get());
 
           EEL_F *vptr=NULL;
           double v=0.0;
@@ -1293,7 +1509,7 @@ void EEL_Editor::doWatchInfo(int c)
             bool lb=true;
             for (x=0;x<code.GetLength();x++)
             {
-              if (code.Get()[x]>0 && isspace(code.Get()[x]))
+              if (code.Get()[x]>0 && isspace_safe(code.Get()[x]))
               {
                 if (lb) code.DeleteSub(x--,1);
                 lb=true;
@@ -1320,14 +1536,14 @@ void EEL_Editor::doWatchInfo(int c)
       // compile+execute code within () as debug_watch_value = ( code )
       // show value (or err msg)
     }
-    else if (curChar>0 && (isalnum(curChar) || curChar == '_' || curChar == '.' || curChar == '#')) 
+    else if (curChar>0 && (isalnum_safe(curChar) || curChar == '_' || curChar == '.' || curChar == '#')) 
     {
       const int bytex = WDL_utf8_charpos_to_bytepos(p,m_curs_x);
       const char *lp=p+bytex;
       const char *rp=lp + WDL_utf8_charpos_to_bytepos(lp,1);
-      while (lp >= p && *lp > 0 && (isalnum(*lp) || *lp == '_' || (*lp == '.' && (lp==p || lp[-1]!='.')))) lp--;
+      while (lp >= p && *lp > 0 && (isalnum_safe(*lp) || *lp == '_' || (*lp == '.' && (lp==p || lp[-1]!='.')))) lp--;
       if (lp < p || *lp != '#') lp++;
-      while (*rp && *rp > 0 && (isalnum(*rp) || *rp == '_' || (*rp == '.' && rp[1] != '.'))) rp++;
+      while (*rp && *rp > 0 && (isalnum_safe(*rp) || *rp == '_' || (*rp == '.' && rp[1] != '.'))) rp++;
 
       if (*lp == '#' && rp > lp+1)
       {
@@ -1341,7 +1557,7 @@ void EEL_Editor::doWatchInfo(int c)
           lp="";
         }
       }
-      if (*lp > 0 && (isalpha(*lp) || *lp == '_') && rp > lp)
+      if (*lp > 0 && (isalpha_safe(*lp) || *lp == '_') && rp > lp)
       {
         WDL_FastString n;
         n.Set(lp,(int)(rp-lp));
@@ -1367,7 +1583,7 @@ help_from_sug:
     {
       const char *p = m_suggestion.Get();
       int l;
-      for (l = 0; isalnum(p[l]) || p[l] == '_' || p[l] == '.'; l ++);
+      for (l = 0; isalnum_safe(p[l]) || p[l] == '_' || p[l] == '.'; l ++);
       if (l>0) t.Set(m_suggestion.Get(),l);
     }
     on_help(t.GetLength() > 2 ? t.Get() : NULL,(int)curChar);
@@ -1384,7 +1600,7 @@ void EEL_Editor::draw_bottom_line()
 #define BOLD(x) { attrset(COLOR_BOTTOMLINE|A_BOLD); addstr(x); attrset(COLOR_BOTTOMLINE&~A_BOLD); }
   addstr("ma"); BOLD("T"); addstr("ch");
   BOLD(" S"); addstr("ave");
-  if (peek_get_VM())
+  if (peek_get_VM(""))
   {
     addstr(" pee"); BOLD("K");
   }
@@ -1401,10 +1617,29 @@ void EEL_Editor::draw_bottom_line()
 #define SHIFT_KEY_DOWN (GetAsyncKeyState(VK_SHIFT)&0x8000)
 #define ALT_KEY_DOWN (GetAsyncKeyState(VK_MENU)&0x8000)
 
+#ifndef WM_MOUSEWHEEL
+#define WM_MOUSEWHEEL 0x20A
+#endif
+
 static const char *suggestion_help_text = "(up/down to select, tab to insert)";
 static const char *suggestion_help_text2 = "(tab or return to insert)";
 static LRESULT WINAPI suggestionProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+#ifdef _WIN32
+
+  static int Scroll_Message;
+  if (!Scroll_Message)
+  {
+    Scroll_Message = (int)RegisterWindowMessage("MSWHEEL_ROLLMSG");
+    if (!Scroll_Message) Scroll_Message=-1;
+  }
+  if (Scroll_Message > 0 && uMsg == (UINT)Scroll_Message)
+  {
+    uMsg=WM_MOUSEWHEEL;
+    wParam<<=16;
+  }
+#endif
+
   EEL_Editor *editor;
   switch (uMsg)
   {
@@ -1412,6 +1647,35 @@ static LRESULT WINAPI suggestionProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
       editor = (EEL_Editor *)GetWindowLongPtr(hwnd,GWLP_USERDATA);
       if (editor) editor->m_suggestion_hwnd = NULL;
     break;
+    case WM_MOUSEWHEEL:
+    {
+      editor = (EEL_Editor *)GetWindowLongPtr(hwnd,GWLP_USERDATA);
+      if (editor && editor->m_cursesCtx)
+      {
+        win32CursesCtx *ctx = (win32CursesCtx *)editor->m_cursesCtx;
+        int a = (int)(short)HIWORD(wParam);
+        if (a < 0) { a /= 120; if (a==0) a--; }
+        else if (a>0) { a /= 120; if (a==0) a++; }
+        else return 1;
+
+        RECT r;
+        GetClientRect(hwnd,&r);
+        const int fonth = wdl_max(ctx->m_font_h,1);
+        const int maxv = wdl_max(r.bottom / fonth - 1,1);
+        const int ni = editor->m_suggestion_list.get_size();
+        if (ni > maxv)
+        {
+          const int nv = wdl_clamp(editor->m_suggestion_hwnd_scroll - a, 0, ni - maxv);
+          if (nv != editor->m_suggestion_hwnd_scroll)
+          {
+            editor->m_suggestion_hwnd_scroll = nv;
+            editor->m_suggestion_hwnd_sel = wdl_clamp(editor->m_suggestion_hwnd_sel,nv,nv+maxv-1);
+            InvalidateRect(hwnd,NULL,FALSE);
+          }
+        }
+      }
+    }
+    return 1;
     case WM_LBUTTONDOWN:
     case WM_MOUSEMOVE:
       editor = (EEL_Editor *)GetWindowLongPtr(hwnd,GWLP_USERDATA);
@@ -1420,15 +1684,22 @@ static LRESULT WINAPI suggestionProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
         win32CursesCtx *ctx = (win32CursesCtx *)editor->m_cursesCtx;
         if (ctx && ctx->m_font_h)
         {
+          HWND par = GetParent(hwnd);
+          if (uMsg == WM_MOUSEMOVE)
+          {
+            HWND foc = GetFocus();
+            if (!foc || (foc != hwnd && foc != par)) return 0;
+          }
+
           RECT r;
           GetClientRect(hwnd,&r);
-          SetForegroundWindow(GetParent(hwnd));
-          SetFocus(GetParent(hwnd));
+          SetForegroundWindow(par);
+          SetFocus(par);
 
           const int max_vis = r.bottom / ctx->m_font_h - 1, sel = editor->m_suggestion_hwnd_sel;
           int hit = GET_Y_LPARAM(lParam) / ctx->m_font_h;
           if (hit >= max_vis) return 0;
-          if (sel >= max_vis) hit += 1 + sel - max_vis;
+          hit += editor->m_suggestion_hwnd_scroll;
 
           if (uMsg == WM_LBUTTONDOWN && !SHIFT_KEY_DOWN && !ALT_KEY_DOWN && !CTRL_KEY_DOWN)
           {
@@ -1437,6 +1708,15 @@ static LRESULT WINAPI suggestionProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
           }
           else if (sel != hit)
           {
+            POINT pt;
+            GetCursorPos(&pt);
+            if (wdl_abs(pt.x - editor->m_suggestion_hwnd_initmousepos.x) +
+                wdl_abs(pt.y - editor->m_suggestion_hwnd_initmousepos.y) < ctx->m_font_h*3/4)
+            {
+              return 0;
+            }
+            editor->m_suggestion_hwnd_initmousepos.x = pt.x + 0x10000000;
+
             editor->m_suggestion_hwnd_sel = hit;
             InvalidateRect(hwnd,NULL,FALSE);
 
@@ -1474,13 +1754,17 @@ static LRESULT WINAPI suggestionProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
           SetBkMode(ps.hdc,TRANSPARENT);
 
           const int fonth = wdl_max(ctx->m_font_h,1);
-          const int maxv = r.bottom / fonth - 1;
+          const int maxv = wdl_max(r.bottom / fonth - 1,1);
           const int selpos = wdl_max(editor->m_suggestion_hwnd_sel,0);
           int ypos = 0;
 
+          editor->m_suggestion_hwnd_scroll = wdl_clamp(editor->m_suggestion_hwnd_scroll, selpos-maxv + 1,selpos);
+          if (editor->m_suggestion_hwnd_scroll < 0)
+            editor->m_suggestion_hwnd_scroll = 0;
+
           const bool show_scores = (GetAsyncKeyState(VK_SHIFT)&0x8000) && (GetAsyncKeyState(VK_CONTROL)&0x8000) && (GetAsyncKeyState(VK_MENU)&0x8000);
 
-          for (int x = (selpos >= maxv ? 1+selpos-maxv : 0); x < ml->get_size() && ypos <= r.bottom-fonth*2; x ++)
+          for (int x = editor->m_suggestion_hwnd_scroll; x < ml->get_size() && ypos <= r.bottom-fonth*2; x ++)
           {
             int mode, score;
             const char *p = ml->get(x,&mode,&score);
@@ -1541,6 +1825,7 @@ int EEL_Editor::onChar(int c)
   {
   case KEY_F1:
     if (CTRL_KEY_DOWN) break;
+    WDL_FALLTHROUGH;
   case 'K'-'A'+1:
     doWatchInfo(c);
   return 0;
@@ -1553,7 +1838,7 @@ int EEL_Editor::onChar(int c)
          draw_message("Error writing file, changes not saved!");
      }
      if (chk.isOK())
-       setCursor();
+       setCursorIfVisible();
    }
   return 0;
 
@@ -1590,7 +1875,7 @@ int EEL_Editor::onChar(int c)
           (c == '\r' && (m_suggestion_hwnd_sel>=0 || SHIFT_KEY_DOWN)))
       {
         char buf[512];
-        int sug_mode;
+        int sug_mode = 0;
         const char *ptr = m_suggestion_list.get(wdl_max(m_suggestion_hwnd_sel,0), &sug_mode);
         lstrcpyn_safe(buf,ptr?ptr:"",sizeof(buf));
 
@@ -1603,6 +1888,33 @@ int EEL_Editor::onChar(int c)
             WDL_NORMALLY(m_suggestion_tokpos+m_suggestion_toklen <= l->GetLength()))
         {
           preSaveUndoState();
+          if (sug_mode == suggested_matchlist::MODE_USERFUNC)
+          {
+            const char *tok = l->Get() + m_suggestion_tokpos;
+            for (int j = m_suggestion_toklen - 1; j >= 0; j --)
+            {
+              if (tok[j] == '.')
+              {
+                const char *be = buf;
+                while (*be) be++;
+                while (be > buf && *be != '.') be--;
+                if (be > buf)
+                {
+                  // buf is foo.bar, lead_sz=3, if j>=3 check for common prefix
+                  const int lead_sz = (int) (be-buf);
+                  if (j == lead_sz || (j > lead_sz && tok[j-lead_sz-1] == '.'))
+                  {
+                    // prefixes match, ignore
+                    if (!strnicmp(buf, tok + j - lead_sz, lead_sz+1)) continue;
+                  }
+                }
+
+                m_suggestion_tokpos += j+1;
+                m_suggestion_toklen -= j+1;
+                break;
+              }
+            }
+          }
           l->DeleteSub(m_suggestion_tokpos,m_suggestion_toklen);
           l->Insert(buf,m_suggestion_tokpos);
           int pos = m_suggestion_tokpos + strlen(buf);
@@ -1669,7 +1981,7 @@ run_suggest:
         int state = m_suggestion_curline_comment_state, toklen = 0, bcnt = 0, pcnt = 0;
         const char *tok;
                                        // if no parens/brackets are open, use a peekable token that starts at cursor
-        while ((tok=sh_tokenize(&p,endp,&toklen,&state)) && cursor > tok-(!pcnt && !bcnt && (tok[0] < 0 || tok[0] == '_' || isalpha(tok[0]) || tok[0] == '#')))
+        while ((tok=sh_tokenize(&p,endp,&toklen,&state)) && cursor > tok-(!pcnt && !bcnt && (tok[0] < 0 || tok[0] == '_' || isalpha_safe(tok[0]) || tok[0] == '#')))
         {
           if (!state)
           {
@@ -1718,7 +2030,7 @@ run_suggest:
         if (t<0) break;
 
         if (tok[0] == ',') comma_cnt++;
-        else if ((tok[0] < 0 || tok[0] == '_' || isalpha(tok[0]) || tok[0] == '#') &&
+        else if ((tok[0] < 0 || tok[0] == '_' || isalpha_safe(tok[0]) || tok[0] == '#') &&
             (cursor <= tok + toklen || (t < ntok-1 && token_list[t+1].tok[0] == '(')))
         {
           // if cursor is within or at end of token, or is a function (followed by open-paren)
@@ -1844,6 +2156,8 @@ run_suggest:
                 SetWindowPos(m_suggestion_hwnd,NULL,xpos,ypos,use_w,use_h, SWP_NOZORDER|SWP_NOACTIVATE);
                 InvalidateRect(m_suggestion_hwnd,NULL,FALSE);
                 ShowWindow(m_suggestion_hwnd,SW_SHOWNA);
+
+                GetCursorPos(&m_suggestion_hwnd_initmousepos);
               }
               did_fuzzy = true;
               const char *p = m_suggestion_list.get(wdl_max(m_suggestion_hwnd_sel,0));
@@ -2055,7 +2369,7 @@ LRESULT EEL_Editor::onMouseMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM l
         WDL_FastString *fs=m_text.Get(y + m_paneoffs_y[m_curpane]);
         if (fs && y >= 0)
         {
-          if (!strncmp(fs->Get(),"import",6) && fs->Get()[6]>0 && isspace(fs->Get()[6]))
+          if (!strncmp(fs->Get(),"import",6) && fs->Get()[6]>0 && isspace_safe(fs->Get()[6]))
           {
             open_import_line();
             return 1;

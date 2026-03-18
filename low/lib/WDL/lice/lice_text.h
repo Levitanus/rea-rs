@@ -84,10 +84,10 @@ class LICE_CachedFont : public LICE_IFont
 
   protected:
 
-    virtual bool DrawGlyph(LICE_IBitmap *bm, unsigned short c, int xpos, int ypos, RECT *clipR);
+    virtual bool DrawGlyph(LICE_IBitmap *bm, unsigned int c, int xpos, int ypos, const RECT *clipR);
     int DrawTextImpl(LICE_IBitmap *bm, const char *str, int strcnt, RECT *rect, UINT dtFlags); // cause swell defines DrawText to SWELL_DrawText etc
 
-    bool RenderGlyph(unsigned short idx);
+    bool RenderGlyph(unsigned int idx);
 
     const char *NextWordBreak(const char *str, int strcnt, int w);
 
@@ -106,7 +106,7 @@ class LICE_CachedFont : public LICE_IFont
       int charid; // used by m_extracharlist
       int left_extra;
     };
-    charEnt *findChar(unsigned short c);
+    charEnt *findChar(unsigned int c);
 
     charEnt m_lowchars[128]; // first 128 chars cached here
     WDL_TypedBuf<charEnt> m_extracharlist;
@@ -204,7 +204,7 @@ public:
     while (x>=0 && t[x].sz) t[x--].sz=0;
   }
 
-  LICE_IFont *get(LICE_IBitmap *bm)
+  LICE_IFont *get_for_sc(int fsc)
   {
     int use_flag = m_getflags ? m_getflags(0) & ~LICE_FONT_FLAG_PRECALCALL : 0;
     if (m_flags != use_flag)
@@ -214,16 +214,11 @@ public:
     }
 
     int ht = m_lf.lfHeight, ht2 = m_lf.lfWidth;
-    if (bm)
+    if (fsc && fsc != 256)
     {
-      int sz = (int)bm->Extended(LICE_EXT_GET_ANY_SCALING,NULL);
-      if (sz) 
-      {
-        ht = (ht * sz) / 256;
-        ht2 = (ht2 * sz) / 256;
-        if (sz != 256)
-          use_flag |= LICE_FONT_FLAG_FORCE_NATIVE;
-      }
+      ht = (ht * fsc) / 256;
+      ht2 = (ht2 * fsc) / 256;
+      use_flag |= LICE_FONT_FLAG_FORCE_NATIVE;
     }
 
     int x = m_list.GetSize()-1;
@@ -255,6 +250,11 @@ public:
 
     return t->cache;
   }
+  LICE_IFont *get(LICE_IBitmap *bm)
+  {
+    return get_for_sc(bm ? (int)bm->Extended(LICE_EXT_GET_ANY_SCALING,NULL) : 0);
+  }
+
 
   int GetLineHeightDPI(LICE_IBitmap *bm)
   {

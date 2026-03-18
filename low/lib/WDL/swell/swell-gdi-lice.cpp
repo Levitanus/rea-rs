@@ -167,9 +167,13 @@ static void ScanFontDirectory(const char *path, int maxrec=3)
   } while (!ds.Next());
 }
 
-static int sortByFilePart(const char **a, const char **b)
+static int sortByFilePart(const char *a, const char *b)
 {
-  return stricmp(WDL_get_filepart(*a),WDL_get_filepart(*b));
+  return stricmp(WDL_get_filepart(a),WDL_get_filepart(b));
+}
+static int sortByFilePartDeref(const void *a, const void *b)
+{
+  return stricmp(WDL_get_filepart(*(const char **)a),WDL_get_filepart(*(const char **)b));
 }
 
 struct fontScoreMatched {
@@ -219,8 +223,8 @@ static FT_Face MatchFont(const char *lfFaceName, int weight, int italic, int exa
         else if (ext > residual && ext <= residual+2)
         {
           char c1 = residual[0],c2=residual[1];
-          if (c1>0) c1=toupper(c1);
-          if (c2>0) c2=toupper(c2);
+          if (c1>0) c1=toupper_safe(c1);
+          if (c2>0) c2=toupper_safe(c2);
           if ((c1 == 'B' || c1 == 'I' || c1 == 'L') &&
               (c2 == 'B' || c2 == 'I' || c2 == 'L' || c2 == '.'))
             dash=residual;
@@ -246,7 +250,7 @@ static FT_Face MatchFont(const char *lfFaceName, int weight, int italic, int exa
 
       while (*dash && *dash != '.')
       {
-        if (*dash > 0 && isalnum(*dash)) s.score2++;
+        if (*dash > 0 && isalnum_safe(*dash)) s.score2++;
         dash++;
       }
 
@@ -259,8 +263,8 @@ static FT_Face MatchFont(const char *lfFaceName, int weight, int italic, int exa
       if (ext > residual && ext <= residual+2)
       {
         char c1 = residual[0],c2=residual[1];
-        if (c1>0) c1=toupper(c1);
-        if (c2>0) c2=toupper(c2);
+        if (c1>0) c1=toupper_safe(c1);
+        if (c2>0) c2=toupper_safe(c2);
 
         if (weight >= FW_BOLD && (c1 == 'B' || c2 == 'B')) s.score2 -= 2;
         else if (weight <= FW_LIGHT && (c1 == 'L' || c2 == 'L')) s.score2 -= 2;
@@ -407,7 +411,7 @@ HFONT CreateFont(int lfHeight, int lfWidth, int lfEscapement, int lfOrientation,
 #else
       ScanFontDirectory("/usr/share/fonts");
 
-      qsort(s_freetype_fontlist.GetList(),s_freetype_fontlist.GetSize(),sizeof(const char *),(int (*)(const void *,const void*))sortByFilePart);
+      qsort(s_freetype_fontlist.GetList(),s_freetype_fontlist.GetSize(),sizeof(const char *),sortByFilePartDeref);
 #endif
     }
   }
@@ -958,6 +962,11 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
 
 int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 {
+  WDL_ASSERT((align & DT_SINGLELINE) || !(align & (DT_VCENTER | DT_BOTTOM)));
+  // if DT_CALCRECT and DT_WORDBREAK, rect must be provided
+  WDL_ASSERT((align&(DT_CALCRECT|DT_WORDBREAK)) != (DT_CALCRECT|DT_WORDBREAK) ||
+    (r && r->right > r->left && r->bottom > r->top));
+
   HDC__ *ct=(HDC__ *)ctx;
   if (WDL_NOT_NORMALLY(!r)) return 0;
 
@@ -985,6 +994,7 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
     int ypos=0;
 
     r->bottom=r->top;
+    r->right=r->left;
     bool in_prefix=false;
     while (buflen && *buf) // if buflen<0, go forever
     {
@@ -1054,7 +1064,7 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 
   int xpos = use_r.left;
   int ypos = use_r.top;
-  if (align&(DT_CENTER|DT_VCENTER|DT_RIGHT|DT_BOTTOM))
+  if ((align & DT_SINGLELINE) && (align&(DT_CENTER|DT_VCENTER|DT_RIGHT|DT_BOTTOM)) )
   {
     RECT tr={0,};
     DrawText(ctx,buf,buflen,&tr,align|DT_CALCRECT);
@@ -1090,9 +1100,29 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 
   int left_xpos = xpos,start_ypos = ypos, max_ypos=ypos,max_xpos=0;
   bool in_prefix=false;
+  bool is_start_of_line = !(align & DT_SINGLELINE);
 
   while (buflen && *buf)
   {
+    if (is_start_of_line)
+    {
+      WDL_ASSERT(!(align&DT_SINGLELINE));
+      if (align & (DT_RIGHT|DT_CENTER))
+      {
+        int x;
+        for (x = 0; (buflen<0 || x < buflen) && buf[x] && buf[x] != '\n'; x++);
+        if (x>0)
+        {
+          RECT tr={0,};
+          DrawText(ctx,buf,x,&tr,(align&DT_NOPREFIX)|DT_SINGLELINE|DT_CALCRECT);
+          if (align&DT_CENTER)
+            xpos -= ((tr.right-tr.left) - (use_r.right-use_r.left))/2;
+          else if (align&DT_RIGHT)
+            xpos += (use_r.right-use_r.left) - (tr.right-tr.left);
+        }
+      }
+      is_start_of_line = false;
+    }
     int c=0, charlen = wdl_utf8_parsechar(buf,&c);
     if (buflen>0)
     {
@@ -1112,7 +1142,7 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 
     if (c == '\n' && (align & DT_SINGLELINE)) c=' ';
 
-    if (c=='\n' && !(align&DT_SINGLELINE)) { xpos=left_xpos; ypos+=lineh; }
+    if (c =='\n') { xpos=left_xpos; ypos+=lineh; is_start_of_line = true; }
     else if (c=='\r')  {} 
     else 
     {
@@ -1646,7 +1676,7 @@ void SWELL_internalLICEpaint(HWND hwnd, LICE_IBitmap *bmout, int bmout_xpos, int
         hwnd->m_wndproc(hwnd,WM_PAINT,(WPARAM)&ctx,0);
       }
 
-       hwnd->m_paintctx = oldpaintctx;
+      hwnd->m_paintctx = oldpaintctx;
    
       // it might be good to blit here on some OSes, rather than from the top level caller...
       hwnd->m_invalidated=false;

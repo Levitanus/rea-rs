@@ -93,58 +93,7 @@ struct SWELL_DlgResourceEntry
 #define ICON           }, { "__SWELL_ICON", 0, (const char*)(INT_PTR)
 
 #define NOT 
-                                    
-// flags we may use
-#define CBS_DROPDOWNLIST 0x0003L
-#define CBS_DROPDOWN 0x0002L
-#define CBS_SORT     0x0100L
-#define ES_PASSWORD 0x0020L
-#define ES_READONLY 0x0800L
-#define ES_WANTRETURN 0x1000L
-#define ES_NUMBER 0x2000L
-         
-#define SS_LEFT 0
-#define SS_CENTER 0x1L                                                                     
-#define SS_RIGHT 0x2L
-#define SS_BLACKRECT 0x4L
-#define SS_BLACKFRAME (SS_BLACKRECT)
-#define SS_LEFTNOWORDWRAP 0xCL
-#define SS_ETCHEDHORZ 0x10L
-#define SS_ETCHEDVERT 0x11L
-#define SS_ETCHEDFRAME 0x12L
-#define SS_TYPEMASK 0x1FL
-#define SS_NOTIFY 0x0100L
 
-#define BS_LEFTTEXT 0x0020L
-
-#define BS_LEFT   0x100L
-#define BS_CENTER 0x300L
-#define BS_XPOSITION_MASK BS_CENTER
-
-#define BS_GROUPBOX      0x20000000
-#define BS_DEFPUSHBUTTON 0x10000000
-#define BS_PUSHBUTTON    0x8000000
-                                       
-#define LVS_LIST 0 /* 0x0003 */
-#define LVS_NOCOLUMNHEADER 0x4000
-#define LVS_NOSORTHEADER   0x8000
-#define LVS_REPORT 0x0001
-#define LVS_TYPEMASK 0x0003
-#define LVS_SINGLESEL 0x0004
-#define LVS_OWNERDATA 0x1000       
-#define LVS_SORTASCENDING       0x0010
-#define LVS_SORTDESCENDING      0x0020
-                              
-#define LBS_SORT           0x0002L
-#define LBS_OWNERDRAWFIXED 0x0010L
-#define LBS_EXTENDEDSEL 0x0800L
-                                        
-#define ES_LEFT 0
-#define ES_CENTER 1
-#define ES_RIGHT 2
-#define ES_MULTILINE 4
-#define ES_AUTOHSCROLL 0x80
-                                    
 // flags we ignore
 #define LVS_SHOWSELALWAYS 0
 #define LVS_SHAREIMAGELISTS 0
@@ -169,7 +118,6 @@ struct SWELL_DlgResourceEntry
 #define WS_EX_STATICEDGE 0
 #define WS_EX_RIGHT 0
 #define SS_CENTERIMAGE 0                                       
-#define SS_NOPREFIX 0
 #define WS_CLIPCHILDREN 0
 
 // more ignore flags for vc11+
@@ -234,7 +182,7 @@ class SWELL_DialogRegHelper {
   class SWELL_DialogRegValidator 
   {
     public:
-      SWELL_DialogRegValidator(const SWELL_DlgResourceEntry *recs, size_t recs_sz)
+      SWELL_DialogRegValidator(const SWELL_DlgResourceEntry *recs, size_t recs_sz, int dlg_w, int dlg_h)
       {
         if (recs_sz>1)
         {
@@ -244,6 +192,17 @@ class SWELL_DialogRegHelper {
           {
             const SWELL_DlgResourceEntry *list = recs + x;
             const int idx = strncmp(list->str1,"__SWELL_",8) ? list->flag1 : list->p1;
+            int parms[6] = { list->p1, list->p2, list->p3, list->p4, list->p5, list->p6 };
+            const int coord_offs = 1; // all, I guess?
+            const int xpos = parms[coord_offs], ypos = parms[coord_offs+1];
+            const int w = parms[coord_offs+2];
+            const int h = strcmp(list->str1,"__SWELL_COMBO") ? parms[coord_offs+3] : 0;
+
+            WDL_ASSERT(xpos >= -1);
+            WDL_ASSERT(ypos >= -1);
+            WDL_ASSERT(xpos + w <= dlg_w);
+            WDL_ASSERT(ypos + h <= dlg_h);
+
             if (idx != 0 && idx != -1)
             {
               WDL_ASSERT(!tmp.Get(idx));
@@ -253,9 +212,9 @@ class SWELL_DialogRegHelper {
         }
       }
   };
-  #define SWELL_VALIDATE_DIALOG_RESOURCE(v,r) static SWELL_DialogRegValidator v(r+1, sizeof(r)/sizeof(r[0])-1); 
+  #define SWELL_VALIDATE_DIALOG_RESOURCE(v,r,w,h) static SWELL_DialogRegValidator v(r+1, sizeof(r)/sizeof(r[0])-1,w,h);
 #else
-  #define SWELL_VALIDATE_DIALOG_RESOURCE(v,r)
+  #define SWELL_VALIDATE_DIALOG_RESOURCE(v,r,w,h)
 #endif
 
 
@@ -267,7 +226,7 @@ class SWELL_DialogRegHelper {
 
                                             
 #define SWELL_DEFINE_DIALOG_RESOURCE_END(recid ) }; \
-                              SWELL_VALIDATE_DIALOG_RESOURCE( __swell_dlg_validator__##recid, __swell_dlg_list__##recid) \
+                              SWELL_VALIDATE_DIALOG_RESOURCE( __swell_dlg_validator__##recid, __swell_dlg_list__##recid, __swell_dlg_helper_##recid.m_rec.width, __swell_dlg_helper_##recid.m_rec.height) \
                               static void SWELL__dlg_cf__##recid(HWND view, int wflags) { \
                                 SWELL_MakeSetCurParms(__swell_dlg_scale__##recid,__swell_dlg_scale__##recid * (SWELL_DLG_SCALE_AUTOGEN_YADJ),0,0,view,false,!(wflags&SWELL_DLG_WS_NOAUTOSIZE));  \
                                 SWELL_GenerateDialogFromList(__swell_dlg_list__##recid+1,sizeof(__swell_dlg_list__##recid)/sizeof(__swell_dlg_list__##recid[0])-1); \

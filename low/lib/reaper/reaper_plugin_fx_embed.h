@@ -9,6 +9,9 @@
  * to support via VST3: IEditController should support IReaperUIEmbedInterface, see reaper_vst3_interfaces.h
  *
  * to support via LV2: todo
+ *
+ * to support via CLAP: host requests the plugin extension "cockos.reaper_embedui", plugin returns:
+ * struct clap_plugin_reaper_embedui { INT_PTR (CLAP_ABI *inline_editor)(const clap_plugin_t *plugin, int msg, void *param1, void *param2); };
  */
 
 // these alias to win32's WM_*
@@ -42,6 +45,7 @@ typedef struct REAPER_FXEMBED_DrawInfo // alias of REAPER_inline_positioninfo
 } REAPER_FXEMBED_DrawInfo;
 
 #define REAPER_FXEMBED_DRAWINFO_FLAG_PAINT_OPTIONAL 1
+#define REAPER_FXEMBED_DRAWINFO_FLAG_IS_RETINA        0x00100 /* 7.36+/macOS, implies width/height, mouse_x/mouse_y are doubled vs screen coordinates */
 #define REAPER_FXEMBED_DRAWINFO_FLAG_LBUTTON_CAPTURED 0x10000
 #define REAPER_FXEMBED_DRAWINFO_FLAG_RBUTTON_CAPTURED 0x20000
 
@@ -57,6 +61,7 @@ typedef struct REAPER_FXEMBED_DrawInfo // alias of REAPER_inline_positioninfo
  *
  * HiDPI:
  * if REAPER_FXEMBED_IBitmap::Extended(REAPER_FXEMBED_EXT_GET_ADVISORY_SCALING,NULL) returns nonzero, then it is a 24.8 scalefactor for UI drawing
+ * this is the same value as REAPER_FXEMBED_DrawInfo::dpi
  *
  * return 1 if drawing occurred, 0 otherwise.
  *
@@ -73,7 +78,11 @@ typedef struct REAPER_FXEMBED_SizeHints { // alias to MINMAXINFO
   int preferred_aspect; // 16.16 fixed point (65536 = 1:1, 32768 = 1:2, etc)
   int minimum_aspect;   // 16.16 fixed point
 
-  int _res1, _res2, _res3, _res4;
+  // these are set by the host and can be used by the plug-in to make decisions:
+  int flags; // (flags&15) is context: 0=unknown (REAPER v7.35 and earlier), 1=TCP, 2=MCP
+  int dpi;  // DPI scaling - 0=unknown (REAPER v7.35 and earlier), otherwise 256=100%. this excludes any retina drawing
+
+  int _res3, _res4;
 
   int min_width, min_height;
   int max_width, max_height;
@@ -95,6 +104,10 @@ typedef struct REAPER_FXEMBED_SizeHints { // alias to MINMAXINFO
 #define REAPER_FXEMBED_WM_RBUTTONDBLCLK                0x0206
 #define REAPER_FXEMBED_WM_MOUSEWHEEL                   0x020A
 
+// internally we use the VST2 'opt' parameter to store this message, so we must
+// ensure these are representable as floats
+#define REAPER_FXEMBED_WM_NOBORDER                     0x100001 // plug-in returns &1 if wants no decoration around area
+#define REAPER_FXEMBED_WM_HITTEST                      0x100002 // parm3: REAPER_FXEMBED_DrawInfo*. parm2: original message being processed (e.g. REAPER_FXEMBED_WM_LBUTTONDOWN). plug-in returns &1 click should passthrough
 
 /* REAPER_FXEMBED_WM_SETCURSOR should return REAPER_FXEMBED_RETNOTIFY_HANDLED if a cursor was set
  */

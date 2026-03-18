@@ -35,13 +35,6 @@
 
 #ifndef WDL_HEAPBUF_IMPL_ONLY
 
-#ifdef WDL_HEAPBUF_TRACE
-#include <windows.h>
-#define WDL_HEAPBUF_TRACEPARM(x) ,(x)
-#else
-#define WDL_HEAPBUF_TRACEPARM(x)
-#endif
-
 #include "wdltypes.h"
 
 class WDL_HeapBuf
@@ -51,6 +44,7 @@ class WDL_HeapBuf
 #ifdef WDL_HEAPBUF_INTF_ONLY
     void *Resize(int newsize, bool resizedown=true);
     void CopyFrom(const WDL_HeapBuf *hb, bool exactCopyOfConfig=false);
+    void SwapContentsWith(WDL_HeapBuf *hb); // swaps members, avoids memcpy() of underlying data
 #endif
     void *Get() const { return m_size?m_buf:NULL; } // returns NULL if size is 0
     void *GetFast() const { return m_buf; } // returns last buffer if size is 0
@@ -59,6 +53,8 @@ class WDL_HeapBuf
 
     void SetGranul(int granul) { m_granul = granul; }
     int GetGranul() const { return m_granul; }
+    void Prealloc(int sz) { if (m_alloc < sz && WDL_NORMALLY(m_size < sz)) { const int oldsz = m_size; Resize(sz,false); m_size=oldsz; } }
+    int GetAlloc() const { return m_alloc; }
 
     void *ResizeOK(int newsize, bool resizedown = true) { void *p=Resize(newsize, resizedown); return GetSize() == newsize ? p : NULL; }
     
@@ -73,29 +69,35 @@ class WDL_HeapBuf
       return *this;
     }
 
+    void ResizeToCurrent()
+    {
+      if (!m_buf || !m_size)
+      {
+        free(m_buf);
+        m_buf = NULL;
+        m_alloc = 0;
+      }
+      else if (m_alloc != m_size)
+      {
+        void *nb = realloc(m_buf,m_size);
+        if (WDL_NORMALLY(nb!=NULL))
+        {
+          m_buf = nb;
+          m_alloc = m_size;
+        }
+      }
+    }
 
-
-  #ifndef WDL_HEAPBUF_TRACE
     explicit WDL_HeapBuf(int granul=4096) : m_buf(NULL), m_alloc(0), m_size(0), m_granul(granul)
     {
     }
     ~WDL_HeapBuf()
     {
+#ifdef WDL_HEAPBUF__TRACE_ACTION
+      if (m_buf) WDL_HEAPBUF__TRACE_ACTION(heapbuf_delete_free);
+#endif
       free(m_buf);
     }
-  #else
-    explicit WDL_HeapBuf(int granul=4096, const char *tracetype="WDL_HeapBuf"
-      ) : m_buf(NULL), m_alloc(0), m_size(0), m_granul(granul)
-    {
-      m_tracetype = tracetype;
-      wdl_log("WDL_HeapBuf: created type: %s granul=%d\n",tracetype,granul);
-    }
-    ~WDL_HeapBuf()
-    {
-      wdl_log("WDL_HeapBuf: destroying type: %s (alloc=%d, size=%d)\n",m_tracetype,m_alloc,m_size);
-      free(m_buf);
-    }
-  #endif
 
 #endif // !WDL_HEAPBUF_IMPL_ONLY
 
@@ -157,20 +159,27 @@ class WDL_HeapBuf
               if (newalloc != m_alloc)
               {
 
-                #ifdef WDL_HEAPBUF_TRACE
-                  wdl_log("WDL_HeapBuf: type %s realloc(%d) from %d\n",m_tracetype,newalloc,m_alloc);
-                #endif
                 if (newalloc <= 0)
                 {
+#ifdef WDL_HEAPBUF__TRACE_ACTION
+                 if (m_buf) WDL_HEAPBUF__TRACE_ACTION(heapbuf_free);
+#endif
                   free(m_buf);
                   m_buf=0;
                   m_alloc=0;
                   m_size=0;
                   return 0;
                 }
+#ifdef WDL_HEAPBUF__TRACE_ACTION
+                if (m_buf) WDL_HEAPBUF__TRACE_ACTION(heapbuf_realloc);
+                else WDL_HEAPBUF__TRACE_ACTION(heapbuf_malloc);
+#endif
                 void *nbuf=realloc(m_buf,newalloc);
                 if (!nbuf)
                 {
+#ifdef WDL_HEAPBUF__TRACE_ACTION
+                  WDL_HEAPBUF__TRACE_ACTION(heapbuf_mallocfree);
+#endif
                   if (!(nbuf=malloc(newalloc))) 
                   {
                     #ifdef WDL_HEAPBUF_ONMALLOCFAIL
@@ -206,9 +215,6 @@ class WDL_HeapBuf
         {
           free(m_buf);
 
-          #ifdef WDL_HEAPBUF_TRACE
-            m_tracetype = hb->m_tracetype;
-          #endif
           m_granul = hb->m_granul;
 
           m_size=m_alloc=0;
@@ -227,6 +233,23 @@ class WDL_HeapBuf
           else memcpy(Get(),hb->Get(),newsz);
         }
       }
+    #ifdef WDL_HEAPBUF_IMPL_ONLY
+      void WDL_HeapBuf::SwapContentsWith(WDL_HeapBuf *hb) // swaps members, avoids memcpy() of underlying data
+    #else
+      void SwapContentsWith(WDL_HeapBuf *hb)
+    #endif
+      {
+        // does not swap granul
+        if (WDL_NOT_NORMALLY(!hb || hb == this)) return;
+        void * const b = hb->m_buf;
+        const int a = hb->m_alloc, sz = hb->m_size;
+        hb->m_buf = m_buf;
+        hb->m_alloc = m_alloc;
+        hb->m_size = m_size;
+        m_buf = b;
+        m_alloc = a;
+        m_size = sz;
+      }
 
 #endif // ! WDL_HEAPBUF_INTF_ONLY
 
@@ -243,10 +266,6 @@ class WDL_HeapBuf
     int ___pad; // keep size 8 byte aligned
   #endif
 
-  #ifdef WDL_HEAPBUF_TRACE
-    const char *m_tracetype;
-  #endif
-
 };
 
 template<class PTRTYPE> class WDL_TypedBuf 
@@ -256,9 +275,13 @@ template<class PTRTYPE> class WDL_TypedBuf
     PTRTYPE *GetFast() const { return (PTRTYPE *) m_hb.GetFast(); }
     int GetSize() const { return m_hb.GetSize()/(unsigned int)sizeof(PTRTYPE); }
     int GetSizeBytes() const { return m_hb.GetSize(); }
+    int GetAlloc() const { return m_hb.GetAlloc()/(unsigned int)sizeof(PTRTYPE); }
 
     PTRTYPE *Resize(int newsize, bool resizedown = true) { return (PTRTYPE *)m_hb.Resize(newsize*sizeof(PTRTYPE),resizedown); }
     PTRTYPE *ResizeOK(int newsize, bool resizedown = true) { return (PTRTYPE *)m_hb.ResizeOK(newsize*sizeof(PTRTYPE), resizedown);  }
+
+    void Prealloc(int sz) { return m_hb.Prealloc(sz*sizeof(PTRTYPE)); }
+    void ResizeToCurrent() { m_hb.ResizeToCurrent(); }
 
     void SetToZero() { memset(m_hb.Get(), 0, m_hb.GetSize()); }
 
@@ -327,8 +350,23 @@ template<class PTRTYPE> class WDL_TypedBuf
       const int sz=GetSize();
       if (idx >= 0 && idx < sz)
       {
-        memmove(p+idx, p+idx+1, (sz-idx-1)*sizeof(PTRTYPE));
+        if (idx != sz-1)
+          memmove(p+idx, p+idx+1, (sz-idx-1)*sizeof(PTRTYPE));
         Resize(sz-1,false);
+      }
+    }
+
+    void DeleteRange(int index, int count)
+    {
+      PTRTYPE *list=Get();
+      int size=GetSize();
+      if (list && count > 0 && index >= 0 && index < size)
+      {
+        if (count > size - index) count = size - index;
+        size -= count;
+        if (index < size)
+          memmove(list+index,list+index+count,(unsigned int)sizeof(PTRTYPE)*(size-index));
+        Resize(size,false);
       }
     }
 
@@ -343,14 +381,8 @@ template<class PTRTYPE> class WDL_TypedBuf
       return -1;
     }
 
-#ifndef WDL_HEAPBUF_TRACE
     explicit WDL_TypedBuf(int granul=4096) : m_hb(granul) { }
-#else
-    explicit WDL_TypedBuf(int granul=4096, const char *tracetype="WDL_TypedBuf") : m_hb(granul WDL_HEAPBUF_TRACEPARM(tracetype)) { }
-#endif
-    ~WDL_TypedBuf()
-    {
-    }
+    ~WDL_TypedBuf() { }
 
     WDL_HeapBuf *GetHeapBuf() { return &m_hb; }
     const WDL_HeapBuf *GetHeapBuf() const { return &m_hb; }
@@ -373,6 +405,13 @@ template<class PTRTYPE> class WDL_TypedBuf
       if (cnt < sz) Resize(cnt,false);
       return sz - cnt;
     }
+
+    void SwapContentsWith(WDL_TypedBuf<PTRTYPE> *b) { m_hb.SwapContentsWith(&b->m_hb); }
+
+    const PTRTYPE *begin() const { return Get(); }
+    const PTRTYPE *end() const { return Get() + GetSize(); }
+    PTRTYPE *begin() { return Get(); }
+    PTRTYPE *end() { return Get() + GetSize(); }
 
   private:
     WDL_HeapBuf m_hb;

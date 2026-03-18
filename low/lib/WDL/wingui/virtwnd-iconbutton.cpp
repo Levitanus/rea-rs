@@ -170,18 +170,16 @@ void WDL_VirtualIconButton::OnPaintOver(LICE_IBitmap *drawbm, int origin_x, int 
 
       if (m_iconCfg->image_ltrb_used.flags&2) // use main image's stretch areas (outer areas become unstretched)
       {
-        WDL_VirtualWnd_BGCfg cfg={0,};
-        LICE_SubBitmap sb(m_iconCfg->olimage,sx,sy,w,h);
-        cfg.bgimage = &sb;
-        cfg.bgimage_lt[0] = m_iconCfg->image_ltrb_main[0]+1; // image_ltrb_main expects 1-based number
-        cfg.bgimage_lt[1] = m_iconCfg->image_ltrb_main[1]+1;
-        cfg.bgimage_rb[0] = m_iconCfg->image_ltrb_main[2]+1;
-        cfg.bgimage_rb[1] = m_iconCfg->image_ltrb_main[3]+1;
-        cfg.bgimage_lt_out[0] = m_iconCfg->image_ltrb_ol[0]+1;
-        cfg.bgimage_lt_out[1] = m_iconCfg->image_ltrb_ol[1]+1;
-        cfg.bgimage_rb_out[0] = m_iconCfg->image_ltrb_ol[2]+1;
-        cfg.bgimage_rb_out[1] = m_iconCfg->image_ltrb_ol[3]+1;
-        cfg.bgimage_noalphaflags=0;
+        // does not handle the case where main image has stretch but overlay doesn't, but who uses overlay that way?
+        LICE_SubBitmap sb(m_iconCfg->olimage,sx-1,sy-1,w+2,h+2);
+        WDL_VirtualWnd_BGCfg cfg = {
+          &sb,
+          { m_iconCfg->image_ltrb_main[0]+1, m_iconCfg->image_ltrb_main[1]+1 }, // image_ltrb_main is 0-based
+          { m_iconCfg->image_ltrb_main[2]+1, m_iconCfg->image_ltrb_main[3]+1 },
+          { m_iconCfg->image_ltrb_ol[0]+1, m_iconCfg->image_ltrb_ol[1]+1 },
+          { m_iconCfg->image_ltrb_ol[2]+1, m_iconCfg->image_ltrb_ol[3]+1 },
+          0
+        };
 
         RECT r=m_position,r2;
         ScaleRect(&r,rscale);
@@ -243,14 +241,15 @@ void WDL_VirtualIconButton::OnPaint(LICE_IBitmap *drawbm, int origin_x, int orig
 
       if (m_iconCfg->image_ltrb_used.flags&2)
       {
-        WDL_VirtualWnd_BGCfg cfg={0,};
-        LICE_SubBitmap sb(m_iconCfg->image,sx+1,sy+1,w,h-2);
-        cfg.bgimage = &sb;
-        cfg.bgimage_lt[0] = m_iconCfg->image_ltrb_main[0]+1; // image_ltrb_main expects 1-based number
-        cfg.bgimage_lt[1] = m_iconCfg->image_ltrb_main[1]+1;
-        cfg.bgimage_rb[0] = m_iconCfg->image_ltrb_main[2]+1;
-        cfg.bgimage_rb[1] = m_iconCfg->image_ltrb_main[3]+1;
-        cfg.bgimage_noalphaflags=0;
+        LICE_SubBitmap sb(m_iconCfg->image,sx,sy,w+2,h);
+        WDL_VirtualWnd_BGCfg cfg = {
+          &sb,
+          { m_iconCfg->image_ltrb_main[0]+1, m_iconCfg->image_ltrb_main[1]+1 }, // image_ltrb_main is 0-based
+          { m_iconCfg->image_ltrb_main[2]+1, m_iconCfg->image_ltrb_main[3]+1 },
+          { 1,1 },
+          { 1,1 },
+          0
+        };
 
         WDL_VirtualWnd_ScaledBlitBG(drawbm,&cfg,
           r.left+origin_x,r.top+origin_y,r.right-r.left,r.bottom-r.top,
@@ -456,25 +455,12 @@ void WDL_VirtualIconButton::OnMouseMove(int xpos, int ypos)
   {
     int wp=m_pressed;
 
-    WDL_VWnd *parhit = GetParent();
-    if (parhit)
-    {
-      parhit = parhit->VirtWndFromPoint(m_position.left+xpos,m_position.top+ypos,0);
-    }
-    else if (!parhit)
-    {
-      // special case if no parent
-      if (xpos >= 0 && xpos < m_position.right-m_position.left && ypos >= 0 && ypos < m_position.bottom-m_position.top) parhit=this;      
-    }
-    
-    if (parhit == this)
-    {
+    RECT r;
+    GetPosition(&r);
+    if (xpos >= 0 && xpos < r.right-r.left && ypos >= 0 && ypos < r.bottom-r.top)
       m_pressed|=2;
-    }
     else
-    {
       m_pressed&=~2;
-    }
 
     if ((m_pressed&3)!=(wp&3))
     {
@@ -574,6 +560,11 @@ static void GenSubMenu(HMENU menu, int *x, WDL_PtrList<char> *items, int curitem
 
     if (!strcmp(mi.dwTypeData,"<SEP>")) mi.fType=MFT_SEPARATOR;
     else if (!strcmp(mi.dwTypeData,"</SUB>")) break; // done!
+    if (!strncmp(mi.dwTypeData,"<GRAY>",6))
+    {
+      mi.dwTypeData += 6;
+      mi.fState |= MF_GRAYED;
+    }
     else if (!strncmp(mi.dwTypeData,"<SUB>",5))
     {
       mi.hSubMenu= CreatePopupMenu();
@@ -727,6 +718,7 @@ WDL_VirtualStaticText::WDL_VirtualStaticText()
   m_didvert=0;
   m_didalign=-1;
   m_wantabbr=false;
+  m_scale_for_text=0;
 }
 
 WDL_VirtualStaticText::~WDL_VirtualStaticText()
@@ -789,6 +781,12 @@ int WDL_VirtualStaticText::OnMouseDown(int xpos, int ypos)
 void WDL_VirtualStaticText::OnPaint(LICE_IBitmap *drawbm, int origin_x, int origin_y, RECT *cliprect, int rscale)
 {
   if (calculate_text) calculate_text(this,calculate_text_ctx, &m_text);
+  if (drawbm)
+  {
+    m_scale_for_text = (int)drawbm->Extended(LICE_EXT_GET_ANY_SCALING,NULL);
+    if (rscale && rscale != 256) // only used on macOS
+      m_scale_for_text = ((m_scale_for_text ? m_scale_for_text:256) * 256) / rscale;
+  }
   RECT r=m_position;
   ScaleRect(&r,rscale);
   r.left+=origin_x;
@@ -922,7 +920,7 @@ void WDL_VirtualStaticText::OnPaint(LICE_IBitmap *drawbm, int origin_x, int orig
 
       if (m_wantabbr)
       {
-        if (len && txt[len-1] > 0 && isdigit(txt[len-1]))
+        if (len && txt[len-1] > 0 && isdigit_safe(txt[len-1]))
         {
           RECT tr = { 0, 0, 0, 0 };
           font->DrawText(drawbm, txt, -1, &tr, DT_SINGLELINE|DT_NOPREFIX|DT_CALCRECT);
@@ -932,7 +930,7 @@ void WDL_VirtualStaticText::OnPaint(LICE_IBitmap *drawbm, int origin_x, int orig
             int i;
             for (i=len-1; i >= 0; --i)
             {
-              if (txt[i] < 0 || !isdigit(txt[i]) || len-i > 4) break;
+              if (txt[i] < 0 || !isdigit_safe(txt[i]) || len-i > 4) break;
             }
             strcat(abbrbuf, txt+i+1);
 

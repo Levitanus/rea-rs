@@ -28,7 +28,7 @@
 #include "denormal.h"
 
 #if !defined(WDL_RESAMPLE_NO_SSE) && !defined(WDL_RESAMPLE_USE_SSE)
-  #if defined(__SSE2__) || _M_IX86_FP >= 2 || (defined(_WIN64) && (_MSC_VER > 1400 || __INTEL_COMPILER > 0))
+  #if defined(__SSE2__) || _M_IX86_FP >= 2 || (defined(_M_X64) && (_MSC_VER > 1400 || __INTEL_COMPILER > 0))
     #define WDL_RESAMPLE_USE_SSE
   #endif
 #endif
@@ -44,7 +44,7 @@
 class WDL_Resampler::WDL_Resampler_Filter // pre/post filter
 {
 public:
-  WDL_Resampler_Filter() : m_fpos(-1.0), m_state(-1), m_filtsz(0) { }
+  WDL_Resampler_Filter() : m_fpos(-1.0), m_filtsz(0), m_state(-1) { }
 
   void Reset() 
   { 
@@ -1151,8 +1151,11 @@ void WDL_Resampler::SetRates(double rate_in, double rate_out)
   }
 }
 
-const WDL_SincFilterSample *WDL_Resampler::BuildLowPass(double filtpos, bool *isIdeal) // only called in sinc modes
+const WDL_SincFilterSample *WDL_Resampler::BuildLowPass(bool *isIdeal) // only called in sinc modes
 {
+  double filtpos = 1.0;
+  if (m_ratio > 1.0) filtpos = 1.0 / (m_ratio * 1.03);
+
   const int wantsize=m_sincsize;
   int wantinterp=m_sincoversize;
 
@@ -1434,9 +1437,7 @@ int WDL_Resampler::ResampleOut(WDL_ResampleSample *out, int nsamples_in, int nsa
   bool isideal = false;
   if (m_sincsize) // sinc interpolating
   {
-    const WDL_SincFilterSample *filter;
-    if (m_ratio > 1.0) filter=BuildLowPass(1.0 / (m_ratio*1.03), &isideal);
-    else filter=BuildLowPass(1.0, &isideal);
+    const WDL_SincFilterSample *filter = BuildLowPass(&isideal);
 
     const int oversize = m_lp_oversize;
     int filtsz=m_filter_coeffs_size;
@@ -1667,4 +1668,17 @@ int WDL_Resampler::ResampleOut(WDL_ResampleSample *out, int nsamples_in, int nsa
 
 
   return ret;
+}
+
+void WDL_Resampler::Prealloc(int nch, int inputsize, int outputsize)
+{
+  const int in2 = (int)(m_ratio * outputsize) + 4 + m_sincsize;
+  const int l = wdl_max(inputsize, in2);
+  if (l > 0) m_rsinbuf.Prealloc(nch * l);
+
+  if (m_sincsize)
+  {
+    bool isideal = false;
+    BuildLowPass(&isideal);
+  }
 }

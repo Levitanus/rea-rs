@@ -414,6 +414,11 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
 
 int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 {
+  WDL_ASSERT((align & DT_SINGLELINE) || !(align & (DT_VCENTER | DT_BOTTOM)));
+  // if DT_CALCRECT and DT_WORDBREAK, rect must be provided
+  WDL_ASSERT((align&(DT_CALCRECT|DT_WORDBREAK)) != (DT_CALCRECT|DT_WORDBREAK) ||
+    (r && r->right > r->left && r->bottom > r->top));
+
   HDC__ *ct=(HDC__ *)ctx;
   if (!HDC_VALID(ct)) return 0;
   if (r && (align&DT_CALCRECT)) 
@@ -721,19 +726,19 @@ void swell_load_color_theme(const char *fn)
       char *p = buf;
       while (*p == ' ' || *p == '\t') p++;
       char *np = p;
-      while (*np > 0 && (*np == '_' || isalnum(*np))) np++;
+      while (*np > 0 && (*np == '_' || isalnum_safe(*np))) np++;
       if (!*np || np == p) continue;
       *np++ = 0;
       while (*np == ' ' || *np == '\t') np++;
 
       if(!stricmp(p,"default_font_face"))
       {
-        if (*np > 0 && !isspace(*np))
+        if (*np > 0 && !isspace_safe(*np))
         {
           char *b = strdup(np);
           g_swell_deffont_face = b;
           while (*b && *b != ';' && *b != '#') b++;
-          while (b>g_swell_deffont_face && b[-1] > 0 && isspace(b[-1])) b--;
+          while (b>g_swell_deffont_face && b[-1] > 0 && isspace_safe(b[-1])) b--;
           *b=0;
         }
         continue;

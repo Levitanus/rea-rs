@@ -57,11 +57,27 @@ typedef uintptr_t UINT_PTR, *PUINT_PTR, ULONG_PTR, *PULONG_PTR, DWORD_PTR, *PDWO
 #endif
 
 
+#ifdef SWELL_USE_WIN32_RGB
+
+// define SWELL_USE_WIN32_RGB project-wide if you want the RGB byte ordering
+// of RGB(), GetRValue(), etc, to match win32
+
+#define RGB(r,g,b) ((((BYTE)(b))<<16)|(((BYTE)(g))<<8)|((BYTE)(r)))
+#define GetBValue(x) (((x)>>16)&0xff)
+#define GetGValue(x) (((x)>>8)&0xff)
+#define GetRValue(x) ((x)&0xff)
+
+#else
+
 // the byte ordering of RGB() etc is different than on win32 
-#define RGB(r,g,b) (((r)<<16)|((g)<<8)|(b))
+#define RGB(r,g,b) ((((BYTE)(r))<<16)|(((BYTE)(g))<<8)|((BYTE)(b)))
 #define GetRValue(x) (((x)>>16)&0xff)
 #define GetGValue(x) (((x)>>8)&0xff)
 #define GetBValue(x) ((x)&0xff)
+
+#define SWELL_BROKEN_RGB_ORDER
+
+#endif
 
 // basic platform compat defines
 #ifndef stricmp
@@ -813,6 +829,7 @@ __attribute__ ((visibility ("default"))) BOOL WINAPI DllMain(HINSTANCE hInstDLL,
 #define LVN_ITEMCHANGED         (LVN_FIRST-1)
 #define LVN_ODFINDITEM          (LVN_FIRST-52)
 #define LVN_GETDISPINFO         (LVN_FIRST-50)
+#define LVN_GETDISPINFOW        (LVN_FIRST-77)
 
 #define LVS_EX_GRIDLINES 0x01
 #define LVS_EX_SUBITEMIMAGES 0x02
@@ -847,22 +864,75 @@ __attribute__ ((visibility ("default"))) BOOL WINAPI DllMain(HINSTANCE hInstDLL,
 #define BST_UNCHECKED 0
 #define BST_INDETERMINATE 2
 
+#define CBS_DROPDOWNLIST 0x0003L
+#define CBS_DROPDOWN 0x0002L
+#define CBS_SORT     0x0100L
+#define ES_PASSWORD 0x0020L
+#define ES_READONLY 0x0800L
+#define ES_WANTRETURN 0x1000L
+#define ES_NUMBER 0x2000L
+
+#define SS_LEFT 0
+#define SS_CENTER 0x1L
+#define SS_RIGHT 0x2L
+#define SS_BLACKRECT 0x4L
+#define SS_BLACKFRAME (SS_BLACKRECT)
+#define SS_LEFTNOWORDWRAP 0xCL
+#define SS_ETCHEDHORZ 0x10L
+#define SS_ETCHEDVERT 0x11L
+#define SS_ETCHEDFRAME 0x12L
+#define SS_TYPEMASK 0x1FL
+#define SS_NOPREFIX 0x80L
+#define SS_NOTIFY 0x0100L
+
+#define BS_LEFTTEXT 0x0020L
+
+#define BS_LEFT   0x100L
+#define BS_CENTER 0x300L
+#define BS_XPOSITION_MASK BS_CENTER
+
+#define BS_GROUPBOX      0x20000000
+#define BS_DEFPUSHBUTTON 0x10000000
+#define BS_PUSHBUTTON    0x8000000
+
+#define LVS_LIST 0 /* 0x0003 */
+#define LVS_NOCOLUMNHEADER 0x4000
+#define LVS_NOSORTHEADER   0x8000
+#define LVS_REPORT 0x0001
+#define LVS_TYPEMASK 0x0003
+#define LVS_SINGLESEL 0x0004
+#define LVS_OWNERDATA 0x1000
+#define LVS_SORTASCENDING       0x0010
+#define LVS_SORTDESCENDING      0x0020
+
+#define LBS_SORT           0x0002L
+#define LBS_OWNERDRAWFIXED 0x0010L
+#define LBS_EXTENDEDSEL 0x0800L
+
+#define ES_LEFT 0
+#define ES_CENTER 1
+#define ES_RIGHT 2
+#define ES_MULTILINE 4
+#define ES_AUTOHSCROLL 0x80
+#define ES_NOHIDESEL 0x100
+
+
 // note: these differ in values from their win32 counterparts, because we got them
-// wrong to begin with, and we'd like to keep backwards compatability for things compiled
+// wrong to begin with, and we'd like to keep backwards compatibility for things compiled
 // against an old swell.h (and using the SWELL API via an exported mechanism, i.e. third party
 // plug-ins). 
 #define SW_HIDE 0
 #define SW_SHOWNA 1        // 8 on win32
 #define SW_SHOW 2          // 1 on win32
 #define SW_SHOWMINIMIZED 3 // 2 on win32
+#define SW_SHOWMAXIMIZED 4
+#define SW_RESTORE 5
 
 // aliases (todo implement these as needed)
 #define SW_SHOWNOACTIVATE SW_SHOWNA 
 #define SW_NORMAL SW_SHOW 
 #define SW_SHOWNORMAL SW_SHOW
-#define SW_SHOWMAXIMIZED SW_SHOW
 #define SW_SHOWDEFAULT SW_SHOWNORMAL
-#define SW_RESTORE SW_SHOWNA
 
 #define SWP_NOMOVE 1
 #define SWP_NOSIZE 2
@@ -896,6 +966,9 @@ __attribute__ ((visibility ("default"))) BOOL WINAPI DllMain(HINSTANCE hInstDLL,
 #define MIIM_SUBMENU 8
 #define MIIM_DATA 16
 #define MIIM_BITMAP 0x80
+#ifdef __APPLE__
+#define MIIM_SWELL_DO_NOT_CALC_MODIFIERS (1<<30)
+#endif
 
 #define MF_ENABLED 0
 #define MF_GRAYED 1
@@ -908,6 +981,9 @@ __attribute__ ((visibility ("default"))) BOOL WINAPI DllMain(HINSTANCE hInstDLL,
 #define MF_BYCOMMAND 0
 #define MF_BYPOSITION 0x400
 #define MF_SEPARATOR 0x800
+#ifdef __APPLE__
+#define MF_SWELL_DO_NOT_CALC_MODIFIERS (1<<30)
+#endif
 
 #define MFT_STRING MF_STRING
 #define MFT_BITMAP MF_BITMAP
@@ -1004,6 +1080,7 @@ __attribute__ ((visibility ("default"))) BOOL WINAPI DllMain(HINSTANCE hInstDLL,
 
 #define SC_CLOSE        0xF060
 
+#define HTTRANSPARENT (-1)
 #define HTCAPTION 2
 #define HTBOTTOMRIGHT 17
 
@@ -1189,6 +1266,7 @@ typedef struct tagNMLVCUSTOMDRAW
 #define VK_HELP           0x2F
 
 #define VK_LWIN           0x5B
+#define VK_RWIN           0x5C
 
 #define VK_NUMPAD0        0x60
 #define VK_NUMPAD1        0x61

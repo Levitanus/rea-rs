@@ -12,11 +12,11 @@ SHM_MsgReplyConnection::SHM_MsgReplyConnection(int bufsize, int maxqueuesize, bo
   m_maxqueuesize=maxqueuesize;
   m_has_had_error=false;
   userData=0;
-  OnRecv=0;
+  OnRecv2 = NULL;
   IdleProc=0;
   m_lastmsgid=1;
   m_shm = 0;
-  m_spares=0;
+  m_spares = NULL;
   m_waiting_replies=0;
 
   if (uniquestr) lstrcpyn_safe(m_uniq,uniquestr,sizeof(m_uniq));
@@ -183,11 +183,11 @@ void SHM_MsgReplyConnection::ReturnSpares(WaitingMessage *msglist)
   if (msglist)
   {
     WaitingMessage *msgtail = msglist;
-    while (msgtail && msgtail->_next) msgtail=msgtail->_next;
+    while (msgtail->_next) msgtail = msgtail->_next;
 
     m_shmmutex.Enter(); 
     msgtail->_next = m_spares;
-    m_spares=msglist;
+    m_spares = msglist;
     m_shmmutex.Leave(); 
   }
 }
@@ -233,8 +233,8 @@ bool SHM_MsgReplyConnection::RunInternal(int checkForReplyID, WaitingMessage **r
 
     while (m_shm->recv_queue.GetSize()>=12)
     {
-      int datasz = *(int *)((char *)m_shm->recv_queue.Get()+8);
-      WDL_Queue::WDL_Queue__bswap_buffer(&datasz,4); // convert to LE if needed
+      int datasz;
+      wdl_memcpy_le(&datasz,(char *)m_shm->recv_queue.Get()+8, 1, sizeof(int));
 
       if (m_shm->recv_queue.GetSize() < 12 + datasz) break;
 
@@ -242,15 +242,14 @@ bool SHM_MsgReplyConnection::RunInternal(int checkForReplyID, WaitingMessage **r
       if (m_shm->recv_queue.GetSize() < 12 + datasz + WDL_SHA1SIZE) break;
 #endif
 
-      int type = *(int *)((char *)m_shm->recv_queue.Get());
-      WDL_Queue::WDL_Queue__bswap_buffer(&type,4); // convert to LE if needed
+      int type;
+      wdl_memcpy_le(&type,(char *)m_shm->recv_queue.Get(), 1, sizeof(int));
       
       WaitingMessage *msg = m_spares;
       if (msg) m_spares = m_spares->_next;
       else msg = new WaitingMessage;
 
-      msg->m_msgid = *(int *)((char *)m_shm->recv_queue.Get() + 4);
-      WDL_Queue::WDL_Queue__bswap_buffer(&msg->m_msgid,4); // convert to LE if needed
+      wdl_memcpy_le(&msg->m_msgid,(char *)m_shm->recv_queue.Get() + 4,1, sizeof(int));
 
       msg->m_msgtype = type;
       memcpy(msg->m_msgdata.Resize(datasz,false),(char *)m_shm->recv_queue.Get()+12, datasz);
@@ -270,6 +269,7 @@ bool SHM_MsgReplyConnection::RunInternal(int checkForReplyID, WaitingMessage **r
       m_shm->recv_queue.Advance(WDL_SHA1SIZE);
 #endif
 
+      msg->_next = NULL;
 
       if (type==0)
       {
@@ -288,24 +288,18 @@ bool SHM_MsgReplyConnection::RunInternal(int checkForReplyID, WaitingMessage **r
       }
       else 
       {
-        m_shmmutex.Leave(); 
-
-        WaitingMessage *msgtail=NULL;
-
-        if (OnRecv) 
-        {
-          msg->_next=0;
-          msgtail = msg = OnRecv(this,msg);          
-          while (msgtail && msgtail->_next) msgtail=msgtail->_next;
-        }
+        if (OnRecv2) msg = OnRecv2(this,msg);
         else if (msg->m_msgid) Reply(msg->m_msgid,"",0); // send an empty reply
-
-        m_shmmutex.Enter(); // get shm again
 
         if (msg)
         {
-          (msgtail?msgtail:msg)->_next = m_spares;
-          m_spares=msg;
+          if (m_spares)
+          {
+            WaitingMessage *tail = msg;
+            while (tail->_next) tail=tail->_next;
+            tail->_next = m_spares;
+          }
+          m_spares = msg;
         }
       }
     } // while queue has stuff

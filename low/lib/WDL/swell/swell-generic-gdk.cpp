@@ -114,6 +114,8 @@ static SWELL_OSWINDOW swell_dragsrc_osw;
 static DWORD swell_dragsrc_timeout_start;
 static HWND swell_dragsrc_hwnd;
 static DWORD swell_lastMessagePos;
+static const char *swell_dragsrc_fn;
+
 static int gdk_options;
 #define OPTION_KEEP_OWNED_ABOVE 1
 #define OPTION_OWNED_TASKLIST 2
@@ -141,12 +143,26 @@ static bool g_swell_mouse_relmode;
 static int g_swell_mouse_relmode_curpos_x;
 static int g_swell_mouse_relmode_curpos_y;
 
-static HANDLE s_clipboard_getstate, s_clipboard_setstate;
-static GdkAtom s_clipboard_getstate_fmt, s_clipboard_setstate_fmt;
 
-static WDL_IntKeyedArray<HANDLE> m_clip_recs(GlobalFree);
-static WDL_PtrList<char> m_clip_curfmts;
+//// clipboard state
+static HANDLE s_clipboard_getstate; // currently retrieving data/format via req_clipboard() (either GetClipboardData() or EnumClipboardFormats(0))
+static GdkAtom s_clipboard_getstate_fmt;
+
+static WDL_PtrSet<UINT> s_clipboard_enumstate; // populated on first EnumClipboardFormats() call, or by SetClipboardData()
+
+struct clip_fmt {
+  const char *str;
+  GdkAtom atom;
+};
+static WDL_TypedBuf<clip_fmt> s_clip_fmts; // mapping of UINT clipboard types, offset by 1 (s_clip_fmts.Get()[0] is CF_TEXT=1, etc)
+
 static HWND s_clip_hwnd;
+
+// clipboard data added by SetClipboardData():
+static WDL_TypedBuf<GdkAtom> s_clipboard_setstate; // stored as separate lists so we can easily pass to properties
+static WDL_TypedBuf<HANDLE> s_clipboard_setstate_data;
+
+static bool s_clipboard_written; // has clipboard data been written-to since opening
 
 static void swell_gdkEventHandler(GdkEvent *event, gpointer data);
 
@@ -229,6 +245,7 @@ static void on_deactivate()
     PostMessage(h,WM_ACTIVATEAPP,0,0);
     h=h->m_next;
   }
+  swell_on_toplevel_raise(NULL);
   DestroyPopupMenus();
 }
 
@@ -714,6 +731,17 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
   if (wantVis) swell_oswindow_update_text(hwnd);
 }
 
+void swell_oswindow_maximize(HWND hwnd, bool wantmax) // false=restore
+{
+  if (WDL_NORMALLY(hwnd && hwnd->m_oswindow))
+  {
+    if (wantmax)
+      gdk_window_maximize(hwnd->m_oswindow);
+    else
+      gdk_window_unmaximize(hwnd->m_oswindow);
+  }
+}
+
 void swell_oswindow_updatetoscreen(HWND hwnd, RECT *rect)
 {
 #ifdef SWELL_LICE_GDI
@@ -828,11 +856,40 @@ static GdkAtom tgtatom()
   if (!tmp) tmp = gdk_atom_intern_static_string("TARGETS");
   return tmp;
 }
+static GdkAtom atomatom()
+{
+  static GdkAtom tmp;
+  if (!tmp) tmp = gdk_atom_intern_static_string("ATOM");
+  return tmp;
+}
 static GdkAtom urilistatom() 
 {
   static GdkAtom tmp;
   if (!tmp) tmp = gdk_atom_intern_static_string("text/uri-list");
   return tmp;
+}
+
+static bool atom_from_clipboard_type(int type, GdkAtom *atom)
+{
+  type--;
+  if (type < 0 || type >= s_clip_fmts.GetSize()) return false;
+  *atom = s_clip_fmts.Get()[type].atom;
+  return true;
+}
+
+static UINT clipboard_type_from_atom(GdkAtom atom)
+{
+  for (int x = 0; x < s_clip_fmts.GetSize(); x++)
+    if (s_clip_fmts.Get()[x].atom == atom) return x+1;
+  return 0;
+}
+
+static HANDLE *find_clipboard_setstate(GdkAtom a)
+{
+  for (int x = 0; x < s_clipboard_setstate.GetSize(); x ++)
+    if (s_clipboard_setstate.Get()[x] == a)
+      return s_clipboard_setstate_data.Get() + x;
+  return NULL;
 }
 
 
@@ -861,38 +918,35 @@ static void OnSelectionRequestEvent(GdkEventSelection *b)
       SendMessage(swell_dragsrc_hwnd,WM_USER+100,(WPARAM)b,(LPARAM)&prop);
     }
   }
-  else if (s_clipboard_setstate)
+  else if (s_clipboard_setstate.GetSize())
   {
     if (b->target == tgtatom())
     {
-      if (s_clipboard_setstate_fmt)
-      {
-        prop = b->property;
-        GdkAtom list[] = { s_clipboard_setstate_fmt };
+      prop = b->property;
 #if SWELL_TARGET_GDK == 2
-        GdkWindow *pw = gdk_window_lookup(b->requestor);
-        if (!pw) pw = gdk_window_foreign_new(b->requestor);
+      GdkWindow *pw = gdk_window_lookup(b->requestor);
+      if (!pw) pw = gdk_window_foreign_new(b->requestor);
 #else
-        GdkWindow *pw = b->requestor;
+      GdkWindow *pw = b->requestor;
 #endif
-        if (pw)
-          gdk_property_change(pw,prop,GDK_SELECTION_TYPE_ATOM,32, GDK_PROP_MODE_REPLACE,(guchar*)list,(int) (sizeof(list)/sizeof(list[0])));
-      }
+      if (pw)
+        gdk_property_change(pw,prop,GDK_SELECTION_TYPE_ATOM,32, GDK_PROP_MODE_REPLACE,(guchar*)s_clipboard_setstate.Get(), (int) s_clipboard_setstate.GetSize());
     }
     else 
     {
-      if (b->target == s_clipboard_setstate_fmt || 
-          (b->target == GDK_TARGET_STRING && s_clipboard_setstate_fmt == utf8atom())
-         )
+      const GdkAtom sf = b->target == GDK_TARGET_STRING ? utf8atom() : b->target;
+      HANDLE *state = find_clipboard_setstate(sf);
+
+      if (state)
       {
         prop = b->property;
-        int len = GlobalSize(s_clipboard_setstate);
-        guchar *ptr = (guchar*)s_clipboard_setstate;
+        int len = GlobalSize(*state);
+        guchar *ptr = (guchar*)*state;
 
         WDL_FastString str;
-        if (s_clipboard_setstate_fmt == utf8atom())
+        if (sf == utf8atom())
         {
-          const char *rd = (const char *)s_clipboard_setstate;
+          const char *rd = (const char *)*state;
           while (*rd)
           {
             if (!strncmp(rd,"\r\n",2))
@@ -906,7 +960,7 @@ static void OnSelectionRequestEvent(GdkEventSelection *b)
           ptr = (guchar *)str.Get();
           len = str.GetLength();
         }
-        else if (s_clipboard_setstate_fmt == urilistatom())
+        else if (sf == urilistatom())
         {
           if (len > (int)sizeof(DROPFILES))
           {
@@ -924,7 +978,7 @@ static void OnSelectionRequestEvent(GdkEventSelection *b)
                 str.Append("file://");
                 while (*fn)
                 {
-                  if (isalnum(*fn) || *fn == '.' || *fn == '_' || *fn == '-' || *fn == '/' || *fn == '#')
+                  if (isalnum_safe(*fn) || *fn == '.' || *fn == '_' || *fn == '-' || *fn == '/' || *fn == '#')
                     str.Append(fn,1);
                   else
                     str.AppendFormatted(8,"%%%02x",*(unsigned char *)fn);
@@ -1019,8 +1073,22 @@ static void OnConfigureEvent(GdkEventConfigure *cfg)
   hwnd->m_position.right = cfg->x + cfg->width;
   hwnd->m_position.bottom = cfg->y + cfg->height;
   if (flag&1) SendMessage(hwnd,WM_MOVE,0,0);
-  if (flag&2) SendMessage(hwnd,WM_SIZE,0,0);
-  if (!hwnd->m_hashaddestroy && hwnd->m_oswindow) swell_recalcMinMaxInfo(hwnd);
+  if (flag&2) SendMessage(hwnd,WM_SIZE,hwnd->m_is_maximized ? SIZE_MAXIMIZED : SIZE_RESTORED,0);
+  if (!hwnd->m_hashaddestroy && hwnd->m_oswindow && (hwnd->m_style & WS_THICKFRAME))
+    swell_recalcMinMaxInfo(hwnd);
+}
+
+static void OnWindowStateEvent(GdkEventWindowState *evt)
+{
+  HWND hwnd = swell_oswindow_to_hwnd(evt->window);
+  if (!hwnd) return;
+
+  if (evt->changed_mask & GDK_WINDOW_STATE_MAXIMIZED)
+  {
+    hwnd->m_is_maximized = (evt->new_window_state & GDK_WINDOW_STATE_MAXIMIZED)!=0;
+    SendMessage(hwnd,WM_SIZE,
+        (evt->new_window_state & GDK_WINDOW_STATE_MAXIMIZED) ? SIZE_MAXIMIZED : SIZE_RESTORED, 0);
+  }
 }
 
 #define IS_DEAD_KEY(x) ((x) >= DEF_GKY(dead_grave) && (x) <= DEF_GKY(dead_greek))
@@ -1406,11 +1474,12 @@ static void OnButtonEvent(GdkEventButton *b)
     }
   }
 
-  if (hwnd && hwnd->m_oswindow && SWELL_focused_oswindow != hwnd->m_oswindow)
+  if (hwnd && hwnd->m_oswindow && SWELL_focused_oswindow != hwnd->m_oswindow &&
+      (b->type != GDK_BUTTON_RELEASE || PopupMenuIsActive()))
   {
-    // this should not be necessary, focus is sent via separate events
-    // (the only time I've ever seen this is when launching a popup menu via the mousedown handler, on the mouseup
-    // the menu has not yet been focused but the mouse event goes to the popup menu)
+    // 'b->type != GDK_BUTTON_RELEASE ||' might not be necessary, the only time this
+    // appears to matter is when popup menus are active (focus events aren't sent
+    // probably due to the override redirect menu windows)
     SWELL_focused_oswindow = hwnd->m_oswindow;
     update_menubar_activations();
   }
@@ -1473,14 +1542,14 @@ static HANDLE urilistToDropFiles(const POINT *pt, const guchar *gptr, gint sz)
   const guchar *rd_end = rd + sz;
   for (;;)
   {
-    while (rd < rd_end && *rd && isspace(*rd)) rd++;
+    while (rd < rd_end && *rd && isspace_safe(*rd)) rd++;
     if (rd >= rd_end) break;
 
     if (rd+7 < rd_end && !strnicmp((const char *)rd,"file://",7))
     {
       rd += 7;
       int c=0;
-      while (rd < rd_end && *rd && !isspace(*rd))
+      while (rd < rd_end && *rd && !isspace_safe(*rd))
       {
         int v1,v2;
         if (*rd == '%' && rd+2 < rd_end && (v1=hex_parse(rd[1]))>=0 && (v2=hex_parse(rd[2]))>=0)
@@ -1498,7 +1567,7 @@ static HANDLE urilistToDropFiles(const POINT *pt, const guchar *gptr, gint sz)
     }
     else
     {
-      while (rd < rd_end && *rd && !isspace(*rd)) rd++;
+      while (rd < rd_end && *rd && !isspace_safe(*rd)) rd++;
     }
   }
   *pout++=0;
@@ -1550,7 +1619,8 @@ static void OnSelectionNotifyEvent(GdkEventSelection *b)
 
   s_ddrop_hwnd=NULL;
 
-  if (s_clipboard_getstate) { GlobalFree(s_clipboard_getstate); s_clipboard_getstate=NULL; }
+  GlobalFree(s_clipboard_getstate);
+  s_clipboard_getstate=NULL;
   guchar *gptr=NULL;
   GdkAtom fmt;
   gint unitsz=0;
@@ -1570,8 +1640,9 @@ static void OnSelectionNotifyEvent(GdkEventSelection *b)
       if (fmt == GDK_TARGET_STRING || fmt == utf8atom())
       {
         int lastc=0;
-        while (sz-->0)
+        while (sz >= unitsz/8)
         {
+          sz -= unitsz/8;
           int c;
           if (unitsz==32) { c = *(unsigned int *)ptr; ptr+=4; }
           else if (unitsz==16)  { c = *(unsigned short *)ptr; ptr+=2; }
@@ -1598,7 +1669,6 @@ static void OnSelectionNotifyEvent(GdkEventSelection *b)
         ptr = (guchar*)str.Get();
         sz=str.GetLength()+1;
       }
-      else if (unitsz>8) sz *= (unitsz/8);
 
       s_clipboard_getstate = GlobalAlloc(0,sz);
       if (s_clipboard_getstate)
@@ -1609,24 +1679,6 @@ static void OnSelectionNotifyEvent(GdkEventSelection *b)
     }
   }
   if (gptr) g_free(gptr);
-}
-
-static void OnDropStartEvent(GdkEventDND *e)
-{
-  HWND hwnd = swell_oswindow_to_hwnd(e->window);
-  if (!hwnd) return;
-
-  GdkDragContext *ctx = e->context;
-  if (ctx)
-  {
-    POINT p = { (int)e->x_root, (int)e->y_root };
-    s_ddrop_hwnd = hwnd;
-    s_ddrop_pt = p;
-
-    GdkAtom srca = gdk_drag_get_selection(ctx);
-    gdk_selection_convert(e->window,srca,urilistatom(),e->time);
-    gdk_drop_finish(ctx,TRUE,e->time);
-  }
 }
 
 static bool is_our_oswindow(GdkWindow *w)
@@ -1655,6 +1707,9 @@ static void deactivateTimer(HWND hwnd, UINT uMsg, UINT_PTR tm, DWORD dwt)
 
 extern SWELL_OSWINDOW swell_ignore_focus_oswindow;
 extern DWORD swell_ignore_focus_oswindow_until;
+
+static bool OnDragEventDelegate(GdkEvent *event);
+
 
 static void swell_gdkEventHandler(GdkEvent *evt, gpointer data)
 {
@@ -1718,7 +1773,7 @@ static void swell_gdkEventHandler(GdkEvent *evt, gpointer data)
       OnConfigureEvent((GdkEventConfigure*)evt);
     break;
     case GDK_WINDOW_STATE: /// GdkEventWindowState for min/max
-          //printf("minmax\n");
+      OnWindowStateEvent((GdkEventWindowState*)evt);
     break;
     case GDK_GRAB_BROKEN:
       if (swell_oswindow_to_hwnd(((GdkEventAny*)evt)->window))
@@ -1824,22 +1879,13 @@ static void swell_gdkEventHandler(GdkEvent *evt, gpointer data)
     break;
     case GDK_DRAG_ENTER:
     case GDK_DRAG_MOTION:
-      if (swell_oswindow_to_hwnd(((GdkEventAny*)evt)->window))
-      {
-        GdkEventDND *e = (GdkEventDND *)evt;
-        if (e->context)
-        {
-          gdk_drag_status(e->context,GDK_ACTION_COPY,e->time);
-          //? gdk_drop_reply(e->context,TRUE,e->time);
-        }
-      }
-    break;
-    case GDK_DRAG_LEAVE:
-    case GDK_DRAG_STATUS:
-    case GDK_DROP_FINISHED:
-    break;
     case GDK_DROP_START:
-      OnDropStartEvent((GdkEventDND *)evt);
+    case GDK_DROP_FINISHED:
+    case GDK_DRAG_LEAVE:
+      if (OnDragEventDelegate(evt))
+        return;
+    break;
+    case GDK_DRAG_STATUS:
     break;
 
     default:
@@ -1951,29 +1997,65 @@ int SWELL_SetWindowLevel(HWND hwnd, int newlevel)
 
 void SWELL_GetViewPort(RECT *r, const RECT *sourcerect, bool wantWork)
 {
-  if (swell_initwindowsys())
+  r->left=r->top=0;
+  r->right=1024;
+  r->bottom=768;
+  if (!swell_initwindowsys()) return;
+  GdkScreen *defscr = gdk_screen_get_default();
+  if (!defscr) return;
+  const gint n = gdk_screen_get_n_monitors(defscr);
+  if (n < 1) return;
+
+  const gint prim = gdk_screen_get_primary_monitor(defscr);
+  double best_score = -1e20;
+  RECT sr;
+  if (sourcerect) sr = *sourcerect;
+
+  for (gint idx = 0; idx < n; idx ++)
   {
-    GdkScreen *defscr = gdk_screen_get_default();
-    if (!defscr) { r->left=r->top=0; r->right=r->bottom=1024; return; }
-    gint idx = sourcerect ? gdk_screen_get_monitor_at_point(defscr,
-           (sourcerect->left+sourcerect->right)/2,
-           (sourcerect->top+sourcerect->bottom)/2) : 0;
     GdkRectangle rc={0,0,1024,1024};
+    if (!sourcerect && prim>0) idx = prim;
+
 #if SWELL_TARGET_GDK != 2
     if (wantWork)
       gdk_screen_get_monitor_workarea(defscr,idx,&rc);
     else
 #endif
       gdk_screen_get_monitor_geometry(defscr,idx,&rc);
-    r->left=rc.x;
-    r->top = rc.y;
-    r->right=rc.x+rc.width;
-    r->bottom=rc.y+rc.height;
-    return;
+
+    RECT tmp;
+    tmp.left=rc.x;
+    tmp.top = rc.y;
+    tmp.right=rc.x+rc.width;
+    tmp.bottom=rc.y+rc.height;
+    if (!sourcerect || n < 2)
+    {
+      *r = tmp;
+      break;
+    }
+
+    double score;
+    RECT res;
+    if (IntersectRect(&res, &tmp, &sr))
+    {
+      score = wdl_abs((res.right-res.left) * (res.bottom-res.top));
+    }
+    else
+    {
+      int dx = 0, dy = 0;
+      if (tmp.left > sr.right) dx = tmp.left - sr.right;
+      else if (tmp.right < sr.left) dx = sr.left - tmp.right;
+      if (tmp.bottom < sr.top) dy = tmp.bottom - sr.top;
+      else if (tmp.top > sr.bottom) dy = tmp.top - sr.bottom;
+      score = - (dx*dx + dy*dy);
+    }
+
+    if (!idx || score > best_score)
+    {
+      best_score = score;
+      *r = tmp;
+    }
   }
-  r->left=r->top=0;
-  r->right=1024;
-  r->bottom=768;
 }
 
 
@@ -2089,12 +2171,13 @@ bool OpenClipboard(HWND hwndDlg)
 {
   RegisterClipboardFormat(NULL);
   s_clip_hwnd=hwndDlg ? hwndDlg : SWELL_topwindows; 
-  if (s_clipboard_getstate)
-  {
-    GlobalFree(s_clipboard_getstate);
-    s_clipboard_getstate = NULL;
-  }
+  s_clipboard_written = false;
+
+  GlobalFree(s_clipboard_getstate);
+  s_clipboard_getstate = NULL;
   s_clipboard_getstate_fmt = NULL;
+
+  s_clipboard_enumstate.DeleteAll();
 
   return true; 
 }
@@ -2102,17 +2185,25 @@ bool OpenClipboard(HWND hwndDlg)
 static HANDLE req_clipboard(GdkAtom type)
 {
   if (s_clipboard_getstate_fmt == type) return s_clipboard_getstate;
+  if (type == tgtatom() && s_clipboard_getstate_fmt == atomatom())
+    return s_clipboard_getstate;
 
   HWND h = s_clip_hwnd;
   while (h && !h->m_oswindow) h = h->m_parent;
 
   if (h && SWELL_gdk_active > 0)
   {
-    if (s_clipboard_getstate)
+    GlobalFree(s_clipboard_getstate);
+    s_clipboard_getstate=NULL;
+
+    GdkDisplay *disp = gdk_window_get_display(h->m_oswindow);
+    if (WDL_NORMALLY(disp) &&
+        None == XGetSelectionOwner(gdk_x11_display_get_xdisplay(disp),
+                                   gdk_x11_atom_to_xatom_for_display(disp, GDK_SELECTION_CLIPBOARD)))
     {
-      GlobalFree(s_clipboard_getstate);
-      s_clipboard_getstate=NULL;
+      return NULL;
     }
+
     gdk_selection_convert(h->m_oswindow,GDK_SELECTION_CLIPBOARD,type,GDK_CURRENT_TIME);
  
     GMainContext *ctx=g_main_context_default();
@@ -2124,8 +2215,20 @@ static HANDLE req_clipboard(GdkAtom type)
         GdkEvent *evt;
         while (!s_clipboard_getstate && gdk_events_pending() && (evt = gdk_event_get()))
         {
-          if (evt->type == GDK_SELECTION_NOTIFY || evt->type == GDK_SELECTION_REQUEST)
-            swell_gdkEventHandler(evt,(gpointer)1);
+          switch (evt->type)
+          {
+            case GDK_SELECTION_NOTIFY:
+            case GDK_SELECTION_REQUEST:
+            case GDK_EXPOSE:
+            case GDK_CONFIGURE:
+            case GDK_WINDOW_STATE:
+            case GDK_GRAB_BROKEN:
+              swell_gdkEventHandler(evt,(gpointer)1);
+            break;
+            default:
+              // not ideal to drop events, but hm
+            break;
+          }
           gdk_event_free(evt);
         }
       }
@@ -2133,6 +2236,8 @@ static HANDLE req_clipboard(GdkAtom type)
       if (s_clipboard_getstate) 
       {
         if (s_clipboard_getstate_fmt == type) return s_clipboard_getstate;
+        if (type == tgtatom() && s_clipboard_getstate_fmt == atomatom())
+          return s_clipboard_getstate;
         return NULL;
       }
 
@@ -2145,56 +2250,74 @@ static HANDLE req_clipboard(GdkAtom type)
 
 void CloseClipboard() 
 { 
+  s_clipboard_written = false;
+  s_clipboard_enumstate.DeleteAll();
   s_clip_hwnd=NULL; 
 }
 
 UINT EnumClipboardFormats(UINT lastfmt)
 {
-  if (lastfmt == CF_TEXT) return CF_HDROP;
-  if (!lastfmt)
+  if (lastfmt == 0 && !s_clipboard_enumstate.GetSize())
   {
-    // checking this causes issues (reentrancy, I suppose?)
-    //if (req_clipboard(utf8atom()))
-    return CF_TEXT;
+    HANDLE h = req_clipboard(tgtatom());
+    if (!h) return 0;
+    int sz = GlobalSize(h) / (int)sizeof(GdkAtom);
+    const char *l = (const char *)h;
+    for (int x = 0; x < sz; x ++)
+    {
+      GdkAtom a;
+      memcpy(&a,l + x*sizeof(GdkAtom), sizeof(a));
+      UINT c = clipboard_type_from_atom(a);
+      if (c) s_clipboard_enumstate.Insert(c);
+    }
   }
-  if (lastfmt == CF_HDROP) lastfmt = 0;
 
-  int x=0;
-  for (;;)
-  {
-    int fmt=0;
-    if (!m_clip_recs.Enumerate(x++,&fmt)) return 0;
-    if (lastfmt == 0) return fmt;
-
-    if ((UINT)fmt == lastfmt) return m_clip_recs.Enumerate(x++,&fmt) ? fmt : 0;
-  }
+  int x = 0;
+  UINT fmt;
+  if (lastfmt) while (s_clipboard_enumstate.Enumerate(x++,&fmt) && fmt != lastfmt);
+  return s_clipboard_enumstate.Enumerate(x,&fmt) ? fmt : 0;
 }
 
 HANDLE GetClipboardData(UINT type)
 {
   RegisterClipboardFormat(NULL);
-  if (type == CF_TEXT)
-    return req_clipboard(utf8atom());
 
-  if (type == CF_HDROP)
-    return req_clipboard(urilistatom());
+  GdkAtom a;
+  if (atom_from_clipboard_type(type,&a))
+  {
+    return req_clipboard(a);
+  }
 
-  return m_clip_recs.Get(type);
+  return NULL;
 }
 
 
 void EmptyClipboard()
 {
-  m_clip_recs.DeleteAll();
+  for (int x = 0; x < s_clipboard_setstate_data.GetSize(); x ++)
+    GlobalFree(s_clipboard_setstate_data.Get()[x]);
+  s_clipboard_setstate.Resize(0);
+  s_clipboard_setstate_data.Resize(0);
 }
 
 void SetClipboardData(UINT type, HANDLE h)
 {
   RegisterClipboardFormat(NULL);
-  if (type == CF_TEXT || type == CF_HDROP)
+  GdkAtom a;
+  if (atom_from_clipboard_type(type,&a))
   {
-    if (s_clipboard_setstate) { GlobalFree(s_clipboard_setstate); s_clipboard_setstate=NULL; }
-    s_clipboard_setstate_fmt=NULL;
+    HANDLE *state = find_clipboard_setstate(a);
+    if (!state)
+    {
+      s_clipboard_setstate.Add(a);
+      s_clipboard_setstate_data.Add(h);
+    }
+    else if (*state != h)
+    {
+      GlobalFree(*state);
+      *state = h;
+    }
+
     static GdkWindow *w;
     if (!w)
     {
@@ -2205,33 +2328,40 @@ void SetClipboardData(UINT type, HANDLE h)
       attr.window_type = GDK_WINDOW_TOPLEVEL;
       w = gdk_window_new(NULL,&attr,0);
     }
-    if (w)
+    if (w && !s_clipboard_written)
     {
-      s_clipboard_setstate_fmt = type == CF_HDROP ? urilistatom() : utf8atom();
-      s_clipboard_setstate = h;
+      s_clipboard_written = true;
+      s_clipboard_enumstate.DeleteAll();
       gdk_selection_owner_set(w,GDK_SELECTION_CLIPBOARD,GDK_CURRENT_TIME,TRUE);
     }
-    return;
+    if (WDL_NORMALLY(type != 0))
+      s_clipboard_enumstate.Insert(type);
   }
-  if (h) m_clip_recs.Insert(type,h);
-  else m_clip_recs.Delete(type);
 }
 
 UINT RegisterClipboardFormat(const char *desc)
 {
-  if (!m_clip_curfmts.GetSize())
+  if (!s_clip_fmts.GetSize())
   {
-    m_clip_curfmts.Add(strdup("SWELL__CF_TEXT"));
-    m_clip_curfmts.Add(strdup("SWELL__CF_HDROP"));
+    clip_fmt c[2] = {
+      { "SWELL__CF_TEXT", utf8atom() },
+      { "SWELL__CF_HDROP", urilistatom() },
+    };
+    s_clip_fmts.Add(c,sizeof(c)/sizeof(c[0]));
   }
 
   if (!desc || !*desc) return 0;
-  int x;
-  const int n = m_clip_curfmts.GetSize();
-  for(x=0;x<n;x++) 
-    if (!strcmp(m_clip_curfmts.Get(x),desc)) return x + 1;
-  m_clip_curfmts.Add(strdup(desc));
-  return n+1;
+
+  for (int x = 0; x < s_clip_fmts.GetSize(); x++)
+    if (!strcmp(s_clip_fmts.Get()[x].str,desc)) return x + 1;
+
+  char tmp[512];
+  snprintf(tmp,sizeof(tmp),"application/swell-%s",desc);
+
+  clip_fmt c1 = { strdup(desc), gdk_atom_intern(tmp, 0) };
+  s_clip_fmts.Add(c1);
+
+  return s_clip_fmts.GetSize();
 }
 
 
@@ -2294,6 +2424,7 @@ struct bridgeState {
   Window native_w;
   Display *native_disp;
   GdkWindow *cur_parent;
+  Window cur_parent_xid;
   HWND hwnd_child;
 
   bool lastvis;
@@ -2342,6 +2473,7 @@ bridgeState::bridgeState(bool needrep, GdkWindow *_w, Window _nw, Display *_disp
   lastvis=false;
   need_reparent=needrep;
   cur_parent = _curpar;
+  cur_parent_xid = _curpar ? GDK_WINDOW_XID(_curpar) : 0;
   memset(&lastrect,0,sizeof(lastrect));
   filter_windows.Add(this);
 }
@@ -2489,6 +2621,7 @@ static LRESULT xbridgeProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
               bs->lastrect=tr;
 
               bs->cur_parent = h->m_oswindow;
+              bs->cur_parent_xid = h->m_oswindow ? GDK_WINDOW_XID(h->m_oswindow) : 0;
               bs->need_reparent=false;
               if (vis && bs->lastvis) gdk_window_show(bs->w);
             }
@@ -2507,9 +2640,345 @@ static LRESULT xbridgeProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
       }
     break;
+    case WM_USER+1000: // allow parent to query size of child window
+      if (hwnd && hwnd->m_private_data && wParam && lParam)
+      {
+        bridgeState *bs = (bridgeState*)hwnd->m_private_data;
+        if (bs->native_disp && bs->native_w)
+        {
+          Window root, par, *list=NULL;
+          unsigned int nlist=0;
+          // if a plug-in created a window on a separate X11 connection, it might not be valid yet.
+          if (XQueryTree(bs->native_disp,bs->native_w,&root,&par,&list, &nlist))
+          {
+            if (!list || !nlist)
+            {
+              if (list) XFree(list);
+              return 0;
+            }
+            XWindowAttributes attr;
+            memset(&attr,0,sizeof(attr));
+            if (XGetWindowAttributes(bs->native_disp, list[0], &attr) && attr.width && attr.height)
+            {
+              *((int *)(INT_PTR)wParam) = attr.width;
+              *((int *)(INT_PTR)lParam) = attr.height;
+            }
+            XFree(list);
+          }
+        }
+      }
+    break;
   }
   return DefWindowProc(hwnd,uMsg,wParam,lParam);
 }
+
+
+static void forward_x11_drag_message(int gdkmsg, GdkEventDND *gdkevent, Window new_target)
+{
+  Display *dpy = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkevent->window));
+  if (WDL_NOT_NORMALLY(!dpy)) return;
+
+  XClientMessageEvent xev;
+  memset(&xev, 0, sizeof(xev));
+  xev.type = ClientMessage;
+  xev.window = new_target;
+  xev.format = 32;
+  GdkWindow *sw = gdk_drag_context_get_source_window(gdkevent->context);
+  Window source_window = GDK_WINDOW_XID(sw);
+  xev.data.l[0] = source_window;
+
+  switch (gdkmsg)
+  {
+    case GDK_DRAG_ENTER:
+      xev.message_type = XInternAtom(dpy, "XdndEnter", False);
+      xev.data.l[1] = (3 << 24); // protocol version 3
+      {
+        // mime types in 2/3/4, prioritizing any uri-list
+        GList * const lb = gdk_drag_context_list_targets(gdkevent->context);
+        int cnt = 0;
+        for (int pass = 0; cnt <= 3 && pass < 2; pass ++)
+        {
+          GList *l = lb;
+          while (cnt <= 3 && l)
+          {
+            const char *n = gdk_atom_name((GdkAtom)l->data);
+            if (n && (!strstr(n,"uri-list")) == pass)
+            {
+              if (cnt<3)
+                xev.data.l[2+cnt] = gdk_x11_atom_to_xatom( (GdkAtom) l->data);
+              cnt++;
+            }
+            l = l->next;
+          }
+        }
+        if (cnt > 3) xev.data.l[1] |= 1; // more types available that we couldn't fit
+      }
+    break;
+    case GDK_DRAG_LEAVE:
+      xev.message_type = XInternAtom(dpy, "XdndLeave", False);
+    break;
+    case GDK_DRAG_MOTION:
+      xev.message_type = XInternAtom(dpy, "XdndPosition", False);
+      xev.data.l[1] = 0;
+      xev.data.l[2] = ((int)gdkevent->x_root << 16) | ((int)gdkevent->y_root & 0xFFFF);
+      xev.data.l[3] = gdkevent->time;
+      xev.data.l[4] = XInternAtom(dpy, "XdndActionCopy", False);
+    break;
+    case GDK_DROP_START:
+      xev.message_type = XInternAtom(dpy, "XdndDrop", False);
+      xev.data.l[2] = gdkevent->time;
+    break;
+    default:
+      WDL_ASSERT(false);
+    return;
+  }
+
+  XSendEvent(dpy, new_target, False, NoEventMask, (XEvent*)&xev);
+  XFlush(dpy);
+}
+
+
+static void notify_drag_enter(int xpos, int ypos)
+{
+  if (!SWELL_DDrop_onDragEnter) return;
+
+  const char *fn = swell_dragsrc_fn ? swell_dragsrc_fn : "/tmp/<<<<<unknown>>>>>>>";
+  HGLOBAL h=GlobalAlloc(0,sizeof(DROPFILES) + strlen(fn) + 2);
+  if (WDL_NORMALLY(h))
+  {
+    DROPFILES *hdr = (DROPFILES *)GlobalLock(h);
+    if (WDL_NORMALLY(hdr))
+    {
+      memset(hdr,0,sizeof(*hdr));
+      hdr->pFiles = sizeof(DROPFILES);
+      hdr->pt.x = xpos;
+      hdr->pt.y = ypos;
+      char *ep = ((char *)hdr) + sizeof(*hdr);
+      memcpy(ep, fn, strlen(fn)+1);
+      ep[strlen(fn)+1] = 0;
+      GlobalUnlock(h);
+    }
+    POINT pt = {xpos, ypos};
+    SWELL_DDrop_onDragEnter(h,pt);
+    GlobalFree(h);
+  }
+}
+
+static bool validate_top_hwnd(HWND hwnd)
+{
+  if (!hwnd) return false;
+  HWND h = SWELL_topwindows; // ensure s_last_hwnd is a valid top level window
+  while (h && h != hwnd) h = h->m_next;
+  return h != NULL;
+}
+
+static bool validate_bridged_xw_from_tlhwnd(HWND hwnd, Window xw)
+{
+  if (WDL_NOT_NORMALLY(!hwnd || !hwnd->m_oswindow || !xw)) return false;
+  Display *dpy = gdk_x11_display_get_xdisplay(gdk_window_get_display(hwnd->m_oswindow));
+  for (int x = 0; x < filter_windows.GetSize(); x ++)
+  {
+    bridgeState *bs = filter_windows.Get(x);
+    if (bs->cur_parent != hwnd->m_oswindow) continue;
+
+    Window root, par, *list=NULL;
+    unsigned int nlist=0;
+    if (XQueryTree(dpy,bs->native_w,&root,&par,&list, &nlist) && list)
+    {
+      for (unsigned int i = 0; i < nlist; i ++)
+      {
+        if (list[i] == xw)
+        {
+          XFree(list);
+          return true;
+        }
+      }
+      XFree(list);
+    }
+  }
+  return false;
+}
+
+static Window hit_test_bridged_xw(HWND hwnd, int xpos, int ypos)
+{
+  if (WDL_NOT_NORMALLY(!hwnd || !hwnd->m_oswindow)) return false;
+  POINT pt = { xpos, ypos };
+  Display *dpy = gdk_x11_display_get_xdisplay(gdk_window_get_display(hwnd->m_oswindow));
+  Window new_target = 0;
+  for (int x = 0; !new_target && x < filter_windows.GetSize(); x ++)
+  {
+    bridgeState *bs = filter_windows.Get(x);
+    if (bs->cur_parent != hwnd->m_oswindow) continue;
+    if (!IsWindowVisible(bs->hwnd_child)) continue;
+
+    RECT r;
+    GetWindowRect(bs->hwnd_child,&r);
+    if (!PtInRect(&r,pt)) continue;
+
+    Window root, par, *list=NULL;
+    unsigned int nlist=0;
+    if (XQueryTree(dpy,bs->native_w,&root,&par,&list, &nlist) && list)
+    {
+      for (unsigned int i = 0; !new_target && i < nlist; i ++)
+      {
+        int lx = 0, ly = 0;
+        Window cr = 0;
+        if (!XTranslateCoordinates(dpy, root, list[i], xpos, ypos, &lx, &ly, &cr)) continue;
+
+        XWindowAttributes xwa;
+        memset(&xwa,0,sizeof(xwa));
+        if (XGetWindowAttributes(dpy, list[i], &xwa) && lx >= xwa.x && ly >= xwa.y && lx < xwa.x+xwa.width && ly < xwa.y+xwa.height)
+        {
+          new_target = list[i];
+        }
+      }
+      XFree(list);
+    }
+  }
+  return new_target;
+}
+
+static bool OnDragEventDelegate(GdkEvent *evt)
+{
+
+  // GDK sends drag events to the top level window
+  // we need to check for bridged child windows and delegate the events to them
+
+  // GDK_DRAG_ENTER -- position might not be available for these
+  // GDK_DRAG_LEAVE
+
+  // GDK_DRAG_MOTION
+  // GDK_DROP_FINISHED
+  // GDK_DROP_START
+
+  static HWND s_last_hwnd;
+  static Window s_last_child_xw;
+  HWND hwnd = swell_oswindow_to_hwnd(((GdkEventAny*)evt)->window);
+  GdkEventDND *e = (GdkEventDND *)evt;
+
+  switch (evt->type)
+  {
+    case GDK_DRAG_LEAVE:
+      if (s_last_hwnd && s_last_hwnd == hwnd)
+      {
+        if (s_last_child_xw)
+        {
+          if (validate_bridged_xw_from_tlhwnd(s_last_hwnd,s_last_child_xw))
+            forward_x11_drag_message(GDK_DRAG_LEAVE,e,s_last_child_xw);
+        }
+        else if (SWELL_DDrop_onDragLeave) SWELL_DDrop_onDragLeave();
+        s_last_child_xw = 0;
+        s_last_hwnd = NULL;
+      }
+    break;
+    case GDK_DROP_FINISHED:
+      if (s_last_child_xw && validate_top_hwnd(s_last_hwnd))
+      {
+        if (validate_bridged_xw_from_tlhwnd(s_last_hwnd,s_last_child_xw))
+          forward_x11_drag_message(GDK_DRAG_LEAVE,e,s_last_child_xw);
+      }
+      s_last_child_xw = 0;
+      s_last_hwnd = NULL;
+      if (SWELL_DDrop_onDragLeave) SWELL_DDrop_onDragLeave();
+    break;
+    case GDK_DRAG_ENTER:
+      if (s_last_hwnd != hwnd && validate_top_hwnd(s_last_hwnd))
+      {
+        if (s_last_child_xw)
+        {
+          if (validate_bridged_xw_from_tlhwnd(s_last_hwnd,s_last_child_xw))
+            forward_x11_drag_message(GDK_DRAG_LEAVE,e,s_last_child_xw);
+        }
+        else if (SWELL_DDrop_onDragLeave) SWELL_DDrop_onDragLeave();
+        s_last_child_xw = 0;
+        s_last_hwnd = NULL;
+      }
+      s_last_hwnd = hwnd;
+      s_last_child_xw = 0;
+      // position info is not yet available, assume top level window will get it
+      if (WDL_NORMALLY(hwnd) && WDL_NORMALLY(e->context))
+      {
+        gdk_drag_status(e->context,GDK_ACTION_COPY,e->time);
+        notify_drag_enter((int)e->x_root, (int)e->y_root);
+      }
+    return true;
+    case GDK_DRAG_MOTION:
+      {
+        Window xw = hit_test_bridged_xw(hwnd, e->x_root, e->y_root);
+        if (xw)
+        {
+          if (!s_last_child_xw)
+          {
+            if (SWELL_DDrop_onDragLeave) SWELL_DDrop_onDragLeave();
+          }
+
+          if (xw != s_last_child_xw)
+          {
+            if (s_last_child_xw && validate_top_hwnd(s_last_hwnd) && validate_bridged_xw_from_tlhwnd(s_last_hwnd,s_last_child_xw))
+              forward_x11_drag_message(GDK_DRAG_LEAVE,e,s_last_child_xw);
+            forward_x11_drag_message(GDK_DRAG_ENTER,e,xw);
+          }
+          s_last_child_xw = xw;
+        }
+        else
+        {
+          if (s_last_child_xw)
+          {
+            if (validate_top_hwnd(s_last_hwnd) && validate_bridged_xw_from_tlhwnd(s_last_hwnd,s_last_child_xw))
+              forward_x11_drag_message(GDK_DRAG_LEAVE,e,s_last_child_xw);
+            s_last_child_xw = 0;
+            notify_drag_enter((int)e->x_root, (int)e->y_root);
+          }
+        }
+        s_last_hwnd = hwnd;
+        gdk_drag_status(e->context,GDK_ACTION_COPY,e->time);
+        if (xw)
+        {
+          forward_x11_drag_message(GDK_DRAG_MOTION,e,xw);
+        }
+        else
+        {
+          if (SWELL_DDrop_onDragOver)
+          {
+            POINT pt = { (int)e->x_root, (int)e->y_root };
+            SWELL_DDrop_onDragOver(pt);
+          }
+        }
+      }
+    break;
+    case GDK_DROP_START:
+      {
+        if (hwnd && hwnd == s_last_hwnd && s_last_child_xw)
+        {
+          if (WDL_NORMALLY(validate_bridged_xw_from_tlhwnd(hwnd,s_last_child_xw)))
+          {
+            forward_x11_drag_message(GDK_DROP_START,e,s_last_child_xw);
+            s_last_hwnd = NULL;
+            s_last_child_xw = 0;
+          }
+        }
+        else
+        {
+          GdkDragContext *ctx = e->context;
+          if (ctx)
+          {
+            s_ddrop_hwnd = hwnd;
+            s_ddrop_pt.x = (int)e->x_root;
+            s_ddrop_pt.y = (int)e->y_root;
+
+            GdkAtom srca = gdk_drag_get_selection(ctx);
+            gdk_selection_convert(e->window,srca,urilistatom(),e->time);
+            gdk_drop_finish(ctx,TRUE,e->time);
+          }
+        }
+        if (SWELL_DDrop_onDragLeave) SWELL_DDrop_onDragLeave();
+      }
+    break;
+    default: return false;
+  }
+  return false;
+}
+
 
 static const char * const bridge_class_name = "__swell_xbridgewndclass";
 
@@ -2519,7 +2988,7 @@ static bool want_key_embed_redirect(Display *disp, Window scan_id, Window *new_d
   {
     bridgeState *bs = filter_windows.Get(x);
     if (bs && bs->cur_parent &&
-        GDK_WINDOW_XID(bs->cur_parent) == scan_id &&
+        bs->cur_parent_xid == scan_id &&
         bs->native_disp == disp)
     {
       HWND foc = GetFocus();
@@ -2581,7 +3050,7 @@ static GdkFilterReturn filterCreateShowProc(GdkXEvent *xev, GdkEvent *event, gpo
         {
           bridgeState *bs = filter_windows.Get(x);
           if (bs && bs->cur_parent &&
-              GDK_WINDOW_XID(bs->cur_parent) == scan_id &&
+              bs->cur_parent_xid == scan_id &&
               bs->native_disp == disp)
           {
             POINT pt;
@@ -2639,7 +3108,7 @@ static GdkFilterReturn filterCreateShowProc(GdkXEvent *xev, GdkEvent *event, gpo
           {
             bridgeState *bs = filter_windows.Get(x);
             if (bs && bs->cur_parent &&
-                GDK_WINDOW_XID(bs->cur_parent) == scan_id &&
+                bs->cur_parent_xid == scan_id &&
                 bs->native_disp == disp)
             {
               POINT pt = { (int) foc->root_x, (int) foc->root_y };
@@ -2721,7 +3190,7 @@ HWND SWELL_CreateXBridgeWindow(HWND viewpar, void **wref, const RECT *r)
       gdk_window_add_filter(NULL, filterCreateShowProc, NULL);
     }
     SetTimer(hwnd,1,100,NULL);
-    if (!need_reparent) SendMessage(hwnd,WM_SIZE,0,0);
+    if (!need_reparent) SendMessage(hwnd,WM_SIZE,SIZE_RESTORED,0);
   }
   return hwnd;
 }
@@ -2759,7 +3228,7 @@ static void encode_uri(WDL_FastString *s, const char *rd)
   while (*rd)
   {
     // unsure if UTF-8 chars should be urlencoded or allowed?
-    if (*rd < 0 || (!isalnum(*rd) && *rd != '-' && *rd != '_' && *rd != '.' && *rd != '/'))
+    if (*rd < 0 || (!isalnum_safe(*rd) && *rd != '-' && *rd != '_' && *rd != '.' && *rd != '/'))
     {
       char buf[8];
       snprintf(buf,sizeof(buf),"%%%02x",(int)(unsigned char)*rd);
@@ -2863,9 +3332,9 @@ static LRESULT WINAPI dropSourceWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
           if (pw)
             gdk_property_change(pw,*aOut,evt->target,8, GDK_PROP_MODE_REPLACE,(guchar*)s.Get(),s.GetLength());
         }
+        if (inf->state) ReleaseCapture();
       }
        
-      if (inf->state) ReleaseCapture();
     }
     break;
 
@@ -2876,6 +3345,8 @@ static LRESULT WINAPI dropSourceWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
 
 void SWELL_InitiateDragDrop(HWND hwnd, RECT* srcrect, const char* srcfn, void (*callback)(const char* dropfn))
 {
+  const bool is_osw_cursor = s_last_setcursor_oswnd && swell_oswindow_from_hwnd(hwnd) == s_last_setcursor_oswnd;
+  swell_dragsrc_fn = srcfn;
   dropSourceInfo info;
   info.srcfn = strdup(srcfn);
   info.callback = callback;
@@ -2887,18 +3358,27 @@ void SWELL_InitiateDragDrop(HWND hwnd, RECT* srcrect, const char* srcfn, void (*
   dropSourceWndProc(h,WM_CREATE,0,0);
   while (GetCapture()==h)
   {
-    SWELL_RunEvents();
+    SWELL_RunMessageLoop();
     Sleep(10);
     if (swell_dragsrc_timeout_start && (GetTickCount()-swell_dragsrc_timeout_start) > 500) ReleaseCapture();
   }
   
   swell_dragsrc_hwnd=NULL;
   DestroyWindow(h);
+
+  if (is_osw_cursor && hwnd && GetFocus() != hwnd)
+  {
+    SWELL_OSWINDOW osw = swell_oswindow_from_hwnd(hwnd);
+    gdk_window_set_cursor(osw,NULL);
+  }
+  swell_dragsrc_fn = NULL;
 }
 
 // owner owns srclist, make copies here etc
 void SWELL_InitiateDragDropOfFileList(HWND hwnd, RECT *srcrect, const char **srclist, int srccount, HICON icon)
 {
+  swell_dragsrc_fn = srccount>0 ? srclist[0] : NULL;
+  const bool is_osw_cursor = s_last_setcursor_oswnd && swell_oswindow_from_hwnd(hwnd) == s_last_setcursor_oswnd;
   dropSourceInfo info;
   info.srclist = srclist;
   info.srccount = srccount;
@@ -2910,13 +3390,20 @@ void SWELL_InitiateDragDropOfFileList(HWND hwnd, RECT *srcrect, const char **src
   dropSourceWndProc(h,WM_CREATE,0,0);
   while (GetCapture()==h)
   {
-    SWELL_RunEvents();
+    SWELL_RunMessageLoop();
     Sleep(10);
     if (swell_dragsrc_timeout_start && (GetTickCount()-swell_dragsrc_timeout_start) > 500) ReleaseCapture();
   }
   
   swell_dragsrc_hwnd=NULL;
   DestroyWindow(h);
+
+  if (is_osw_cursor && hwnd && GetFocus() != hwnd)
+  {
+    SWELL_OSWINDOW osw = swell_oswindow_from_hwnd(hwnd);
+    gdk_window_set_cursor(osw,NULL);
+  }
+  swell_dragsrc_fn = NULL;
 }
 
 void SWELL_FinishDragDrop() { }

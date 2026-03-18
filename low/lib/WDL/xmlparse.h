@@ -35,11 +35,10 @@ relatively strict. for overflow safety, enforces a token length limit of 512MB
 #include "wdlcstring.h"
 
 class wdl_xml_element {
-    static int attr_cmp(char **a, char **b) { return strcmp(*a,*b); }
     static void attr_free(char *a) { free(a); }
   public:
     wdl_xml_element(const char *_name, int _line, int _col, bool _sort_attr=true) : 
-      attributes(attr_cmp,NULL,attr_free,attr_free), name(strdup(_name)), line(_line), col(_col), 
+      attributes(WDL_assocarray_cmpstr<char>,NULL,attr_free,attr_free), name(strdup(_name)), line(_line), col(_col),
       m_sort_attributes(_sort_attr), m_has_discrete_close(false) { }
     ~wdl_xml_element() { free(name); elements.Empty(true); }
 
@@ -93,10 +92,15 @@ class wdl_xml_parser {
       if (!m_tok.ResizeOK(256)) return "token buffer malloc fail";
 
       const char *p = parse_element_body(NULL);
-      if (!m_err) return p;
+      if (!m_err)
+      {
+        if (!p) return NULL;
+        snprintf(m_errbuf,sizeof(m_errbuf),"%s at %d:%d",p,m_line,m_col);
+        return m_errbuf;
+      }
       if (!*m_err) m_err="unexpected end of file";
       if (!p) return m_err;
-      snprintf(m_errbuf,sizeof(m_errbuf),"%s: %s",p,m_err);
+      snprintf(m_errbuf,sizeof(m_errbuf),"%s: %s at %d:%d",p,m_err,m_line,m_col);
       return m_errbuf;
     }
 
@@ -285,7 +289,7 @@ class wdl_xml_parser {
         else if (tmp[0] == '#')
         {
           if (tmp[1] >= '0' && tmp[1] <= '9') byteval = atoi(tmp+1);
-          if (tmp[1] == 'x') byteval = strtol(tmp+1,NULL,16);
+          if (tmp[1] == 'x') byteval = strtol(tmp+2,NULL,16);
         }
       }
       if (!byteval) return false;
