@@ -19,7 +19,6 @@ use std::{
     ptr::{null_mut, NonNull},
 };
 
-
 impl Reaper {
     /// Returns the REAPER main window handle (HWND).
     ///
