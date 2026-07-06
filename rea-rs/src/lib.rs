@@ -200,6 +200,9 @@ pub use item::*;
 pub mod take;
 pub use take::*;
 
+pub mod stretch_marker;
+pub use stretch_marker::*;
+
 pub mod source;
 pub use source::*;
 

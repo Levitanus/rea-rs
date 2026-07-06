@@ -1512,6 +1512,29 @@ fn takes() -> TestStep {
         take.set_pitch_mode(Some(TakePitchMode::new(2, 1)));
         assert_eq!(take.pitch_mode(), Some(TakePitchMode::new(2, 1)));
 
+        assert_eq!(take.n_stretch_markers(), 0);
+        assert_eq!(take.iter_stretch_markers().count(), 0);
+
+        let marker_index =
+            take.set_stretch_marker(None, Position::from(0.1), None)?;
+        assert_eq!(marker_index, 0);
+        assert_eq!(take.n_stretch_markers(), 1);
+        assert_eq!(take.iter_stretch_markers().count(), 1);
+
+        let marker = take.stretch_marker(marker_index).unwrap();
+        let marker_pos: f64 = marker.position.into();
+        assert_float_eq!(marker_pos, 0.1, abs <= 0.000001);
+
+        take.set_stretch_marker_slope(marker_index, 0.25)?;
+        assert_float_eq!(
+            take.stretch_marker(marker_index).unwrap().slope,
+            0.25,
+            abs <= 0.000001
+        );
+
+        assert!(take.delete_stretch_marker(marker_index));
+        assert_eq!(take.n_stretch_markers(), 0);
+
         Ok(())
     })
 }
