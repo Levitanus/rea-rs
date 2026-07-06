@@ -3,7 +3,7 @@ use bitvec::prelude::*;
 use c_str_macro::c_str;
 use float_eq::assert_float_eq;
 use log::{debug, info, warn};
-use rea_rs::gui::{baseview, egui, egui_baseview};
+use rea_rs::gui::{baseview, egui, DockableEguiWindow};
 use rea_rs::project_info::{
     BoundsMode, RenderMode, RenderSettings, RenderTail, RenderTailFlags,
 };
@@ -30,41 +30,90 @@ use std::thread::sleep;
 use std::time::Duration;
 
 #[derive(Default)]
-struct ManualEguiDemoState {
+struct EguiWindowState {
     clicks: usize,
+    dock_requested: Option<u32>,
 }
 
+// Global window descriptor; created on first action call
+static mut EGUI_WINDOW: Option<DockableEguiWindow> = None;
+// Global flag to signal the main REAPER timer to poll dock state
+static EGUI_WINDOW_DOCK_REQUEST: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(u32::MAX);
+
 fn open_egui_baseview_window_action(_flag: i32) -> TestStepResult {
-    std::thread::spawn(|| {
-        egui_baseview::EguiWindow::open_blocking(
-            baseview::WindowOpenOptions {
-                title: "rea-rs egui-baseview test".to_string(),
-                size: baseview::Size::new(520.0, 340.0),
-                scale: baseview::WindowScalePolicy::SystemScaleFactor,
-                gl_config: None,
+    unsafe {
+        let win = EGUI_WINDOW.get_or_insert_with(|| {
+            DockableEguiWindow::new(
+                "rea-rs egui-baseview (dockable)",
+                "rea_rs_egui_baseview_demo",
+                baseview::Size::new(520.0, 340.0),
+            )
+        });
+
+        // Read the dock request set by the UI
+        let req = EGUI_WINDOW_DOCK_REQUEST
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let dock_to = if req == u32::MAX {
+            Some(u32::MAX)
+        } else {
+            Some(req)
+        };
+
+        win.set_dock(
+            if req == u32::MAX {
+                None
+            } else {
+                Some(req as u32)
             },
-            egui_baseview::GraphicsConfig::default(),
-            ManualEguiDemoState::default(),
+            EguiWindowState::default(),
             |_ctx, _queue, _state| {},
             |ctx, queue, state| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.label(
-                        "This window is floating (not parented to REAPER).",
-                    );
+                    ui.heading("egui-baseview Window (Dockable)");
+                    if state.dock_requested.is_none() {
+                        ui.label("This window is floating.");
+                    } else {
+                        ui.label(format!(
+                            "This window is docked in slot {}",
+                            state.dock_requested.unwrap_or(0)
+                        ));
+                    }
+
+                    ui.separator();
+
+                    if ui.button("🔗 Dock to slot 0").clicked() {
+                        EGUI_WINDOW_DOCK_REQUEST
+                            .store(0, std::sync::atomic::Ordering::Relaxed);
+                        queue.close_window();
+                    }
+                    if ui.button("🔗 Dock to slot 1").clicked() {
+                        EGUI_WINDOW_DOCK_REQUEST
+                            .store(1, std::sync::atomic::Ordering::Relaxed);
+                        queue.close_window();
+                    }
+                    if ui.button("⛓️ Float").clicked() {
+                        EGUI_WINDOW_DOCK_REQUEST.store(
+                            u32::MAX,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                        queue.close_window();
+                    }
+
+                    ui.separator();
+
                     if ui.button("Click me").clicked() {
                         state.clicks += 1;
                     }
                     ui.label(format!("Clicks: {}", state.clicks));
+
                     if ui.button("Close").clicked() {
                         queue.close_window();
                     }
                 });
             },
         );
-    });
-    // Reaper::get().show_console_msg(
-    //     "Opened egui-baseview test window via action:
-    // open_egui_baseview_test_window", );
+    }
     Ok(())
 }
 
@@ -79,7 +128,7 @@ fn test_main(context: PluginContext) -> TestStepResult {
     }
     Reaper::get_mut().register_action(
         "open_egui_baseview_test_window",
-        "Open egui-baseview test window",
+        "Open egui-baseview test window (dockable)",
         open_egui_baseview_window_action,
         None,
     )?;
