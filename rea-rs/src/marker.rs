@@ -1,10 +1,12 @@
-use std::mem::MaybeUninit;
+use std::{mem::MaybeUninit, ptr::null};
 
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
-    ptr_wrappers::MediaTrack, utils::as_string, Color, Immutable,
-    Position, ProbablyMutable, Project, Reaper, Track, WithReaperPtr,
+    ptr_wrappers::MediaTrack,
+    utils::{as_c_str, as_string, WithNull},
+    Color, Immutable, Position, ProbablyMutable, Project, Reaper, Track,
+    WithReaperPtr,
 };
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -19,6 +21,99 @@ pub struct MarkerRegionInfo {
 }
 
 impl MarkerRegionInfo {
+    fn get_info_value(
+        &self,
+        project: &Project,
+        parameter_name: impl Into<String>,
+    ) -> f64 {
+        let mut parameter_name = parameter_name.into();
+        let low = Reaper::get().low();
+        unsafe {
+            let marker =
+                low.GetRegionOrMarker(project.context().to_raw(), self.enum_index as i32, null());
+            if marker.is_null() {
+                log::warn!(
+                    "failed to get ProjectMarker for enum_index={} in project",
+                    self.enum_index
+                );
+                return 0.0;
+            }
+            low.GetRegionOrMarkerInfo_Value(
+                project.context().to_raw(),
+                marker,
+                as_c_str(&parameter_name.with_null()).as_ptr(),
+            )
+        }
+    }
+
+    fn set_info_value(
+        &self,
+        project: &Project,
+        parameter_name: impl Into<String>,
+        value: f64,
+    ) {
+        let mut parameter_name = parameter_name.into();
+        let low = Reaper::get().low();
+        unsafe {
+            let marker =
+                low.GetRegionOrMarker(project.context().to_raw(), self.enum_index as i32, null());
+            if marker.is_null() {
+                log::warn!(
+                    "failed to get ProjectMarker for enum_index={} in project",
+                    self.enum_index
+                );
+                return;
+            }
+            low.SetRegionOrMarkerInfo_Value(
+                project.context().to_raw(),
+                marker,
+                as_c_str(&parameter_name.with_null()).as_ptr(),
+                value,
+            );
+        }
+    }
+
+    pub fn is_selected(&self, project: &Project) -> bool {
+        self.get_info_value(project, "B_UISEL") > 0.0
+    }
+
+    pub fn set_selected(&self, project: &Project, selected: bool) {
+        let selected = if selected { 1.0 } else { 0.0 };
+        self.set_info_value(project, "B_UISEL", selected)
+    }
+
+    pub fn is_hidden(&self, project: &Project) -> bool {
+        self.get_info_value(project, "B_HIDDEN") > 0.0
+    }
+
+    pub fn set_hidden(&self, project: &Project, hidden: bool) {
+        let hidden = if hidden { 1.0 } else { 0.0 };
+        self.set_info_value(project, "B_HIDDEN", hidden)
+    }
+
+    pub fn is_lane_visible(&self, project: &Project) -> bool {
+        self.get_info_value(project, "B_VISIBLE") > 0.0
+    }
+
+    pub fn set_lane_visible(&self, project: &Project, visible: bool) {
+        let visible = if visible { 1.0 } else { 0.0 };
+        self.set_info_value(project, "B_VISIBLE", visible)
+    }
+
+    pub fn get_lane(&self, project: &Project) -> Option<u32> {
+        let lane = self.get_info_value(project, "I_LANENUMBER") as i32;
+        if lane < 0 {
+            None
+        } else {
+            Some(lane as u32)
+        }
+    }
+
+    pub fn set_lane(&self, project: &Project, lane: Option<u32>) {
+        let lane = lane.map(|v| v as f64).unwrap_or(-1.0);
+        self.set_info_value(project, "I_LANENUMBER", lane)
+    }
+
     pub fn iter_rendered_tracks<'a>(
         &self,
         project: &'a Project,
