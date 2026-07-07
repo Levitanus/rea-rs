@@ -176,7 +176,7 @@ mod tests {
     fn test_duration_trunc() {
         assert_eq!(
             Duration::new(5, 687253432).trunc(POSITION_PRECISION),
-            Duration::new(5, 687253400)
+            Duration::new(5, 687253000)
         );
     }
 }
@@ -253,9 +253,10 @@ impl Into<Duration> for Position {
     }
 }
 impl Position {
-    /// for avoiding floating-point mistakes on manipulating positions, inner
-    /// duration will be laways truncated to 8 signs after the point (100us),
-    /// if it's not explicitely set with [Position::new_with_precision]
+    /// For avoiding floating-point mistakes while manipulating positions,
+    /// inner duration is truncated with default precision (1 us step, i.e.
+    /// 9 digits after decimal point) unless explicitly set with
+    /// [Position::new_with_precision].
     pub fn new(duration_from_project_start: Duration) -> Self {
         Self {
             as_duration: duration_from_project_start,
