@@ -2,7 +2,10 @@ use std::mem::MaybeUninit;
 
 use serde_derive::{Deserialize, Serialize};
 
-use crate::{utils::as_string, Color, Position, Project, Reaper};
+use crate::{
+    ptr_wrappers::MediaTrack, utils::as_string, Color, Immutable,
+    Position, ProbablyMutable, Project, Reaper, Track, WithReaperPtr,
+};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct MarkerRegionInfo {
@@ -13,6 +16,106 @@ pub struct MarkerRegionInfo {
     pub rgn_end: Position,
     pub name: String,
     pub color: Color,
+}
+
+impl MarkerRegionInfo {
+    pub fn iter_rendered_tracks<'a>(
+        &self,
+        project: &'a Project,
+    ) -> RenderedTracksIterator<'a> {
+        RenderedTracksIterator {
+            index: 0,
+            region_index: self.user_index as i32,
+            project,
+            is_region: self.is_region,
+        }
+    }
+
+    pub fn add_rendered_track<T: ProbablyMutable>(
+        &self,
+        project: &Project,
+        track: &Track<T>,
+        channels: impl Into<Option<u32>>,
+    ) {
+        if !self.is_region {
+            log::warn!(
+                "render matrix is available only for regions"
+            );
+            return;
+        }
+        let flag = match channels.into() {
+            None => 1,
+            Some(channels) => channels.checked_mul(2).unwrap_or_else(|| {
+                log::warn!(
+                    "channels value is too large for SetRegionRenderMatrix, using u32::MAX"
+                );
+                u32::MAX
+            }),
+        };
+        let flag = i32::try_from(flag).unwrap_or_else(|_| {
+            log::warn!(
+                "channels value is too large for SetRegionRenderMatrix, using i32::MAX"
+            );
+            i32::MAX
+        });
+        unsafe {
+            Reaper::get().low().SetRegionRenderMatrix(
+                project.context().to_raw(),
+                self.user_index as i32,
+                track.get().as_ptr(),
+                flag,
+            );
+        }
+    }
+
+    pub fn remove_rendered_track<T: ProbablyMutable>(
+        &self,
+        project: &Project,
+        track: &Track<T>,
+    ) {
+        if !self.is_region {
+            log::warn!(
+                "render matrix is available only for regions"
+            );
+            return;
+        }
+        unsafe {
+            Reaper::get().low().SetRegionRenderMatrix(
+                project.context().to_raw(),
+                self.user_index as i32,
+                track.get().as_ptr(),
+                -1,
+            );
+        }
+    }
+}
+
+pub struct RenderedTracksIterator<'a> {
+    index: i32,
+    region_index: i32,
+    project: &'a Project,
+    is_region: bool,
+}
+
+impl<'a> Iterator for RenderedTracksIterator<'a> {
+    type Item = Track<'a, Immutable>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.is_region {
+            return None;
+        }
+        let low = Reaper::get().low();
+        unsafe {
+            let ptr = low.EnumRegionRenderMatrix(
+                self.project.context().to_raw(),
+                self.region_index,
+                self.index,
+            );
+            self.index += 1;
+            let ptr = MediaTrack::new(ptr)?;
+            Some(Track::new(self.project, ptr))
+        }
+    }
 }
 
 pub struct MarkerRegionIterator<'a> {
