@@ -20,9 +20,9 @@
 //! These are the dependencies:
 //! ```toml
 //! [dependencies]
-//! rea-rs = "0.1.4"
-//! rea-rs-low = "0.1.4" # optional
-//! rea-rs-macros = "0.1.4"
+//! rea-rs = "0.1.40"
+//! rea-rs-low = "0.1.40" # optional
+//! rea-rs-macros = "0.1.40"
 //! ```
 //!
 //! But, actually, all medium- and low-level functionality is still existing in
