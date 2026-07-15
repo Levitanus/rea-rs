@@ -8,8 +8,9 @@
 //! - Re-exports of `baseview`, `egui_baseview`, and `egui`.
 
 pub use baseview;
+pub use egui;
 pub use egui_baseview;
-pub use egui_baseview::egui;
+pub type Queue = egui_baseview::ExtraOutputCommands;
 
 use crate::ptr_wrappers::Hwnd;
 
@@ -39,7 +40,7 @@ mod platform {
     use super::ReaperParentWindow;
     use c_str_macro::c_str;
     use raw_window_handle::{
-        HasRawWindowHandle, RawWindowHandle, XlibWindowHandle,
+        HasWindowHandle, RawWindowHandle, WindowHandle, XlibWindowHandle,
     };
     use rea_rs_low::Swell;
 
@@ -60,15 +61,14 @@ mod platform {
         Some(gdk_x11_window_get_xid(gdk_window))
     }
 
-    unsafe impl HasRawWindowHandle for ReaperParentWindow {
-        fn raw_window_handle(&self) -> RawWindowHandle {
-            let mut handle = XlibWindowHandle::empty();
-            if let Some(xid) =
-                unsafe { xid_from_swell_hwnd(self.hwnd.as_ptr()) }
-            {
-                handle.window = xid;
-            }
-            RawWindowHandle::Xlib(handle)
+    impl HasWindowHandle for ReaperParentWindow {
+        fn window_handle(
+            &self,
+        ) -> Result<WindowHandle<'_>, raw_window_handle::HandleError> {
+            let xid = unsafe { xid_from_swell_hwnd(self.hwnd.as_ptr()) }
+                .ok_or(raw_window_handle::HandleError::Unavailable)?;
+            let raw = RawWindowHandle::Xlib(XlibWindowHandle::new(xid));
+            Ok(unsafe { WindowHandle::borrow_raw(raw) })
         }
     }
 }
@@ -150,7 +150,7 @@ pub struct DockableEguiWindow {
     /// Stable identity string used by REAPER to persist dock position across
     /// sessions (passed to `DockWindowAddEx`).
     ident: String,
-    size: baseview::Size,
+    size: baseview::dpi::Size,
     current_dock: Option<u32>,
     state: DockWindowRunState,
 }
@@ -178,11 +178,15 @@ enum DockWindowRunState {
 struct XlibParent(u64);
 
 #[cfg(target_os = "linux")]
-unsafe impl raw_window_handle::HasRawWindowHandle for XlibParent {
-    fn raw_window_handle(&self) -> raw_window_handle::RawWindowHandle {
-        let mut h = raw_window_handle::XlibWindowHandle::empty();
-        h.window = self.0;
-        raw_window_handle::RawWindowHandle::Xlib(h)
+impl raw_window_handle::HasWindowHandle for XlibParent {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError>
+    {
+        let raw = raw_window_handle::RawWindowHandle::Xlib(
+            raw_window_handle::XlibWindowHandle::new(self.0),
+        );
+        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
     }
 }
 
@@ -199,7 +203,7 @@ impl DockableEguiWindow {
     pub fn new(
         title: impl Into<String>,
         ident: impl Into<String>,
-        size: baseview::Size,
+        size: baseview::dpi::Size,
     ) -> Self {
         Self {
             title: title.into(),
@@ -245,10 +249,10 @@ impl DockableEguiWindow {
         update: U,
     ) where
         S: Send + 'static,
-        B: FnMut(&egui::Context, &mut egui_baseview::Queue, &mut S)
+        B: FnMut(&egui::Context, &mut Queue, &mut S)
             + Send
             + 'static,
-        U: FnMut(&egui::Context, &mut egui_baseview::Queue, &mut S)
+        U: FnMut(&egui::Context, &mut Queue, &mut S)
             + Send
             + 'static,
     {
@@ -316,10 +320,10 @@ impl DockableEguiWindow {
         update: U,
     ) where
         S: Send + 'static,
-        B: FnMut(&egui::Context, &mut egui_baseview::Queue, &mut S)
+        B: FnMut(&egui::Context, &mut Queue, &mut S)
             + Send
             + 'static,
-        U: FnMut(&egui::Context, &mut egui_baseview::Queue, &mut S)
+        U: FnMut(&egui::Context, &mut Queue, &mut S)
             + Send
             + 'static,
     {
@@ -348,10 +352,10 @@ impl DockableEguiWindow {
     fn open_floating<S, B, U>(&mut self, state: S, mut build: B, update: U)
     where
         S: Send + 'static,
-        B: FnMut(&egui::Context, &mut egui_baseview::Queue, &mut S)
+        B: FnMut(&egui::Context, &mut Queue, &mut S)
             + Send
             + 'static,
-        U: FnMut(&egui::Context, &mut egui_baseview::Queue, &mut S)
+        U: FnMut(&egui::Context, &mut Queue, &mut S)
             + Send
             + 'static,
     {
@@ -364,37 +368,35 @@ impl DockableEguiWindow {
 
         let wrapped_build =
             move |ctx: &egui::Context,
-                  queue: &mut egui_baseview::Queue,
+                  queue: &mut Queue,
                   s: &mut WithCloseRx<S>| {
                 build(ctx, queue, &mut s.inner);
             };
 
         let mut update = update;
         let wrapped_update =
-            move |ctx: &egui::Context,
-                  queue: &mut egui_baseview::Queue,
+            move |ui: &mut egui::Ui,
+                  queue: &mut Queue,
                   s: &mut WithCloseRx<S>| {
                 if s.close_rx.try_recv().is_ok() {
-                    queue.close_window();
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     return;
                 }
-                update(ctx, queue, &mut s.inner);
+                update(ui.ctx(), queue, &mut s.inner);
             };
 
-        let options = baseview::WindowOpenOptions {
-            title: self.title.clone(),
-            size: self.size,
-            scale: baseview::WindowScalePolicy::SystemScaleFactor,
-            gl_config: None,
-        };
-        let gfx = egui_baseview::GraphicsConfig::default();
+        let settings = egui_baseview::EguiWindowSettings::default()
+            .with_tile(self.title.clone())
+            .with_size(self.size)
+            .with_scale_policy(baseview::WindowScalePolicy::SystemScaleFactor)
+            .with_graphics_config(egui_baseview::GraphicsConfig::default());
 
         let thread = std::thread::spawn(move || {
             egui_baseview::EguiWindow::open_blocking(
-                options,
-                gfx,
+                settings,
                 wrapped_state,
                 wrapped_build,
+                |_full_output, _viewport_output, _state| {},
                 wrapped_update,
             );
         });
@@ -411,14 +413,14 @@ impl DockableEguiWindow {
         slot: u32,
         state: S,
         build: B,
-        update: U,
+        mut update: U,
     ) -> Result<(), String>
     where
         S: Send + 'static,
-        B: FnMut(&egui::Context, &mut egui_baseview::Queue, &mut S)
+        B: FnMut(&egui::Context, &mut Queue, &mut S)
             + Send
             + 'static,
-        U: FnMut(&egui::Context, &mut egui_baseview::Queue, &mut S)
+        U: FnMut(&egui::Context, &mut Queue, &mut S)
             + Send
             + 'static,
     {
@@ -427,8 +429,14 @@ impl DockableEguiWindow {
         let reaper_low = crate::Reaper::get().low();
         let swell = rea_rs_low::Swell::get();
 
-        let w = self.size.width as i32;
-        let h = self.size.height as i32;
+        let (w, h) = match self.size {
+            baseview::dpi::Size::Logical(size) => {
+                (size.width as i32, size.height as i32)
+            }
+            baseview::dpi::Size::Physical(size) => {
+                (size.width as i32, size.height as i32)
+            }
+        };
         let rect = raw::RECT {
             left: 0,
             top: 0,
@@ -479,20 +487,24 @@ impl DockableEguiWindow {
 
         // Open the egui-baseview window parented to the X11 bridge window.
         let xlib_parent = XlibParent(x11_xid);
-        let options = baseview::WindowOpenOptions {
-            title: self.title.clone(),
-            size: self.size,
-            scale: baseview::WindowScalePolicy::SystemScaleFactor,
-            gl_config: None,
-        };
+        let settings = egui_baseview::EguiWindowSettings::default()
+            .with_tile(self.title.clone())
+            .with_size(self.size)
+            .with_scale_policy(baseview::WindowScalePolicy::SystemScaleFactor)
+            .with_graphics_config(egui_baseview::GraphicsConfig::default());
+
+        let wrapped_update =
+            move |ui: &mut egui::Ui, queue: &mut Queue, s: &mut S| {
+                update(ui.ctx(), queue, s);
+            };
 
         let window_handle = egui_baseview::EguiWindow::open_parented(
             &xlib_parent,
-            options,
-            egui_baseview::GraphicsConfig::default(),
+            settings,
             state,
             build,
-            update,
+            |_full_output, _viewport_output, _state| {},
+            wrapped_update,
         );
 
         // Trigger initial resize so the egui viewport fills the bridge window.
