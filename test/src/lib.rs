@@ -47,19 +47,15 @@ fn open_egui_baseview_window_action(_flag: i32) -> TestStepResult {
             DockableEguiWindow::new(
                 "rea-rs egui-baseview (dockable)",
                 "rea_rs_egui_baseview_demo",
-                baseview::Size::new(520.0, 340.0),
+                baseview::dpi::Size::new(
+                    baseview::dpi::LogicalSize::new(520.0, 340.0),
+                ),
             )
         });
 
         // Read the dock request set by the UI
         let req = EGUI_WINDOW_DOCK_REQUEST
             .load(std::sync::atomic::Ordering::Relaxed);
-        let dock_to = if req == u32::MAX {
-            Some(u32::MAX)
-        } else {
-            Some(req)
-        };
-
         win.set_dock(
             if req == u32::MAX {
                 None
@@ -68,49 +64,47 @@ fn open_egui_baseview_window_action(_flag: i32) -> TestStepResult {
             },
             EguiWindowState::default(),
             |_ctx, _queue, _state| {},
-            |ctx, queue, state| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.heading("egui-baseview Window (Dockable)");
-                    if state.dock_requested.is_none() {
-                        ui.label("This window is floating.");
-                    } else {
-                        ui.label(format!(
-                            "This window is docked in slot {}",
-                            state.dock_requested.unwrap_or(0)
-                        ));
-                    }
+            |ui, _queue, state| {
+                ui.heading("egui-baseview Window (Dockable)");
+                if state.dock_requested.is_none() {
+                    ui.label("This window is floating.");
+                } else {
+                    ui.label(format!(
+                        "This window is docked in slot {}",
+                        state.dock_requested.unwrap_or(0)
+                    ));
+                }
 
-                    ui.separator();
+                ui.separator();
 
-                    if ui.button("🔗 Dock to slot 0").clicked() {
-                        EGUI_WINDOW_DOCK_REQUEST
-                            .store(0, std::sync::atomic::Ordering::Relaxed);
-                        queue.close_window();
-                    }
-                    if ui.button("🔗 Dock to slot 1").clicked() {
-                        EGUI_WINDOW_DOCK_REQUEST
-                            .store(1, std::sync::atomic::Ordering::Relaxed);
-                        queue.close_window();
-                    }
-                    if ui.button("⛓️ Float").clicked() {
-                        EGUI_WINDOW_DOCK_REQUEST.store(
-                            u32::MAX,
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
-                        queue.close_window();
-                    }
+                if ui.button("🔗 Dock to slot 0").clicked() {
+                    EGUI_WINDOW_DOCK_REQUEST
+                        .store(0, std::sync::atomic::Ordering::Relaxed);
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                if ui.button("🔗 Dock to slot 1").clicked() {
+                    EGUI_WINDOW_DOCK_REQUEST
+                        .store(1, std::sync::atomic::Ordering::Relaxed);
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                if ui.button("⛓️ Float").clicked() {
+                    EGUI_WINDOW_DOCK_REQUEST.store(
+                        u32::MAX,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
 
-                    ui.separator();
+                ui.separator();
 
-                    if ui.button("Click me").clicked() {
-                        state.clicks += 1;
-                    }
-                    ui.label(format!("Clicks: {}", state.clicks));
+                if ui.button("Click me").clicked() {
+                    state.clicks += 1;
+                }
+                ui.label(format!("Clicks: {}", state.clicks));
 
-                    if ui.button("Close").clicked() {
-                        queue.close_window();
-                    }
-                });
+                if ui.button("Close").clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
             },
         );
     }
