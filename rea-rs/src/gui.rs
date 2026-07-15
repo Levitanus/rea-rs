@@ -135,7 +135,7 @@ pub const DOCK_FLOATING: Option<u32> = None;
 ///     win.set_dock(None, MyState::default(), |_ctx, _q, _s| {}, my_ui);
 /// }
 ///
-/// fn my_ui(ctx: &egui::Context, queue: &mut Queue, state: &mut MyState) { … }
+/// fn my_ui(ui: &mut egui::Ui, queue: &mut Queue, state: &mut MyState) { … }
 /// ```
 ///
 /// Calling [`set_dock`](DockableEguiWindow::set_dock) again with a different
@@ -159,8 +159,8 @@ enum DockWindowRunState {
     Closed,
     /// A free-floating `open_blocking` window running on its own thread.
     Floating {
-        /// Sending any value here causes the egui loop to call
-        /// `queue.close_window()` on the next frame.
+        /// Sending any value here causes the egui loop to close the viewport
+        /// on the next frame.
         close_tx: std::sync::mpsc::SyncSender<()>,
         _thread: std::thread::JoinHandle<()>,
     },
@@ -252,7 +252,7 @@ impl DockableEguiWindow {
         B: FnMut(&egui::Context, &mut Queue, &mut S)
             + Send
             + 'static,
-        U: FnMut(&egui::Context, &mut Queue, &mut S)
+        U: FnMut(&mut egui::Ui, &mut Queue, &mut S)
             + Send
             + 'static,
     {
@@ -274,7 +274,7 @@ impl DockableEguiWindow {
             }
             #[cfg(target_os = "linux")]
             DockWindowRunState::Docked {
-                mut window_handle,
+                window_handle,
                 bridge_hwnd,
             } => {
                 window_handle.close();
@@ -323,7 +323,7 @@ impl DockableEguiWindow {
         B: FnMut(&egui::Context, &mut Queue, &mut S)
             + Send
             + 'static,
-        U: FnMut(&egui::Context, &mut Queue, &mut S)
+        U: FnMut(&mut egui::Ui, &mut Queue, &mut S)
             + Send
             + 'static,
     {
@@ -355,7 +355,7 @@ impl DockableEguiWindow {
         B: FnMut(&egui::Context, &mut Queue, &mut S)
             + Send
             + 'static,
-        U: FnMut(&egui::Context, &mut Queue, &mut S)
+        U: FnMut(&mut egui::Ui, &mut Queue, &mut S)
             + Send
             + 'static,
     {
@@ -382,7 +382,7 @@ impl DockableEguiWindow {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     return;
                 }
-                update(ui.ctx(), queue, &mut s.inner);
+                update(ui, queue, &mut s.inner);
             };
 
         let settings = egui_baseview::EguiWindowSettings::default()
@@ -413,14 +413,14 @@ impl DockableEguiWindow {
         slot: u32,
         state: S,
         build: B,
-        mut update: U,
+        update: U,
     ) -> Result<(), String>
     where
         S: Send + 'static,
         B: FnMut(&egui::Context, &mut Queue, &mut S)
             + Send
             + 'static,
-        U: FnMut(&egui::Context, &mut Queue, &mut S)
+        U: FnMut(&mut egui::Ui, &mut Queue, &mut S)
             + Send
             + 'static,
     {
@@ -493,18 +493,13 @@ impl DockableEguiWindow {
             .with_scale_policy(baseview::WindowScalePolicy::SystemScaleFactor)
             .with_graphics_config(egui_baseview::GraphicsConfig::default());
 
-        let wrapped_update =
-            move |ui: &mut egui::Ui, queue: &mut Queue, s: &mut S| {
-                update(ui.ctx(), queue, s);
-            };
-
         let window_handle = egui_baseview::EguiWindow::open_parented(
             &xlib_parent,
             settings,
             state,
             build,
             |_full_output, _viewport_output, _state| {},
-            wrapped_update,
+            update,
         );
 
         // Trigger initial resize so the egui viewport fills the bridge window.
