@@ -2,8 +2,8 @@ pub use crate::utils::WithReaperPtr;
 use crate::{
     ptr_wrappers::{MediaItem, MediaTrack, ReaProject},
     utils::{
-        as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
-        make_string_buf, WithNull,
+        as_c_str, as_c_string, as_string, string_from_buf,
+        WithNull,
     },
     Color, CommandId, Immutable, Item, MarkerRegionInfo, MarkerRegionIterator,
     Mutable, PlayRate, Position, ProjectContext, ReaRsError, Reaper,
@@ -14,7 +14,7 @@ use int_enum::IntEnum;
 use log::{debug, warn};
 use serde_derive::{Deserialize, Serialize};
 use std::{
-    ffi::CString, iter::Rev, mem::MaybeUninit, path::PathBuf, ptr::NonNull,
+    ffi::CString, mem::MaybeUninit, path::PathBuf, ptr::NonNull,
     time::Duration,
 };
 
@@ -954,25 +954,37 @@ impl<'a> Project {
         param_name: impl Into<String>,
     ) -> anyhow::Result<String> {
         unsafe {
-            let size = 1024;
+            if self.info_buf_size < 2 {
+                return Err(ReaRsError::InvalidObject(
+                    "Project string buffer size must be at least 2.",
+                )
+                .into());
+            }
             let mut param_name: String = param_name.into();
-            let buf = make_string_buf(size);
+            let mut buf = vec![0_i8; self.info_buf_size];
             let result = Reaper::get().low().GetSetProjectInfo_String(
                 self.context().to_raw(),
                 as_c_str(&param_name.with_null()).as_ptr(),
-                buf,
+                buf.as_mut_ptr(),
                 false,
             );
-            let result_string =
-                as_string_mut(buf).expect("Cannot convert result to string");
-            debug!("{}", result_string);
-            match result {
-                true => Ok(result_string),
-                false => {
-                    Err(ReaRsError::InvalidObject("Can not get Project info.")
-                        .into())
-                }
+            if !result {
+                return Err(
+                    ReaRsError::InvalidObject("Can not get Project info.")
+                        .into(),
+                );
             }
+
+            let result_string = string_from_buf(&buf).map_err(|err| match err {
+                ReaRsError::UnsuccessfulOperation("Buffer is too small for value") => {
+                    ReaRsError::InvalidObject(
+                        "Project info string is too long for buffer. Increase it with set_string_param_size.",
+                    )
+                }
+                _ => err,
+            })?;
+            debug!("{}", result_string);
+            Ok(result_string)
         }
     }
 
@@ -1004,14 +1016,13 @@ impl<'a> Project {
 
     pub fn name(&self) -> String {
         unsafe {
-            let name = make_c_string_buf(self.info_buf_size);
-            let name = name.into_raw();
+            let mut name = vec![0_i8; self.info_buf_size];
             Reaper::get().low().GetProjectName(
                 self.context().to_raw(),
-                name,
+                name.as_mut_ptr(),
                 self.info_buf_size as i32,
             );
-            as_string_mut(name).expect("shoudl return project name")
+            string_from_buf(&name).expect("shoudl return project name")
         }
     }
 
@@ -1101,13 +1112,13 @@ impl<'a> Project {
     /// Project path.
     pub fn get_path(&self) -> anyhow::Result<PathBuf> {
         unsafe {
-            let buf = make_c_string_buf(self.info_buf_size).into_raw();
+            let mut buf = vec![0_i8; self.info_buf_size];
             Reaper::get().low().GetProjectPathEx(
                 self.context().to_raw(),
-                buf,
+                buf.as_mut_ptr(),
                 self.info_buf_size as i32,
             );
-            let result = PathBuf::from(as_string_mut(buf)?);
+            let result = PathBuf::from(string_from_buf(&buf)?);
             Ok(result)
         }
     }

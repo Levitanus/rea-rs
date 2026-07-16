@@ -1,8 +1,7 @@
 use crate::{
-    ptr_wrappers::PcmSource,
-    utils::{as_string_mut, make_c_string_buf},
-    KnowsProject, Mutable, Position, ProbablyMutable, Project, ProjectContext,
-    Reaper, Take, Volume, WithReaperPtr,
+    ptr_wrappers::PcmSource, utils::string_from_buf, KnowsProject, Mutable,
+    Position, ProbablyMutable, Project, ProjectContext, Reaper, Take, Volume,
+    WithReaperPtr,
 };
 use chrono::TimeDelta;
 use int_enum::IntEnum;
@@ -55,15 +54,17 @@ impl<'a, T: ProbablyMutable> Source<'a, T> {
 
     pub fn filename(&self) -> PathBuf {
         let size = 500;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         unsafe {
             Reaper::get().low().GetMediaSourceFileName(
                 self.get().as_ptr(),
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
-        PathBuf::from(as_string_mut(buf).expect("Can not retrieve file name"))
+        PathBuf::from(
+            string_from_buf(&buf).expect("Can not retrieve file name"),
+        )
     }
 
     /// Get source media length.
@@ -120,15 +121,15 @@ impl<'a, T: ProbablyMutable> Source<'a, T> {
     /// Source type ("WAV, "MIDI", etc.).
     pub fn type_string(&self) -> String {
         let size = 20;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         unsafe {
             Reaper::get().low().GetMediaSourceType(
                 self.get().as_ptr(),
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
-        as_string_mut(buf).expect("Can not convert type to string")
+        string_from_buf(&buf).expect("Can not convert type to string")
     }
 
     pub fn sub_project(&self) -> Option<Project> {

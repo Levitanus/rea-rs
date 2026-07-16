@@ -13,17 +13,14 @@ use serde_derive::{Deserialize, Serialize};
 
 use crate::{
     ptr_wrappers::{MediaItem, MediaTrack, TrackEnvelope},
-    utils::{
-        as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
-        WithNull,
-    },
+    utils::{as_c_str, as_c_string, as_string, string_from_buf, WithNull},
     AudioAccessor, AutomationMode, Color, Envelope, EnvelopeSelector,
     FXParent, GenericSend, GetLength, HardwareSend, HardwareSocket, Immutable,
     Item, KnowsProject, Mutable, Pan, PanLaw, PanLawMode, Position,
-    PositionPixel, ProbablyMutable, Project, ReaRsError, Reaper,
-    ReaperResult, RecInput, RecMode, RecOutMode, RectPixel, SendIntType,
-    SoloMode, TimeMode, TrackFX, TrackFolderState, TrackReceive, TrackSend,
-    VUMode, Volume, WithReaperPtr, FX, GUID,
+    PositionPixel, ProbablyMutable, Project, ReaRsError, Reaper, ReaperResult,
+    RecInput, RecMode, RecOutMode, RectPixel, SendIntType, SoloMode, TimeMode,
+    TrackFX, TrackFolderState, TrackReceive, TrackSend, VUMode, Volume,
+    WithReaperPtr, FX, GUID,
 };
 
 #[derive(Debug, PartialEq)]
@@ -124,11 +121,11 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         category: impl Into<String>,
     ) -> anyhow::Result<String> {
         unsafe {
-            let buf = make_c_string_buf(self.info_buf_size).into_raw();
+            let mut buf = vec![0_i8; self.info_buf_size];
             let result = Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get().as_ptr(),
                 as_c_str(&category.into().with_null()).as_ptr(),
-                buf,
+                buf.as_mut_ptr(),
                 false,
             );
             match result {
@@ -136,7 +133,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
                     "Can not get info string",
                 )
                 .into()),
-                true => Ok(as_string_mut(buf)?),
+                true => Ok(string_from_buf(&buf)?),
             }
         }
     }
@@ -565,11 +562,11 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
 
     pub fn chunk(&self) -> ReaperResult<String> {
         let size = i32::MAX;
-        let buf = make_c_string_buf(size as usize).into_raw();
+        let mut buf = vec![0_i8; size as usize];
         let result = unsafe {
             Reaper::get().low().GetTrackStateChunk(
                 self.get().as_ptr(),
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
                 false,
             )
@@ -578,30 +575,25 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
             false => {
                 Err(ReaRsError::UnsuccessfulOperation("Can not get chunk"))
             }
-            true => {
-                Ok(as_string_mut(buf)
-                    .expect("Can not convert chunk to string"))
-            }
+            true => Ok(string_from_buf(&buf)?),
         }
     }
 
     /// Get string, that will differ only if midi changed.
     pub fn midi_hash(&self, notes_only: bool) -> Option<String> {
         let size = 100;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().MIDI_GetTrackHash(
                 self.get().as_ptr(),
                 notes_only,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
         match result {
             false => None,
-            true => Some(
-                as_string_mut(buf).expect("Can not convert hash to string"),
-            ),
+            true => string_from_buf(&buf).ok(),
         }
     }
 
@@ -861,10 +853,7 @@ impl<'a> Track<'a, Mutable> {
             .expect("Can not set GUID");
     }
 
-    pub fn set_name(
-        &mut self,
-        name: impl Into<String>,
-    ) -> ReaperResult<()> {
+    pub fn set_name(&mut self, name: impl Into<String>) -> ReaperResult<()> {
         self.set_info_string("P_NAME", name)
     }
 

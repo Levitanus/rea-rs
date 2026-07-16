@@ -5,14 +5,11 @@ use std::{
 
 use crate::{
     ptr_wrappers::{self, MediaItemTake, PcmSource, TrackEnvelope},
-    utils::{
-        as_c_str, as_c_string, as_string, as_string_mut, make_c_string_buf,
-        WithNull,
-    },
+    utils::{as_c_str, as_c_string, as_string, string_from_buf, WithNull},
     AudioAccessor, Color, Envelope, FXParent, Immutable, Item, KnowsProject,
     MidiEventBuilder, Mutable, Pan, PanLaw, Pitch, PlayRate, ProbablyMutable,
-    Project, ReaRsError, Reaper, ReaperResult, Source, SourceOffset,
-    TakeFX, Volume, WithReaperPtr, FX, GUID,
+    Project, ReaRsError, Reaper, ReaperResult, Source, SourceOffset, TakeFX,
+    Volume, WithReaperPtr, FX, GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
@@ -194,25 +191,28 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
         category: impl Into<String>,
         size: usize,
     ) -> ReaperResult<String> {
+        if size < 2 {
+            return Err(ReaRsError::InvalidObject(
+                "buffer size must be at least 2",
+            ));
+        }
         let mut category = category.into();
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
                 self.get().as_ptr(),
                 as_c_str(category.with_null()).as_ptr(),
-                buf,
+                buf.as_mut_ptr(),
                 false,
             )
         };
-        match result {
-            true => {
-                Ok(as_string_mut(buf)
-                    .expect("Can not convert value to string."))
-            }
-            false => {
-                Err(ReaRsError::UnsuccessfulOperation("Can not get value"))
-            }
+        if !result {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "Can not get value",
+            ));
         }
+
+        string_from_buf(&buf)
     }
 
     pub fn guid(&self) -> GUID {
@@ -572,10 +572,7 @@ impl<'a> Take<'a, Mutable> {
             .expect("can't set pan law")
     }
 
-    pub fn set_play_rate(
-        &mut self,
-        play_rate: PlayRate,
-    ) -> ReaperResult<()> {
+    pub fn set_play_rate(&mut self, play_rate: PlayRate) -> ReaperResult<()> {
         self.set_info_value("D_PLAYRATE", play_rate.into())
     }
 

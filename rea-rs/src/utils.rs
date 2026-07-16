@@ -62,6 +62,31 @@ pub fn as_string_mut(ptr: *mut i8) -> Result<String, Utf8Error> {
     unsafe { Ok(String::from(CString::from_raw(ptr).to_str()?)) }
 }
 
+/// Convert an in-place C output buffer to Rust String with basic
+/// truncation/encoding checks.
+pub fn string_from_buf(buf: &[i8]) -> Result<String, ReaRsError> {
+    if buf.len() < 2 {
+        return Err(ReaRsError::InvalidObject(
+            "buffer size must be at least 2",
+        ));
+    }
+
+    let nul_pos = buf
+        .iter()
+        .position(|ch| *ch == 0)
+        .ok_or(ReaRsError::InvalidObject(
+            "Can not get value string terminator",
+        ))?;
+    if nul_pos == buf.len() - 1 {
+        return Err(ReaRsError::UnsuccessfulOperation(
+            "Buffer is too small for value",
+        ));
+    }
+
+    String::from_utf8(buf[..nul_pos].iter().map(|ch| *ch as u8).collect())
+        .map_err(|_| ReaRsError::InvalidObject("Can not decode value as UTF-8"))
+}
+
 /// Make empty CString pointer of the given size.
 pub fn make_string_buf(size: usize) -> *mut i8 {
     unsafe {

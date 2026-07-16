@@ -1,10 +1,10 @@
 use crate::{
     ptr_wrappers::{MediaItem, MediaItemTake, MediaTrack},
-    utils::{as_c_str, as_c_string, as_string_mut},
-    utils::{make_c_string_buf, WithNull},
+    utils::WithNull,
+    utils::{as_c_str, as_c_string, string_from_buf},
     Color, Immutable, KnowsProject, Mutable, Position, ProbablyMutable,
-    Project, ReaRsError, Reaper, ReaperResult, Take, TimeMode, Track,
-    Volume, WithReaperPtr, GUID,
+    Project, ReaRsError, Reaper, ReaperResult, Take, TimeMode, Track, Volume,
+    WithReaperPtr, GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
@@ -232,24 +232,28 @@ impl<'a, T: ProbablyMutable> Item<'a, T> {
         category: impl Into<String>,
         buf_size: usize,
     ) -> ReaperResult<String> {
+        if buf_size < 2 {
+            return Err(ReaRsError::InvalidObject(
+                "buffer size must be at least 2",
+            ));
+        }
         let mut category = category.into();
-        let buf = make_c_string_buf(buf_size).into_raw();
+        let mut buf = vec![0_i8; buf_size];
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemInfo_String(
                 self.get().as_ptr(),
                 as_c_str(category.with_null()).as_ptr(),
-                buf,
+                buf.as_mut_ptr(),
                 false,
             )
         };
-        match result {
-            false => {
-                Err(ReaRsError::UnsuccessfulOperation("Can not get value!"))
-            }
-            true => {
-                Ok(as_string_mut(buf).expect("can not convert buf to string"))
-            }
+        if !result {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "Can not get value!",
+            ));
         }
+
+        string_from_buf(&buf)
     }
     pub fn notes(
         &self,
@@ -443,10 +447,7 @@ impl<'a> Item<'a, Mutable> {
     pub fn set_volume(&mut self, volume: Volume) {
         self.set_info_value("D_VOL", volume.get()).unwrap()
     }
-    pub fn set_snap_offset(
-        &mut self,
-        offset: Duration,
-    ) -> ReaperResult<()> {
+    pub fn set_snap_offset(&mut self, offset: Duration) -> ReaperResult<()> {
         self.set_info_value("D_SNAPOFFSET", offset.as_secs_f64())
     }
     pub fn set_fade_in(&mut self, fade: ItemFade) -> ReaperResult<()> {
@@ -476,10 +477,7 @@ impl<'a> Item<'a, Mutable> {
     /// mode
     ///
     /// 0 → top of track, 1 → bottom of track (will never be 1)
-    pub fn set_y_pos_free_mode(
-        &mut self,
-        y_pos: f64,
-    ) -> ReaperResult<()> {
+    pub fn set_y_pos_free_mode(&mut self, y_pos: f64) -> ReaperResult<()> {
         assert!((0.0..1.0).contains(&y_pos));
         self.set_info_value("F_FREEMODE_Y", y_pos as f64)
     }
@@ -522,10 +520,7 @@ impl<'a> Item<'a, Mutable> {
             true => Ok(()),
         }
     }
-    pub fn set_notes(
-        &self,
-        notes: impl Into<String>,
-    ) -> ReaperResult<()> {
+    pub fn set_notes(&self, notes: impl Into<String>) -> ReaperResult<()> {
         let notes: String = notes.into();
         self.set_info_string("P_NOTES", notes)
     }

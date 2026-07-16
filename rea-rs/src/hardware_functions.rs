@@ -1,9 +1,9 @@
 use std::mem::MaybeUninit;
 
-use log::debug;
+use log::{debug, error};
 
 use crate::{
-    utils::{as_string, as_string_mut, make_c_string_buf},
+    utils::{as_string, string_from_buf},
     HardwareSocket, Reaper, SampleAmount,
 };
 
@@ -81,19 +81,36 @@ impl Reaper {
     }
 
     pub fn get_midi_input(&self, index: usize) -> Option<HardwareSocket> {
-        let size = 256;
-        let buf = make_c_string_buf(size).into_raw();
-        let status = unsafe {
-            self.low().GetMIDIInputName(index as i32, buf, size as i32)
-        };
-        match status {
-            false => None,
-            true => HardwareSocket::new(
-                index as u32,
-                as_string_mut(buf).expect("Can not convert name to String."),
-            )
-            .into(),
+        for size in [256_usize, 1024_usize] {
+            let mut buf = vec![0_i8; size];
+            let status = unsafe {
+                self.low().GetMIDIInputName(
+                    index as i32,
+                    buf.as_mut_ptr(),
+                    size as i32,
+                )
+            };
+            if !status {
+                if size == 1024 {
+                    error!("GetMIDIInputName failed for index {index}");
+                    return None;
+                }
+                continue;
+            }
+
+            match string_from_buf(&buf) {
+                Ok(name) => return HardwareSocket::new(index as u32, name).into(),
+                Err(err) => {
+                    if size == 1024 {
+                        error!(
+                            "Can not parse MIDI input name for index {index}: {err}"
+                        );
+                        return None;
+                    }
+                }
+            }
         }
+        None
     }
 
     pub fn get_max_midi_outputs(&self) -> usize {
@@ -101,19 +118,36 @@ impl Reaper {
     }
 
     pub fn get_midi_output(&self, index: usize) -> Option<HardwareSocket> {
-        let size = 256;
-        let buf = make_c_string_buf(size).into_raw();
-        let status = unsafe {
-            self.low().GetMIDIOutputName(index as i32, buf, size as i32)
-        };
-        match status {
-            false => None,
-            true => HardwareSocket::new(
-                index as u32,
-                as_string_mut(buf).expect("Can not convert name to String."),
-            )
-            .into(),
+        for size in [256_usize, 1024_usize] {
+            let mut buf = vec![0_i8; size];
+            let status = unsafe {
+                self.low().GetMIDIOutputName(
+                    index as i32,
+                    buf.as_mut_ptr(),
+                    size as i32,
+                )
+            };
+            if !status {
+                if size == 1024 {
+                    error!("GetMIDIOutputName failed for index {index}");
+                    return None;
+                }
+                continue;
+            }
+
+            match string_from_buf(&buf) {
+                Ok(name) => return HardwareSocket::new(index as u32, name).into(),
+                Err(err) => {
+                    if size == 1024 {
+                        error!(
+                            "Can not parse MIDI output name for index {index}: {err}"
+                        );
+                        return None;
+                    }
+                }
+            }
         }
+        None
     }
 
     pub fn get_audio_input(&self, index: usize) -> Option<HardwareSocket> {
