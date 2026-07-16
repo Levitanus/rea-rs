@@ -76,15 +76,19 @@ mod platform {
 #[cfg(target_os = "windows")]
 mod platform {
     use super::ReaperParentWindow;
+    use std::num::NonZeroIsize;
     use raw_window_handle::{
-        HasRawWindowHandle, RawWindowHandle, Win32WindowHandle,
+        HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle,
     };
 
-    unsafe impl HasRawWindowHandle for ReaperParentWindow {
-        fn raw_window_handle(&self) -> RawWindowHandle {
-            let mut handle = Win32WindowHandle::empty();
-            handle.hwnd = self.hwnd.as_ptr().cast();
-            RawWindowHandle::Win32(handle)
+    impl HasWindowHandle for ReaperParentWindow {
+        fn window_handle(
+            &self,
+        ) -> Result<WindowHandle<'_>, raw_window_handle::HandleError> {
+            let hwnd = NonZeroIsize::new(self.hwnd.as_ptr() as isize)
+                .ok_or(raw_window_handle::HandleError::Unavailable)?;
+            let raw = RawWindowHandle::Win32(Win32WindowHandle::new(hwnd));
+            Ok(unsafe { WindowHandle::borrow_raw(raw) })
         }
     }
 }
@@ -93,22 +97,26 @@ mod platform {
 mod platform {
     use super::ReaperParentWindow;
     use c_str_macro::c_str;
+    use std::ptr::NonNull;
     use raw_window_handle::{
-        AppKitWindowHandle, HasRawWindowHandle, RawWindowHandle,
+        AppKitWindowHandle, HasWindowHandle, RawWindowHandle, WindowHandle,
     };
     use rea_rs_low::Swell;
 
-    unsafe impl HasRawWindowHandle for ReaperParentWindow {
-        fn raw_window_handle(&self) -> RawWindowHandle {
-            let mut handle = AppKitWindowHandle::empty();
+    impl HasWindowHandle for ReaperParentWindow {
+        fn window_handle(
+            &self,
+        ) -> Result<WindowHandle<'_>, raw_window_handle::HandleError> {
             let ns_view = unsafe {
                 Swell::get().SWELL_GetOSWindow(
                     self.hwnd.as_ptr(),
                     c_str!("NSView").as_ptr(),
                 )
             };
-            handle.ns_view = ns_view;
-            RawWindowHandle::AppKit(handle)
+            let ns_view = NonNull::new(ns_view)
+                .ok_or(raw_window_handle::HandleError::Unavailable)?;
+            let raw = RawWindowHandle::AppKit(AppKitWindowHandle::new(ns_view));
+            Ok(unsafe { WindowHandle::borrow_raw(raw) })
         }
     }
 }
