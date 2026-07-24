@@ -50,7 +50,9 @@
 //! there are two common ways to invoke the code: Actions and [ControlSurface].
 //!
 //! ```no_run
-//! use rea_rs::{PluginContext, Reaper, RegisteredAccel, Timer};
+//! use rea_rs::{
+//!     ActionHook, ActionKind, PluginContext, Reaper, RegisteredAccel, Timer,
+//! };
 //! use rea_rs_macros::reaper_extension_plugin;
 //! use std::error::Error;
 //! use std::{cell::RefCell, sync::Arc};
@@ -69,7 +71,7 @@
 //!     fn id_string(&self) -> String {"test listener".to_string()}
 //! }
 //!
-//! fn my_action_func(_flag: i32) -> Result<(), Box<dyn Error>> {
+//! fn my_action_func(_hook: &mut ActionHook) -> Result<(), Box<dyn Error>> {
 //!     Reaper::get().show_console_msg("running");
 //!     Ok(())
 //! }
@@ -84,6 +86,7 @@
 //!         "command_name",
 //!         // This is the line user searches action for
 //!         "description",
+//!         ActionKind::NotToggleable,
 //!         my_action_func,
 //!         // Only type currently supported
 //!         None

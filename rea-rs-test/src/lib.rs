@@ -90,7 +90,7 @@
 //! Use crates `log` and `env_logger` for printing to stdio. integration test
 //! turns env logger on by itself.
 
-use rea_rs::{PluginContext, Reaper, Timer};
+use rea_rs::{ActionHook, ActionKind, PluginContext, Reaper, Timer};
 use rea_rs_low::register_plugin_destroy_hook;
 use std::{
     cell::RefCell, error::Error, fmt::Debug, panic, process, sync::Arc,
@@ -126,15 +126,19 @@ impl Debug for TestStep {
     }
 }
 
-fn test(_flag: i32) -> Result<(), Box<dyn Error>> {
+fn run_tests() -> Result<(), Box<dyn Error>> {
     ReaperTest::get_mut().test();
     Ok(())
+}
+
+fn test(_hook: &mut ActionHook) -> Result<(), Box<dyn Error>> {
+    run_tests()
 }
 
 struct IntegrationTimer {}
 impl Timer for IntegrationTimer {
     fn run(&mut self) -> Result<(), Box<dyn Error>> {
-        test(0)?;
+        run_tests()?;
         self.stop();
         Ok(())
     }
@@ -170,7 +174,13 @@ impl ReaperTest {
         };
         let integration = instance.is_integration_test;
         reaper
-            .register_action(action_name, action_name, test, None)
+            .register_action(
+                action_name,
+                action_name,
+                ActionKind::NotToggleable,
+                test,
+                None,
+            )
             .expect("Can not reigister test action");
         Self::make_available_globally(instance);
         if integration {

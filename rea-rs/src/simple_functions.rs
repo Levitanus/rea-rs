@@ -65,6 +65,17 @@ impl Reaper {
         }
     }
 
+    // Get current toggle state for CommandID.
+    // If it's not toggleable ‒ returns None.
+    pub fn action_toggle_state(&self, command_id: CommandId) -> Option<bool> {
+        let command_id = i32::try_from(command_id.get()).ok()?;
+        match self.low().GetToggleCommandState(command_id) {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        }
+    }
+
     /// Get project from the current tab.
     pub fn current_project(&self) -> Project {
         Project::new(ProjectContext::CurrentProject)

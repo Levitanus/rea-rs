@@ -1,6 +1,5 @@
 use rea_rs_low::{
-    create_cpp_to_rust_control_surface,
-    raw::{self, gaccel_register_t},
+    create_cpp_to_rust_control_surface, raw::{self, gaccel_register_t},
     register_plugin_destroy_hook, IReaperControlSurface, PluginContext, Swell,
 };
 
@@ -22,15 +21,51 @@ use std::{
 
 static mut INSTANCE: Option<Reaper> = None;
 
-type ActionCallback = dyn Fn(i32) -> Result<(), Box<dyn Error>>;
+type ActionCallback = dyn Fn(&mut ActionHook) -> Result<(), Box<dyn Error>>;
 
 pub struct Action {
     command_id: CommandId,
     operation: Box<ActionCallback>,
+    kind: ActionKind,
 }
 impl Action {
-    pub fn call(&self, flag: i32) -> Result<(), Box<dyn Error>> {
-        (self.operation)(flag)
+    pub fn call(&self, hook: &mut ActionHook) -> Result<(), Box<dyn Error>> {
+        (self.operation)(hook)
+    }
+
+    pub fn command_id(&self) -> CommandId {
+        self.command_id
+    }
+
+    pub fn kind(&self) -> &ActionKind {
+        &self.kind
+    }
+
+    pub fn kind_mut(&mut self) -> &mut ActionKind {
+        &mut self.kind
+    }
+}
+
+pub struct ActionHook<'a> {
+    flag: i32,
+    kind: &'a mut ActionKind,
+}
+
+impl<'a> ActionHook<'a> {
+    fn new(flag: i32, kind: &'a mut ActionKind) -> Self {
+        Self { flag, kind }
+    }
+
+    pub fn flag(&self) -> i32 {
+        self.flag
+    }
+
+    pub fn toggle_state(&self) -> Option<bool> {
+        self.kind.toggle_state()
+    }
+
+    pub fn set_toggle_state(&mut self, state: bool) -> bool {
+        self.kind.set_toggle_state(state)
     }
 }
 
@@ -59,10 +94,12 @@ fn action_error(error: Box<dyn Error>) {
 }
 
 extern "C" fn action_hook(command_id: i32, flag: i32) -> bool {
-    let actions = &Reaper::get().actions;
-    for action in actions.iter() {
+    let actions = &mut Reaper::get_mut().actions;
+    for action in actions.iter_mut() {
         if action.command_id.get() == command_id as u32 {
-            match action.call(flag) {
+            let operation = &action.operation;
+            let mut hook = ActionHook::new(flag, &mut action.kind);
+            match operation(&mut hook) {
                 Ok(_) => (),
                 Err(e) => action_error(e),
             };
@@ -70,6 +107,20 @@ extern "C" fn action_hook(command_id: i32, flag: i32) -> bool {
         }
     }
     false
+}
+
+extern "C" fn toggle_action_hook(command_id: i32) -> i32 {
+    let actions = &Reaper::get().actions;
+    for action in actions.iter() {
+        if action.command_id.get() == command_id as u32 {
+            return match action.kind.toggle_state() {
+                Some(true) => 1,
+                Some(false) => 0,
+                None => -1,
+            };
+        }
+    }
+    -1
 }
 
 extern "C" fn timer_f() {
@@ -91,6 +142,7 @@ pub struct Reaper {
     swell: Swell,
     actions: Vec<Action>,
     hook: extern "C" fn(i32, i32) -> bool,
+    toggle_action_hook: extern "C" fn(i32) -> i32,
     accels: Vec<Gaccel>,
     timers: HashMap<String, (Instant, Arc<RefCell<dyn Timer>>)>,
     csurfases: HashMap<
@@ -107,10 +159,17 @@ impl Reaper {
         let low = rea_rs_low::Reaper::load(context);
         let actions = Vec::new();
         let hook = action_hook;
+        let toggle_action_hook = toggle_action_hook;
+        let swell = Swell::load(context);
+        Swell::make_available_globally(swell);
         unsafe {
             low.plugin_register(
                 c_str!("hookcommand").as_ptr(),
                 hook as *mut _,
+            );
+            low.plugin_register(
+                c_str!("toggleaction").as_ptr(),
+                toggle_action_hook as *mut _,
             );
         }
         Self {
@@ -118,6 +177,7 @@ impl Reaper {
             swell: Swell::load(context),
             actions,
             hook,
+            toggle_action_hook,
             accels: Vec::new(),
             timers: HashMap::new(),
             csurfases: HashMap::new(),
@@ -266,7 +326,8 @@ impl Reaper {
         &mut self,
         id_string: &'static str,
         description: &'static str,
-        operation: impl Fn(i32) -> Result<(), Box<dyn Error>> + 'static,
+        kind: ActionKind,
+        operation: impl Fn(&mut ActionHook) -> Result<(), Box<dyn Error>> + 'static,
         key_binding: impl Into<Option<KeyBinding>>,
     ) -> Result<RegisteredAccel, Box<dyn Error>> {
         let accel =
@@ -274,6 +335,7 @@ impl Reaper {
         let action = Action {
             command_id: accel.command_id,
             operation: Box::new(operation),
+            kind,
         };
         self.actions.push(action);
 
@@ -341,6 +403,10 @@ impl Drop for Reaper {
             low.plugin_register(
                 c_str!("-hookcommand").as_ptr(),
                 self.hook as *mut _,
+            );
+            low.plugin_register(
+                c_str!("-toggleaction").as_ptr(),
+                self.toggle_action_hook as *mut _,
             );
         }
         for accel in self.accels.iter_mut() {
@@ -428,8 +494,43 @@ pub struct RegisteredAction {
     pub command_id: CommandId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionKind {
     NotToggleable,
+    Toggleable(bool),
+}
+
+impl ActionKind {
+    pub fn is_toggleable(self) -> bool {
+        matches!(self, Self::Toggleable(_))
+    }
+
+    pub fn toggle_state(self) -> Option<bool> {
+        match self {
+            Self::Toggleable(state) => Some(state),
+            Self::NotToggleable => None,
+        }
+    }
+
+    pub fn set_toggle_state(&mut self, state: bool) -> bool {
+        match self {
+            Self::Toggleable(current) => {
+                *current = state;
+                true
+            }
+            Self::NotToggleable => false,
+        }
+    }
+
+    pub fn toggle(&mut self) -> Option<bool> {
+        match self {
+            Self::Toggleable(current) => {
+                *current = !*current;
+                Some(*current)
+            }
+            Self::NotToggleable => None,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

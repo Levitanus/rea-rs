@@ -7,6 +7,7 @@ use rea_rs::project_info::{
     BoundsMode, RenderMode, RenderSettings, RenderTail, RenderTailFlags,
 };
 use rea_rs::{
+    ActionHook, ActionKind,
     AutomationMode, Color, CommandId, EnvelopeChunk, EnvelopePoint,
     EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo, ExtState,
     GenericSend, GenericSendMut, HardwareSocket, Immutable, ItemFade,
@@ -108,6 +109,7 @@ fn action() -> TestStep {
         let action = rpr.register_action(
             "TestCommand",
             "command for test action work",
+            ActionKind::NotToggleable,
             move |_| {
                 debug!("Write from Action!");
                 send.send(true)?;
