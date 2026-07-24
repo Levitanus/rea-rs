@@ -1,3 +1,4 @@
+use log::debug;
 use rea_rs_low::{
     create_cpp_to_rust_control_surface, raw::{self, gaccel_register_t},
     register_plugin_destroy_hook, IReaperControlSurface, PluginContext, Swell,
@@ -362,16 +363,16 @@ impl Reaper {
                 double_boxed_low_cs.as_ref().into(),
             )
         };
-        println!("made cpp pointer");
+        debug!("made cpp pointer");
         let s = c_str!("csurf_inst");
         let ret = unsafe {
             self.low().plugin_register(s.as_ptr(), cpp_cs.as_ptr() as _)
         };
 
-        println!("registered: {ret}");
+        debug!("registered: {ret}");
         self.csurfases
             .insert(id_string, (double_boxed_low_cs, low_cs_thin_ptr, cpp_cs));
-        println!("added to HashMap: {:#?}", self.csurfases);
+        debug!("added to HashMap: {:#?}", self.csurfases);
     }
 
     pub fn has_control_surface(&self, id_string: &String) -> bool {

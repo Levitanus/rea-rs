@@ -528,12 +528,12 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 let monitor = unsafe { *(parm2 as *mut i32) };
                 CSurfExtended::SetInputMonitor(track, monitor)
             }
-            raw::CSURF_EXT_SETMETRONOME => CSurfExtended::SetMetronome(
-                unsafe { *(parm1 as *mut i32) } != 0,
-            ),
-            raw::CSURF_EXT_SETAUTORECARM => CSurfExtended::SetAutoRecArm(
-                unsafe { *(parm1 as *mut i32) } != 0,
-            ),
+            raw::CSURF_EXT_SETMETRONOME => {
+                CSurfExtended::SetMetronome((parm1 as usize) != 0)
+            }
+            raw::CSURF_EXT_SETAUTORECARM => {
+                CSurfExtended::SetAutoRecArm((parm1 as usize) != 0)
+            }
             raw::CSURF_EXT_SETRECMODE => CSurfExtended::SetRecMode(
                 match unsafe { *(parm1 as *mut i32) } {
                     0 => CSurfRecMode::SplitForTakes,
@@ -570,7 +570,7 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 CSurfExtended::SetFxEnabled {
                     track,
                     fx_idx: unsafe { *(parm2 as *mut i32) } as usize,
-                    enabled: unsafe { *(parm3 as *mut i32) } != 0,
+                    enabled: (parm3 as usize) != 0,
                 }
             }
             raw::CSURF_EXT_SETFXPARAM => {
@@ -718,11 +718,15 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             raw::CSURF_EXT_SETFXOPEN => CSurfExtended::SetFxOpen {
                 track: track_from_mut!(parm1, project),
                 fx_idx: unsafe { *(parm2 as *mut i32) } as usize,
-                opened: unsafe { *(parm3 as *mut i32) } != 0,
+                opened: (parm3 as usize) != 0,
             },
-            raw::CSURF_EXT_SETFXCHANGE => CSurfExtended::SetFxChange {
-                track: track_from_mut!(parm1, project),
-                is_rec_fx: unsafe { *(parm2 as *mut i32) } == 1,
+            raw::CSURF_EXT_SETFXCHANGE => {
+                // REAPER passes flags in parm2 as INT_PTR, not as int*.
+                let flags = parm2 as usize;
+                CSurfExtended::SetFxChange {
+                    track: track_from_mut!(parm1, project),
+                    is_rec_fx: (flags & 1) != 0,
+                }
             },
             raw::CSURF_EXT_SETPROJECTMARKERCHANGE => {
                 CSurfExtended::SetProjectMarkerChange
@@ -738,9 +742,9 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             }
             raw::CSURF_EXT_MIDI_DEVICE_REMAP => {
                 CSurfExtended::MidiDeviceRemap {
-                    is_out: unsafe { *(parm1 as *mut i32) } != 0,
-                    old_idx: unsafe { *(parm2 as *mut i32) },
-                    new_iox: unsafe { *(parm3 as *mut i32) },
+                    is_out: (parm1 as usize) != 0,
+                    old_idx: parm2 as isize as i32,
+                    new_iox: parm3 as isize as i32,
                 }
             }
             _ => return 0,
