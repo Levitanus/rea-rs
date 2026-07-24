@@ -1,10 +1,7 @@
 pub use crate::utils::WithReaperPtr;
 use crate::{
     ptr_wrappers::{MediaItem, MediaTrack, ReaProject},
-    utils::{
-        as_c_str, as_c_string, as_string, string_from_buf,
-        WithNull,
-    },
+    utils::{as_c_str, as_c_string, as_string, string_from_buf, WithNull},
     Color, CommandId, Immutable, Item, MarkerRegionInfo, MarkerRegionIterator,
     Mutable, PlayRate, Position, ProjectContext, ReaRsError, Reaper,
     TimeRange, TimeRangeKind, TimeSignature, Track, UndoFlags,
@@ -157,6 +154,24 @@ impl<'a> Project {
             Reaper::get()
                 .low()
                 .MarkProjectDirty(self.context().to_raw())
+        }
+    }
+
+    pub fn get_last_touched_track(&self) -> Option<Track<'_, Immutable>> {
+        let ptr = Reaper::get().low().GetLastTouchedTrack();
+        match MediaTrack::new(ptr) {
+            None => None,
+            Some(ptr) => Some(Track::new(self, ptr)),
+        }
+    }
+
+    pub fn get_last_touched_track_mut(
+        &mut self,
+    ) -> Option<Track<'_, Mutable>> {
+        let ptr = Reaper::get().low().GetLastTouchedTrack();
+        match MediaTrack::new(ptr) {
+            None => None,
+            Some(ptr) => Some(Track::new(self, ptr)),
         }
     }
 
