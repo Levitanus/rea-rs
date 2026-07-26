@@ -52,11 +52,16 @@ impl<'a> TrackSend<'a, Mutable> {
         let source: &Track<'a, Mutable> =
             unsafe { std::mem::transmute(source) };
         TrackSend::new(&source, index as usize)
+            .expect("No send at the given index after creation")
     }
 }
 impl<'a, T: ProbablyMutable> GenericSend<'a, T> for TrackSend<'a, T> {
-    fn new(track: &'a Track<T>, index: usize) -> Self {
-        Self { track, index }
+    fn new(track: &'a Track<T>, index: usize) -> Option<Self> {
+        let obj = Self { track, index };
+        if let Err(_) = obj.validate() {
+            return None;
+        }
+        Some(obj)
     }
     /// Track that sends outside
     fn parent_track(&self) -> &Track<T> {
@@ -82,8 +87,12 @@ pub struct TrackReceive<'a, T: ProbablyMutable> {
 }
 impl<'a, T: ProbablyMutable> TrackReceive<'a, T> {}
 impl<'a, T: ProbablyMutable> GenericSend<'a, T> for TrackReceive<'a, T> {
-    fn new(track: &'a Track<T>, index: usize) -> Self {
-        Self { track, index }
+    fn new(track: &'a Track<T>, index: usize) -> Option<Self> {
+        let obj = Self { track, index };
+        if let Err(_) = obj.validate() {
+            return None;
+        }
+        Some(obj)
     }
     /// Track, that receives.
     fn parent_track(&self) -> &Track<T> {
@@ -111,8 +120,12 @@ pub struct HardwareSend<'a, T: ProbablyMutable> {
 }
 impl<'a, T: ProbablyMutable> HardwareSend<'a, T> {}
 impl<'a, T: ProbablyMutable> GenericSend<'a, T> for HardwareSend<'a, T> {
-    fn new(track: &'a Track<T>, index: usize) -> Self {
-        Self { track, index }
+    fn new(track: &'a Track<T>, index: usize) -> Option<Self> {
+        let obj = Self { track, index };
+        if let Err(_) = obj.validate() {
+            return None;
+        }
+        Some(obj)
     }
     fn parent_track(&self) -> &Track<T> {
         self.track
@@ -129,10 +142,27 @@ impl<'a, T: ProbablyMutable> SendIntType for HardwareSend<'a, T> {
 }
 impl<'a> GenericSendMut<'a> for HardwareSend<'a, Mutable> {}
 
-pub trait GenericSend<'a, T: ProbablyMutable + 'a>: SendIntType {
+pub trait GenericSend<'a, T: ProbablyMutable + 'a>:
+    SendIntType + Sized
+{
     fn parent_track(&self) -> &Track<T>;
     fn index(&self) -> usize;
-    fn new(track: &'a Track<T>, index: usize) -> Self;
+    fn new(track: &'a Track<T>, index: usize) -> Option<Self>;
+    fn validate(&self) -> anyhow::Result<()> {
+        let valid = match self.as_int() {
+            ..0 => self.parent_track().n_receives() > self.index(),
+
+            0 => self.parent_track().n_sends() > self.index(),
+            0.. => self.parent_track().n_hardware_sends() > self.index(),
+        };
+        match valid {
+            false => {
+                Err(ReaRsError::InvalidObject("no receive at the given index")
+                    .into())
+            }
+            true => Ok(()),
+        }
+    }
 
     /// Core method to retrieve send properties.
     /// With probability of 99% you shouldn't use it.

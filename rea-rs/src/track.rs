@@ -506,6 +506,21 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         }
     }
 
+    pub fn get_send(&self, index: usize) -> Option<TrackSend<'_, T>> {
+        TrackSend::new(self, index)
+    }
+
+    pub fn get_recieve(&self, index: usize) -> Option<TrackReceive<'_, T>> {
+        TrackReceive::new(self, index)
+    }
+
+    pub fn get_hardware_send(
+        &self,
+        index: usize,
+    ) -> Option<HardwareSend<'_, T>> {
+        HardwareSend::new(self, index)
+    }
+
     /// Get status of all track groups for specified parameter as bits.
     ///
     /// Returns 2 u32 values, each representing 32 track groups.
@@ -984,6 +999,7 @@ impl<'a> Track<'a, Mutable> {
                 .CreateTrackSend(self.get().as_ptr(), null_mut())
         };
         HardwareSend::<Mutable>::new(self, index as usize)
+            .expect("No hardware send after creation")
     }
 
     pub fn delete(self) {
