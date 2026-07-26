@@ -7,17 +7,17 @@ use rea_rs::project_info::{
     BoundsMode, RenderMode, RenderSettings, RenderTail, RenderTailFlags,
 };
 use rea_rs::{
-    ActionHook, ActionKind,
-    AutomationMode, Color, CommandId, EnvelopeChunk, EnvelopePoint,
-    EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo, ExtState,
-    GenericSend, GenericSendMut, HardwareSocket, Immutable, ItemFade,
-    MarkerRegionInfo, MessageBoxValue, Mutable, Pan, PanLaw, Pitch, PlayRate,
-    PluginContext, Position, Project, RazorEdit, ReaRsError, Reaper, RecInput,
-    RecMode, RecMonitoring, RecOutMode, SampleAmount, SendDestChannels,
-    SendMIDIProps, SendMode, SendSourceChannels, SoloMode, SourceOffset,
-    TakeChannelMode, TakePitchMode, TimeMode, Track, TrackFolderState,
-    TrackGroupParam, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
-    TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX, GUID,
+    ActionHook, ActionKind, AutomationMode, Color, CommandId, EnvelopeChunk,
+    EnvelopePoint, EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo,
+    ExtState, GenericSend, GenericSendMut, HardwareSocket, Immutable,
+    ItemFade, MarkerRegionInfo, MessageBoxValue, Mutable, Pan, PanLaw, Pitch,
+    PlayRate, PluginContext, Position, Project, RazorEdit, ReaRsError, Reaper,
+    RecInput, RecMode, RecMonitoring, RecOutMode, SampleAmount,
+    SendDestChannels, SendMIDIProps, SendMode, SendSourceChannels, SoloMode,
+    SourceOffset, TakeChannelMode, TakePitchMode, TimeMode, Track,
+    TrackFolderState, TrackGroupParam, TrackPan, TrackPerformanceFlags,
+    TrackPlayOffset, TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX,
+    GUID,
 };
 use rea_rs_macros::reaper_extension_plugin;
 use rea_rs_test::{TestStep, TestStepResult};

@@ -516,7 +516,7 @@ pub mod root {
         pub __nusers: ::std::os::raw::c_uint,
         pub __kind: ::std::os::raw::c_int,
         pub __spins: ::std::os::raw::c_short,
-        pub __unused: ::std::os::raw::c_short,
+        pub __glibc_reserved: ::std::os::raw::c_short,
         pub __list: root::__pthread_list_t,
     }
     impl Default for __pthread_mutex_s {
@@ -1361,24 +1361,11 @@ pub mod root {
             }
         }
     }
-    #[repr(C)]
-    pub struct REAPER_PeakGet_Interface__bindgen_vtable(
-        ::std::os::raw::c_void,
-    );
     #[doc = " Peak getting/building API\n\n These are really only needed if you implement a PCM_source or PCM_sink.\n\n See functions PeakGet_Create(), PeakBuild_Create(), GetPeakFileName(), ClearPeakCache()"]
     #[repr(C)]
-    #[derive(Debug, Hash, PartialEq, Eq)]
+    #[derive(Debug, Default, Copy, Clone, Hash, PartialEq, Eq)]
     pub struct REAPER_PeakGet_Interface {
-        pub vtable_: *const REAPER_PeakGet_Interface__bindgen_vtable,
-    }
-    impl Default for REAPER_PeakGet_Interface {
-        fn default() -> Self {
-            let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
-            unsafe {
-                ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-                s.assume_init()
-            }
-        }
+        pub _address: u8,
     }
     #[repr(C)]
     pub struct REAPER_PeakBuild_Interface__bindgen_vtable(
