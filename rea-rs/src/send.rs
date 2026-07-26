@@ -8,6 +8,14 @@ use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
 use std::ptr::null_mut;
 
+#[repr(i32)]
+#[derive(Debug, Copy, Clone, IntEnum, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SendType {
+    Receive = -1,
+    Send = 0,
+    HardwareSend = 1,
+}
+
 pub trait SendIntType {
     /// <0 for receives, 0=sends, >0 for hardware outputs.
     fn as_int(&self) -> i32 {
@@ -15,6 +23,14 @@ pub trait SendIntType {
     }
     /// <0 for receives, 0=sends, >0 for hardware outputs.
     fn as_int_static() -> i32;
+
+    fn send_type(&self) -> SendType {
+        match self.as_int() {
+            ..0 => SendType::Receive,
+            0 => SendType::Send,
+            1.. => SendType::HardwareSend,
+        }
+    }
 }
 
 /// Main Send type, that commonly used.
