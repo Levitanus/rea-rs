@@ -53,6 +53,7 @@ where
     fn set_preset_index(&mut self, preset: usize) -> ReaperResult<()>;
     fn previous_preset(&mut self) -> ReaperResult<()>;
     fn next_preset(&mut self) -> ReaperResult<()>;
+    fn delete(self) -> Result<(), ReaRsError>;
 }
 
 pub struct TrackFX<'a, T: ProbablyMutable> {
@@ -372,6 +373,18 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
                 desired_index as i32,
                 true,
             )
+        }
+    }
+    fn delete(self) -> Result<(), ReaRsError> {
+        match unsafe {
+            Reaper::get()
+                .low()
+                .TrackFX_Delete(self.parent.get().as_ptr(), self.index as i32)
+        } {
+            true => Ok(()),
+            false => {
+                Err(ReaRsError::UnsuccessfulOperation("can not delete FX"))
+            }
         }
     }
 
@@ -1049,6 +1062,18 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
                 desired_index as i32,
                 true,
             )
+        }
+    }
+    fn delete(self) -> Result<(), ReaRsError> {
+        match unsafe {
+            Reaper::get()
+                .low()
+                .TakeFX_Delete(self.parent.get().as_ptr(), self.index as i32)
+        } {
+            true => Ok(()),
+            false => {
+                Err(ReaRsError::UnsuccessfulOperation("can not delete FX"))
+            }
         }
     }
 
