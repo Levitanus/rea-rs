@@ -13,6 +13,8 @@ use std::{
     ptr::null,
 };
 
+const BUF_SIZE: usize = 4096;
+
 /// Serializes extension data.
 ///
 /// This struct should be used instead of simple `set_ext_state`
@@ -102,7 +104,7 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
         let buf_size = if let Some(s) = buf_size.into() {
             s
         } else {
-            4096
+            BUF_SIZE
         };
         let mut obj = Self {
             section: section.into(),
@@ -130,6 +132,29 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
             }
         }
         obj
+    }
+
+    /// Load value from ExtState without making ExtState object.
+    pub fn load_value(
+        section: impl Into<String>,
+        key: impl Into<String>,
+        object: &'a O,
+        buf_size: impl Into<Option<usize>>,
+    ) -> Result<Option<T>, ReaRsError> {
+        let buf_size = if let Some(s) = buf_size.into() {
+            s
+        } else {
+            BUF_SIZE
+        };
+        let obj = Self {
+            section: section.into(),
+            key: key.into(),
+            value: None,
+            persist: false,
+            object: object,
+            buf_size,
+        };
+        obj.get()
     }
 
     fn section(&self) -> String {
