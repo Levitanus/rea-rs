@@ -114,12 +114,12 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
             object: object,
             buf_size,
         };
-        match obj.value.as_ref() {
+        match &obj.value {
             None => {
                 if persist {
                     match obj.get() {
                         Err(_) | Ok(None) => (),
-                        Ok(Some(val)) => obj.set(val),
+                        Ok(Some(val)) => obj.value = Some(val),
                     }
                 } else {
                     obj.delete()
@@ -155,6 +155,32 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
             buf_size,
         };
         obj.get()
+    }
+
+    /// Make ExtState object assuming the existence of the value.
+    pub fn existing<V>(
+        section: impl Into<String>,
+        key: impl Into<String>,
+        persist: bool,
+        object: &'a O,
+        buf_size: impl Into<Option<usize>>,
+    ) -> ExtState<'a, V, O>
+    where
+        V: Serialize + DeserializeOwned + Clone + Debug,
+    {
+        let buf_size = if let Some(s) = buf_size.into() {
+            s
+        } else {
+            BUF_SIZE
+        };
+        ExtState {
+            section: section.into(),
+            key: key.into(),
+            value: None,
+            persist,
+            object,
+            buf_size,
+        }
     }
 
     fn section(&self) -> String {
