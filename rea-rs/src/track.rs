@@ -1034,8 +1034,8 @@ impl<'a> Track<'a, Mutable> {
     ) -> TrackReceive<'_, Mutable> {
         let index = unsafe {
             Reaper::get().low().CreateTrackSend(
-                self.get().as_ptr(),
                 source.get_pointer().as_ptr(),
+                self.get().as_ptr(),
             )
         };
         TrackReceive::<Mutable>::new(self, index as usize)
