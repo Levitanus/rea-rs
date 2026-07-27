@@ -1,8 +1,5 @@
 use std::{
-    marker::PhantomData,
-    mem::{transmute, MaybeUninit},
-    ops::Range,
-    ptr::NonNull,
+    ffi::CString, marker::PhantomData, mem::{MaybeUninit, transmute}, ops::Range, ptr::NonNull,
 };
 
 use serde_derive::{Deserialize, Serialize};
@@ -24,9 +21,10 @@ where
     fn name(&self) -> String;
     fn is_enabled(&self) -> bool;
     fn is_online(&self) -> bool;
-    fn n_inputs(&self) -> usize;
-    fn n_outputs(&self) -> usize;
-    fn n_params(&self) -> usize;
+    fn is_instrument(&self) -> bool;
+    fn n_inputs(&self) -> ReaperResult<usize>;
+    fn n_outputs(&self) -> ReaperResult<usize>;
+    fn n_params(&self) -> ReaperResult<usize>;
     fn n_presets(&self) -> ReaperResult<usize>;
     /// FX Preset name
     fn preset(&self) -> ReaperResult<String>;
@@ -51,10 +49,7 @@ where
     fn move_to_track(self, track: &Track<Mutable>, desired_index: usize);
     /// Preset can be as preset name from list of fx presets. Or path to
     /// `.vstpreset` file.
-    fn set_preset(
-        &mut self,
-        preset: impl Into<String>,
-    ) -> ReaperResult<()>;
+    fn set_preset(&mut self, preset: impl Into<String>) -> ReaperResult<()>;
     fn set_preset_index(&mut self, preset: usize) -> ReaperResult<()>;
     fn previous_preset(&mut self) -> ReaperResult<()>;
     fn next_preset(&mut self) -> ReaperResult<()>;
@@ -89,7 +84,7 @@ impl<'a, T: ProbablyMutable> TrackFX<'a, T> {
         }
     }
     /// Iterate through (Immutable) FX params
-    pub fn iter_params(&'a self) -> FXParamIterator<T, Track<'a, T>, Self> {
+    pub fn iter_params(&'a self) -> FXParamIterator<'a, T, Track<'a, T>, Self> {
         FXParamIterator::new(self)
     }
 }
@@ -128,10 +123,32 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
             )
         }
     }
-    /// # Panics
-    ///
-    /// if reaper returns error, which, probably, signals, that FX is deleted.
-    fn n_inputs(&self) -> usize {
+    fn is_instrument(&self) -> bool {
+        let parmname = CString::new("is_instrument").expect("failed to make CString");
+        let size = 8;
+        let buf = make_c_string_buf(size).into_raw();
+        let got_value = unsafe {
+            Reaper::get().low().TrackFX_GetNamedConfigParm(
+                self.parent.get().as_ptr(),
+                self.index as i32,
+                parmname.as_ptr(),
+                buf,
+                size as i32,
+            )
+        };
+        if !got_value {
+            return false;
+        }
+
+        matches!(
+            as_string_mut(buf)
+                .ok()
+                .and_then(|s| s.trim().parse::<i32>().ok()),
+            Some(1)
+        )
+    }
+
+    fn n_inputs(&self) -> ReaperResult<usize> {
         let (mut ins, mut outs) =
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
         let result = unsafe {
@@ -142,15 +159,14 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
                 outs.as_mut_ptr(),
             )
         };
-        if result < 0 {
-            panic!("Failed to get n_inputs. Probably, fx deleted.");
+        match result {
+            x if x < 0 => Err(ReaRsError::UnsuccessfulOperation(
+                "Can not get n_inputs.",
+            )),
+            _ => Ok(unsafe { ins.assume_init() as usize }),
         }
-        unsafe { ins.assume_init() as usize }
     }
-    /// # Panics
-    ///
-    /// if reaper returns error, which, probably, signals, that FX is deleted.
-    fn n_outputs(&self) -> usize {
+    fn n_outputs(&self) -> ReaperResult<usize> {
         let (mut ins, mut outs) =
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
         let result = unsafe {
@@ -161,25 +177,26 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
                 outs.as_mut_ptr(),
             )
         };
-        if result < 0 {
-            panic!("Failed to get n_outputs. Probably, fx deleted.");
+        match result {
+            x if x < 0 => Err(ReaRsError::UnsuccessfulOperation(
+                "Can not get n_outputs.",
+            )),
+            _ => Ok(unsafe { outs.assume_init() as usize }),
         }
-        unsafe { outs.assume_init() as usize }
     }
-    /// # Panics
-    ///
-    /// if reaper returns error, which, probably, signals, that FX is deleted.
-    fn n_params(&self) -> usize {
+    fn n_params(&self) -> ReaperResult<usize> {
         let result = unsafe {
             Reaper::get().low().TrackFX_GetNumParams(
                 self.parent.get().as_ptr(),
                 self.index as i32,
             )
         };
-        if result < 0 {
-            panic!("Failed to get n_params. Probably, fx deleted.");
+        match result {
+            x if x < 0 => Err(ReaRsError::UnsuccessfulOperation(
+                "Can not get n_params.",
+            )),
+            _ => Ok(result as usize),
         }
-        result as usize
     }
 
     fn n_presets(&self) -> ReaperResult<usize> {
@@ -358,10 +375,7 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
         }
     }
 
-    fn set_preset(
-        &mut self,
-        preset: impl Into<String>,
-    ) -> ReaperResult<()> {
+    fn set_preset(&mut self, preset: impl Into<String>) -> ReaperResult<()> {
         let mut name = preset.into();
         let result = unsafe {
             Reaper::get().low().TrackFX_SetPreset(
@@ -434,9 +448,12 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
         &'a self,
         index: usize,
     ) -> Option<FXParam<'a, M, Track<'a, M>, Self>> {
-        match index < self.n_params() {
-            true => Some(FXParam::new(self, index)),
-            false => None,
+        match self.n_params() {
+            Ok(n_params) => match index < n_params {
+                true => Some(FXParam::new(self, index)),
+                false => None,
+            },
+            Err(_) => None,
         }
     }
 
@@ -635,9 +652,12 @@ impl<'a> param_parent::FXParamParentMut<'a, Track<'a, Mutable>>
         &'a mut self,
         index: usize,
     ) -> Option<FXParam<'a, Mutable, Track<'a, Mutable>, Self>> {
-        match index < self.n_params() {
-            true => Some(FXParam::new(self, index)),
-            false => None,
+        match self.n_params() {
+            Ok(n_params) => match index < n_params {
+                true => Some(FXParam::new(self, index)),
+                false => None,
+            },
+            Err(_) => None,
         }
     }
     fn param_from_ident_string_mut(
@@ -680,11 +700,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Track<'a, Mutable>>
         }
     }
 
-    fn set_param_value(
-        &self,
-        param: usize,
-        value: f64,
-    ) -> ReaperResult<()> {
+    fn set_param_value(&self, param: usize, value: f64) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TrackFX_SetParam(
                 self.parent.get().as_ptr(),
@@ -749,7 +765,7 @@ impl<'a, T: ProbablyMutable> TakeFX<'a, T> {
         }
     }
     /// Iterate through (Immutable) FX params
-    pub fn iter_params(&'a self) -> FXParamIterator<T, Take<'a, T>, Self> {
+    pub fn iter_params(&'a self) -> FXParamIterator<'a, T, Take<'a, T>, Self> {
         FXParamIterator::new(self)
     }
 }
@@ -787,10 +803,31 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
             )
         }
     }
-    /// # Panics
-    ///
-    /// if reaper returns error, which, probably, signals, that FX is deleted.
-    fn n_inputs(&self) -> usize {
+    fn is_instrument(&self) -> bool {
+        let parmname = CString::new("is_instrument").expect("failed to make CString");
+        let size = 8;
+        let buf = make_c_string_buf(size).into_raw();
+        let got_value = unsafe {
+            Reaper::get().low().TakeFX_GetNamedConfigParm(
+                self.parent.get().as_ptr(),
+                self.index as i32,
+                parmname.as_ptr(),
+                buf,
+                size as i32,
+            )
+        };
+        if !got_value {
+            return false;
+        }
+
+        matches!(
+            as_string_mut(buf)
+                .ok()
+                .and_then(|s| s.trim().parse::<i32>().ok()),
+            Some(1)
+        )
+    }
+    fn n_inputs(&self) -> ReaperResult<usize> {
         let (mut ins, mut outs) =
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
         let result = unsafe {
@@ -801,15 +838,14 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
                 outs.as_mut_ptr(),
             )
         };
-        if result < 0 {
-            panic!("Failed to get n_inputs. Probably, fx deleted.");
+        match result {
+            x if x < 0 => Err(ReaRsError::UnsuccessfulOperation(
+                "Can not get n_inputs.",
+            )),
+            _ => Ok(unsafe { ins.assume_init() as usize }),
         }
-        unsafe { ins.assume_init() as usize }
     }
-    /// # Panics
-    ///
-    /// if reaper returns error, which, probably, signals, that FX is deleted.
-    fn n_outputs(&self) -> usize {
+    fn n_outputs(&self) -> ReaperResult<usize> {
         let (mut ins, mut outs) =
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
         let result = unsafe {
@@ -820,25 +856,26 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
                 outs.as_mut_ptr(),
             )
         };
-        if result < 0 {
-            panic!("Failed to get n_outputs. Probably, fx deleted.");
+        match result {
+            x if x < 0 => Err(ReaRsError::UnsuccessfulOperation(
+                "Can not get n_outputs.",
+            )),
+            _ => Ok(unsafe { outs.assume_init() as usize }),
         }
-        unsafe { outs.assume_init() as usize }
     }
-    /// # Panics
-    ///
-    /// if reaper returns error, which, probably, signals, that FX is deleted.
-    fn n_params(&self) -> usize {
+    fn n_params(&self) -> ReaperResult<usize> {
         let result = unsafe {
             Reaper::get().low().TakeFX_GetNumParams(
                 self.parent.get().as_ptr(),
                 self.index as i32,
             )
         };
-        if result < 0 {
-            panic!("Failed to get n_params. Probably, fx deleted.");
+        match result {
+            x if x < 0 => Err(ReaRsError::UnsuccessfulOperation(
+                "Can not get n_params.",
+            )),
+            _ => Ok(result as usize),
         }
-        result as usize
     }
 
     fn n_presets(&self) -> ReaperResult<usize> {
@@ -1015,10 +1052,7 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
         }
     }
 
-    fn set_preset(
-        &mut self,
-        preset: impl Into<String>,
-    ) -> ReaperResult<()> {
+    fn set_preset(&mut self, preset: impl Into<String>) -> ReaperResult<()> {
         let mut name = preset.into();
         let result = unsafe {
             Reaper::get().low().TakeFX_SetPreset(
@@ -1090,9 +1124,12 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
         &'a self,
         index: usize,
     ) -> Option<FXParam<'a, M, Take<'a, M>, Self>> {
-        match index < self.n_params() {
-            true => Some(FXParam::new(self, index)),
-            false => None,
+        match self.n_params() {
+            Ok(n_params) => match index < n_params {
+                true => Some(FXParam::new(self, index)),
+                false => None,
+            },
+            Err(_) => None,
         }
     }
 
@@ -1292,9 +1329,12 @@ impl<'a> param_parent::FXParamParentMut<'a, Take<'a, Mutable>>
         &'a mut self,
         index: usize,
     ) -> Option<FXParam<'a, Mutable, Take<'a, Mutable>, Self>> {
-        match index < self.n_params() {
-            true => Some(FXParam::new(self, index)),
-            false => None,
+        match self.n_params() {
+            Ok(n_params) => match index < n_params {
+                true => Some(FXParam::new(self, index)),
+                false => None,
+            },
+            Err(_) => None,
         }
     }
     fn param_from_ident_string_mut(
@@ -1337,11 +1377,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Take<'a, Mutable>>
         }
     }
 
-    fn set_param_value(
-        &self,
-        param: usize,
-        value: f64,
-    ) -> ReaperResult<()> {
+    fn set_param_value(&self, param: usize, value: f64) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TakeFX_SetParam(
                 self.parent.get().as_ptr(),
@@ -1456,10 +1492,7 @@ impl<
         self.parent.set_param_value(self.index, value)
     }
     /// Set value as it was scaled to be in `0.0..1.0` range.
-    pub fn set_value_normalized(
-        &mut self,
-        value: f64,
-    ) -> ReaperResult<()> {
+    pub fn set_value_normalized(&mut self, value: f64) -> ReaperResult<()> {
         assert!((0.0..1.0).contains(&value));
         self.parent.set_param_value_normalized(self.index, value)
     }
@@ -1628,7 +1661,11 @@ impl<
 {
     type Item = FXParam<'a, M, P, F>;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index == self.parent.n_params() {
+        let n_params = match self.parent.n_params() {
+            Ok(n_params) => n_params,
+            Err(_) => return None,
+        };
+        if self.index == n_params {
             return None;
         }
         let param = self.parent.param(self.index);
