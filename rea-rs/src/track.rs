@@ -992,7 +992,7 @@ impl<'a> Track<'a, Mutable> {
     /// # Note
     ///
     /// To add regular track send use [crate::send::TrackSend::create_new]
-    pub fn add_hardware_send(&mut self) -> HardwareSend<Mutable> {
+    pub fn add_hardware_send(&mut self) -> HardwareSend<'_, Mutable> {
         let index = unsafe {
             Reaper::get()
                 .low()
@@ -1000,6 +1000,46 @@ impl<'a> Track<'a, Mutable> {
         };
         HardwareSend::<Mutable>::new(self, index as usize)
             .expect("No hardware send after creation")
+    }
+
+    /// Add TrackSend, that sends audio or midi to other track.
+    ///
+    /// All future tweaks done on the TrackSend.
+    ///
+    /// Try to keep send object as little as possible. It is accessed
+    /// by indexing, so everything falls, as sends are changed.
+    pub fn add_send(
+        &mut self,
+        destination: &Track<'_, Immutable>,
+    ) -> TrackSend<'_, Mutable> {
+        let index = unsafe {
+            Reaper::get().low().CreateTrackSend(
+                self.get().as_ptr(),
+                destination.get_pointer().as_ptr(),
+            )
+        };
+        TrackSend::<Mutable>::new(self, index as usize)
+            .expect("No send after creation")
+    }
+
+    /// Add TrackReceive, that sends audio or midi to other track.
+    ///
+    /// All future tweaks done on the TrackSend.
+    ///
+    /// Try to keep send object as little as possible. It is accessed
+    /// by indexing, so everything falls, as sends are changed.
+    pub fn add_receive(
+        &mut self,
+        source: &Track<'_, Immutable>,
+    ) -> TrackReceive<'_, Mutable> {
+        let index = unsafe {
+            Reaper::get().low().CreateTrackSend(
+                self.get().as_ptr(),
+                source.get_pointer().as_ptr(),
+            )
+        };
+        TrackReceive::<Mutable>::new(self, index as usize)
+            .expect("No send after creation")
     }
 
     pub fn delete(self) {
