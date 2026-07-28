@@ -154,7 +154,7 @@ impl<'a> Project {
         Ok(())
     }
 
-    pub fn get_last_touched_track(&self) -> Option<Track<'_, Immutable>> {
+    pub fn get_last_touched_track(&self) -> Option<Track> {
         let ptr = Reaper::get().low().GetLastTouchedTrack();
         match MediaTrack::new(ptr) {
             None => None,
@@ -162,9 +162,7 @@ impl<'a> Project {
         }
     }
 
-    pub fn get_last_touched_track_mut(
-        &mut self,
-    ) -> Option<Track<'_, Mutable>> {
+    pub fn get_last_touched_track_mut(&mut self) -> Option<Track> {
         let ptr = Reaper::get().low().GetLastTouchedTrack();
         match MediaTrack::new(ptr) {
             None => None,
@@ -551,7 +549,7 @@ impl<'a> Project {
         &mut self,
         index: impl Into<Option<usize>>,
         name: impl Into<String>,
-    ) -> Result<Track<Mutable>, ReaRsError> {
+    ) -> Result<Track, ReaRsError> {
         let n_tracks = self.n_tracks()?;
         let index = match index.into() {
             None => n_tracks,
@@ -577,12 +575,12 @@ impl<'a> Project {
         Ok(track)
     }
 
-    pub fn get_track(&self, index: usize) -> Option<Track<Immutable>> {
+    pub fn get_track(&self, index: usize) -> Option<Track> {
         let ptr = self.get_track_ptr(index)?;
         let track = Track::new(self, ptr);
         Some(track)
     }
-    pub fn get_track_mut(&mut self, index: usize) -> Option<Track<Mutable>> {
+    pub fn get_track_mut(&mut self, index: usize) -> Option<Track> {
         let ptr = self.get_track_ptr(index)?;
         let track = Track::new(self, ptr);
         Some(track)
@@ -601,18 +599,12 @@ impl<'a> Project {
         }
     }
 
-    pub fn get_selected_track(
-        &self,
-        index: usize,
-    ) -> Option<Track<Immutable>> {
+    pub fn get_selected_track(&self, index: usize) -> Option<Track> {
         let ptr = self.get_selected_track_ptr(index)?;
         let track = Track::new(self, ptr);
         Some(track)
     }
-    pub fn get_selected_track_mut(
-        &mut self,
-        index: usize,
-    ) -> Option<Track<Mutable>> {
+    pub fn get_selected_track_mut(&mut self, index: usize) -> Option<Track> {
         let ptr = self.get_selected_track_ptr(index)?;
         let track = Track::new(self, ptr);
         Some(track)
@@ -635,10 +627,10 @@ impl<'a> Project {
         }
     }
 
-    pub fn get_master_track(&self) -> Track<Immutable> {
+    pub fn get_master_track(&self) -> Track {
         Track::new(self, self.get_master_track_ptr())
     }
-    pub fn get_master_track_mut(&mut self) -> Track<Mutable> {
+    pub fn get_master_track_mut(&mut self) -> Track {
         Track::new(self, self.get_master_track_ptr())
     }
     fn get_master_track_ptr(&self) -> MediaTrack {
@@ -654,10 +646,10 @@ impl<'a> Project {
     }
     pub fn iter_tracks_mut(
         &mut self,
-        mut f: impl FnMut(Track<Mutable>) -> anyhow::Result<()>,
+        mut f: impl FnMut(Track) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
         for track in TracksIterator::new(self) {
-            let track = Track::<Mutable>::new(self, track.get()?);
+            let track = Track::new(self, track.get()?);
             f(track)?
         }
         Ok(())
@@ -668,10 +660,10 @@ impl<'a> Project {
     }
     pub fn iter_selected_tracks_mut(
         &mut self,
-        mut f: impl FnMut(Track<Mutable>) -> anyhow::Result<()>,
+        mut f: impl FnMut(Track) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
         for track in SelectedTracksIterator::new(self) {
-            let track = Track::<Mutable>::new(self, track.get()?);
+            let track = Track::new(self, track.get()?);
             f(track)?
         }
         Ok(())
@@ -685,11 +677,11 @@ impl<'a> Project {
         SelectedItemsIterator::new(self)
     }
 
-    pub fn get_item(&self, index: usize) -> Option<Item<Immutable>> {
+    pub fn get_item(&self, index: usize) -> Option<Item> {
         let item = Item::new(self, self.get_item_ptr(index)?);
         Some(item)
     }
-    pub fn get_item_mut(&mut self, index: usize) -> Option<Item<Mutable>> {
+    pub fn get_item_mut(&mut self, index: usize) -> Option<Item> {
         let item = Item::new(self, self.get_item_ptr(index)?);
         Some(item)
     }
@@ -707,16 +699,13 @@ impl<'a> Project {
         }
     }
 
-    pub fn get_selected_item(&self, index: usize) -> Option<Item<Immutable>> {
+    pub fn get_selected_item(&self, index: usize) -> Option<Item> {
         match self.selected_item_ptr(index) {
             Some(ptr) => Some(Item::new(self, ptr)),
             None => None,
         }
     }
-    pub fn get_selected_item_mut(
-        &mut self,
-        index: usize,
-    ) -> Option<Item<Mutable>> {
+    pub fn get_selected_item_mut(&mut self, index: usize) -> Option<Item> {
         match self.selected_item_ptr(index) {
             Some(ptr) => Some(Item::new(self, ptr)),
             None => None,
@@ -1559,7 +1548,7 @@ impl<'a> TracksIterator<'a> {
     }
 }
 impl<'a> Iterator for TracksIterator<'a> {
-    type Item = Track<'a, Immutable>;
+    type Item = Track;
     fn next(&mut self) -> Option<Self::Item> {
         let track = self.project.get_track(self.index);
         self.index += 1;
@@ -1591,7 +1580,7 @@ impl<'a> SelectedTracksIterator<'a> {
     }
 }
 impl<'a> Iterator for SelectedTracksIterator<'a> {
-    type Item = Track<'a, Immutable>;
+    type Item = Track;
     fn next(&mut self) -> Option<Self::Item> {
         let track = self.project.get_selected_track(self.index);
         self.index += 1;
@@ -1609,7 +1598,7 @@ impl<'a> ItemsIterator<'a> {
     }
 }
 impl<'a> Iterator for ItemsIterator<'a> {
-    type Item = Item<'a, Immutable>;
+    type Item = Item;
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.project.get_item(self.index);
         self.index += 1;
@@ -1627,7 +1616,7 @@ impl<'a> SelectedItemsIterator<'a> {
     }
 }
 impl<'a> Iterator for SelectedItemsIterator<'a> {
-    type Item = Item<'a, Immutable>;
+    type Item = Item;
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.project.get_selected_item(self.index);
         self.index += 1;
