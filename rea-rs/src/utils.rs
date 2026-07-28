@@ -126,11 +126,13 @@ pub fn make_c_string_buf(size: usize) -> CString {
 /// - `get()` call should invoke either `require_valid`
 /// or `require_valid_2`.
 pub trait WithReaperPtr {
-    type Ptr: Into<ReaperPointer>;
+    type Ptr: Into<ReaperPointer> + Clone;
     /// Get underlying ReaperPointer.
     fn get_pointer(&self) -> Self::Ptr;
     /// Get underlying ReaperPointer with validity check.
-    fn get(&self) -> Self::Ptr;
+    fn get(&self) -> Result<Self::Ptr, ReaRsError>{
+        self.require_valid()
+    }
     /// Turn validity checks off.
     fn make_unchecked(&mut self);
     /// Turn validity checks on.
@@ -144,13 +146,13 @@ pub trait WithReaperPtr {
     ///
     /// Will not check if turned off by
     /// [`WithReaperPtr::make_unchecked`].
-    fn require_valid(&self) -> anyhow::Result<()> {
+    fn require_valid(&self) -> Result<Self::Ptr, ReaRsError> {
         if !self.should_check() {
-            return Ok(());
+            return Ok(self.get_pointer());
         }
         let ptr = self.get_pointer();
-        match Reaper::get().validate_ptr(ptr) {
-            true => Ok(()),
+        match Reaper::get().validate_ptr(ptr.clone()) {
+            true => Ok(ptr),
             false => Err(ReaRsError::NullPtr("reaper object").into()),
         }
     }
@@ -161,13 +163,13 @@ pub trait WithReaperPtr {
     ///
     /// Will not check if turned off by
     /// [`WithReaperPtr::make_unchecked`].
-    fn require_valid_2(&self, project: &Project) -> anyhow::Result<()> {
+    fn require_valid_2(&self, project: &Project) -> Result<Self::Ptr, ReaRsError> {
         if !self.should_check() {
-            return Ok(());
+            return Ok(self.get_pointer());
         }
         let ptr = self.get_pointer();
-        match Reaper::get().validate_ptr_2(project, ptr) {
-            true => Ok(()),
+        match Reaper::get().validate_ptr_2(project, ptr.clone()) {
+            true => Ok(ptr),
             false => Err(ReaRsError::NullPtr("reaper object").into()),
         }
     }

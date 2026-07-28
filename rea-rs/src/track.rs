@@ -1,7 +1,6 @@
 use core::panic;
 use std::{
     ffi::CString,
-    marker::PhantomData,
     mem::{transmute, MaybeUninit},
     path::PathBuf,
     ptr::{null_mut, NonNull},
@@ -12,35 +11,32 @@ use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
-    ptr_wrappers::{MediaItem, MediaTrack, TrackEnvelope},
+    ptr_wrappers::{MediaItem, MediaTrack, ReaProject, TrackEnvelope},
     utils::{as_c_str, as_c_string, as_string, string_from_buf, WithNull},
     AudioAccessor, AutomationMode, Color, Envelope, EnvelopeSelector,
-    FXParent, GenericSend, GetLength, HardwareSend, HardwareSocket, Immutable,
-    Item, KnowsProject, Mutable, Pan, PanLaw, PanLawMode, Position,
-    PositionPixel, ProbablyMutable, Project, ReaRsError, Reaper, ReaperResult,
-    RecInput, RecMode, RecOutMode, RectPixel, SendIntType, SoloMode, TimeMode,
-    TrackFX, TrackFolderState, TrackReceive, TrackSend, VUMode, Volume,
-    WithReaperPtr, FX, GUID,
+    FXParent, GenericSend, GetLength, HardwareSend, HardwareSocket, Item,
+    KnowsProject, Pan, PanLaw, PanLawMode, Position, PositionPixel, Project,
+    ReaRsError, Reaper, ReaperResult, RecInput, RecMode, RecOutMode,
+    RectPixel, SendIntType, SoloMode, TimeMode, TrackFX, TrackFolderState,
+    TrackReceive, TrackSend, VUMode, Volume, WithReaperPtr, FX, GUID,
 };
 
 #[derive(Debug, PartialEq)]
-pub struct Track<'a, T: ProbablyMutable> {
+pub struct Track {
     ptr: MediaTrack,
     should_check: bool,
-    project: &'a Project,
+    project_ptr: Option<ReaProject>,
     /// Used to get string info about the track.
     /// default is 512
     pub info_buf_size: usize,
-    phantom_mut: PhantomData<T>,
 }
-impl<'a, T: ProbablyMutable> WithReaperPtr for Track<'a, T> {
+impl WithReaperPtr for Track {
     type Ptr = MediaTrack;
     fn get_pointer(&self) -> Self::Ptr {
         self.ptr
     }
-    fn get(&self) -> Self::Ptr {
-        self.require_valid_2(&self.project).unwrap();
-        self.ptr
+    fn get(&self) -> Result<Self::Ptr, ReaRsError> {
+        self.require_valid_2(&self.project)
     }
     fn make_unchecked(&mut self) {
         self.should_check = false
@@ -52,40 +48,46 @@ impl<'a, T: ProbablyMutable> WithReaperPtr for Track<'a, T> {
         self.should_check
     }
 }
-impl<'a, T: ProbablyMutable> FXParent<'a, TrackFX<'a, Immutable>>
-    for Track<'a, T>
-{
+impl FXParent<TrackFX> for Track {
     fn n_fx(&self) -> usize {
         unsafe {
-            Reaper::get().low().TrackFX_GetCount(self.get().as_ptr()) as usize
+            Reaper::get().low().TrackFX_GetCount(
+                self.get()?.as_ptr(),
+            ) as usize
         }
     }
-    fn get_fx(&'a self, index: usize) -> Option<TrackFX<'a, Immutable>> {
+    fn get_fx(&self, index: usize) -> Option<TrackFX> {
         let fx = TrackFX::from_index(unsafe { transmute(self) }, index);
         fx
     }
 }
-impl<'a, T: ProbablyMutable> KnowsProject for Track<'a, T> {
-    fn project(&self) -> &Project {
-        self.project
+impl KnowsProject for Track {
+    fn project(&self) -> Project {
+        Project::new(self.project_ptr.into())
     }
 }
-impl<'a, T: ProbablyMutable> Track<'a, T> {
-    pub fn new(project: &'a Project, pointer: MediaTrack) -> Self {
+impl Track {
+    pub fn new(
+        project: impl Into<Option<&Project>>,
+        pointer: MediaTrack,
+    ) -> Self {
+        let project = project.into();
         Self {
             ptr: pointer,
-            project,
+            project_ptr: match project {
+                Some(pr) => Some(pr.get_pointer()),
+                None => None,
+            },
             should_check: true,
             info_buf_size: 512,
-            phantom_mut: PhantomData,
         }
     }
-    pub fn from_index(project: &'a Project, index: usize) -> Option<Self> {
+    pub fn from_index(project: &Project, index: usize) -> Option<Self> {
         let ptr = project.get_track_ptr(index)?;
         Some(Self::new(project, ptr))
     }
     pub fn from_name(
-        project: &'a Project,
+        project: &Project,
         name: impl Into<String>,
     ) -> Option<Self> {
         let name = name.into();
@@ -94,7 +96,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         Self::from_index(project, index)
     }
     pub fn from_point(
-        project: &'a Project,
+        project: &Project,
         point: PositionPixel,
     ) -> Option<Self> {
         let mut info_out = MaybeUninit::zeroed();
@@ -110,7 +112,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
             Some(ptr) => Some(Self::new(project, ptr)),
         }
     }
-    pub fn from_guid(project: &'a Project, guid: GUID) -> Option<Self> {
+    pub fn from_guid(project: &Project, guid: GUID) -> Option<Self> {
         let track = project.iter_tracks().find(|tr| tr.guid() == guid)?;
         let index = track.index();
         Self::from_index(project, index)
@@ -123,7 +125,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         unsafe {
             let mut buf = vec![0_i8; self.info_buf_size];
             let result = Reaper::get().low().GetSetMediaTrackInfo_String(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 as_c_str(&category.into().with_null()).as_ptr(),
                 buf.as_mut_ptr(),
                 false,
@@ -215,7 +217,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     fn get_info_value(&self, category: impl Into<String>) -> f64 {
         unsafe {
             Reaper::get().low().GetMediaTrackInfo_Value(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 as_c_str(&category.into().with_null()).as_ptr(),
             )
         }
@@ -287,16 +289,16 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     }
     pub fn n_items(&self) -> usize {
         unsafe {
-            Reaper::get()
-                .low()
-                .GetTrackNumMediaItems(self.get().as_ptr())
-                as usize
+            Reaper::get().low().GetTrackNumMediaItems(
+                self.get()?.as_ptr(),
+            ) as usize
         }
     }
     pub fn n_envelopes(&self) -> usize {
         unsafe {
-            Reaper::get().low().CountTrackEnvelopes(self.get().as_ptr())
-                as usize
+            Reaper::get().low().CountTrackEnvelopes(
+                self.get()?.as_ptr(),
+            ) as usize
         }
     }
     pub fn selected(&self) -> bool {
@@ -447,18 +449,18 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         &self,
         name: impl Into<String>,
         is_rec_fx: bool,
-    ) -> Option<TrackFX<Immutable>> {
+    ) -> Option<TrackFX> {
         let fx =
             TrackFX::from_name(unsafe { transmute(self) }, name, is_rec_fx);
         fx
     }
 
     /// Get first instrument FX on track, if any.
-    pub fn get_fx_instrument(&self) -> Option<TrackFX<T>> {
+    pub fn get_fx_instrument(&self) -> Option<TrackFX> {
         let index = unsafe {
-            Reaper::get()
-                .low()
-                .TrackFX_GetInstrument(self.get().as_ptr())
+            Reaper::get().low().TrackFX_GetInstrument(
+                self.get()?.as_ptr(),
+            )
         };
         TrackFX::from_index(self, index as usize)
     }
@@ -466,33 +468,33 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     pub fn n_sends(&self) -> usize {
         unsafe {
             Reaper::get().low().GetTrackNumSends(
-                self.get().as_ptr(),
-                TrackSend::<Immutable>::as_int_static(),
+                self.get()?.as_ptr(),
+                TrackSend::as_int_static(),
             ) as usize
         }
     }
     pub fn n_receives(&self) -> usize {
         unsafe {
             Reaper::get().low().GetTrackNumSends(
-                self.get().as_ptr(),
-                TrackReceive::<Immutable>::as_int_static(),
+                self.get()?.as_ptr(),
+                TrackReceive::as_int_static(),
             ) as usize
         }
     }
     pub fn n_hardware_sends(&self) -> usize {
         unsafe {
             Reaper::get().low().GetTrackNumSends(
-                self.get().as_ptr(),
-                HardwareSend::<Immutable>::as_int_static(),
+                self.get()?.as_ptr(),
+                HardwareSend::as_int_static(),
             ) as usize
         }
     }
 
     pub fn get_automation_mode(&self) -> AutomationMode {
         let value = unsafe {
-            Reaper::get()
-                .low()
-                .GetTrackAutomationMode(self.get().as_ptr())
+            Reaper::get().low().GetTrackAutomationMode(
+                self.get()?.as_ptr(),
+            )
         };
         AutomationMode::from_int(value)
             .expect("Can not convert to automation mode.")
@@ -500,24 +502,21 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
 
     pub fn get_color(&self) -> Color {
         unsafe {
-            Color::from_native(
-                Reaper::get().low().GetTrackColor(self.get().as_ptr()),
-            )
+            Color::from_native(Reaper::get().low().GetTrackColor(
+                self.get()?.as_ptr(),
+            ))
         }
     }
 
-    pub fn get_send(&self, index: usize) -> Option<TrackSend<'_, T>> {
+    pub fn get_send(&self, index: usize) -> Option<TrackSend> {
         TrackSend::new(self, index)
     }
 
-    pub fn get_recieve(&self, index: usize) -> Option<TrackReceive<'_, T>> {
+    pub fn get_recieve(&self, index: usize) -> Option<TrackReceive> {
         TrackReceive::new(self, index)
     }
 
-    pub fn get_hardware_send(
-        &self,
-        index: usize,
-    ) -> Option<HardwareSend<'_, T>> {
+    pub fn get_hardware_send(&self, index: usize) -> Option<HardwareSend> {
         HardwareSend::new(self, index)
     }
 
@@ -528,7 +527,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     /// See [Track::set_group_membership] for example.
     pub fn group_membership(&self, group: TrackGroupParam) -> (u32, u32) {
         let rpr_low = Reaper::get().low();
-        let ptr = self.get().as_ptr();
+        let ptr = self.get()?.as_ptr();
         let group_name = CString::new(group.as_str())
             .expect("Can not convert group to CString");
         let low = unsafe {
@@ -545,15 +544,16 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         (low, high)
     }
 
-    fn get_item_parametrized(&self, index: usize) -> Option<Item<T>> {
+    fn get_item_parametrized(&self, index: usize) -> Option<Item> {
         let ptr = unsafe {
-            Reaper::get()
-                .low()
-                .GetTrackMediaItem(self.get().as_ptr(), index as i32)
+            Reaper::get().low().GetTrackMediaItem(
+                self.get()?.as_ptr(),
+                index as i32,
+            )
         };
         match MediaItem::new(ptr) {
             None => None,
-            Some(ptr) => Item::new(self.project(), ptr).into(),
+            Some(ptr) => Item::new(&self.project(), ptr).into(),
         }
     }
 
@@ -562,7 +562,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         let raw = unsafe {
             Reaper::get().low().GetTrackMIDINoteNameEx(
                 self.project().context().to_raw(),
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 pitch as i32,
                 channel as i32,
             )
@@ -580,7 +580,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         let mut buf = vec![0_i8; size as usize];
         let result = unsafe {
             Reaper::get().low().GetTrackStateChunk(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 buf.as_mut_ptr(),
                 size as i32,
                 false,
@@ -600,7 +600,7 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().MIDI_GetTrackHash(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 notes_only,
                 buf.as_mut_ptr(),
                 size as i32,
@@ -618,9 +618,10 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     /// Only if master track, or track in vu mode.
     pub fn peak(&self, channel: u32) -> Volume {
         let result = unsafe {
-            Reaper::get()
-                .low()
-                .Track_GetPeakInfo(self.get().as_ptr(), channel as i32)
+            Reaper::get().low().Track_GetPeakInfo(
+                self.get()?.as_ptr(),
+                channel as i32,
+            )
         };
         Volume::from(result)
     }
@@ -628,11 +629,12 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     fn get_envelope_parametrized(
         &self,
         index: usize,
-    ) -> Option<Envelope<Self, T>> {
+    ) -> Option<Envelope<Self>> {
         let ptr = unsafe {
-            Reaper::get()
-                .low()
-                .GetTrackEnvelope(self.get().as_ptr(), index as i32)
+            Reaper::get().low().GetTrackEnvelope(
+                self.get()?.as_ptr(),
+                index as i32,
+            )
         };
         match TrackEnvelope::new(ptr) {
             None => None,
@@ -643,14 +645,14 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     fn get_envelope_by_chunk_parametrized(
         &self,
         selector: EnvelopeSelector,
-    ) -> Option<Envelope<Self, T>> {
+    ) -> Option<Envelope<Self>> {
         let mut chunk = match selector {
             EnvelopeSelector::Chunk(chunk) => chunk.to_string(),
             EnvelopeSelector::Guid(guid) => guid.to_string(),
         };
         let ptr = unsafe {
             Reaper::get().low().GetTrackEnvelopeByChunkName(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 as_c_str(chunk.with_null()).as_ptr(),
             )
         };
@@ -663,11 +665,11 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
     fn get_envelope_by_name_parametrized(
         &self,
         name: impl Into<String>,
-    ) -> Option<Envelope<Self, T>> {
+    ) -> Option<Envelope<Self>> {
         let mut name = name.into();
         let ptr = unsafe {
             Reaper::get().low().GetTrackEnvelopeByName(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 as_c_str(name.with_null()).as_ptr(),
             )
         };
@@ -677,44 +679,47 @@ impl<'a, T: ProbablyMutable> Track<'a, T> {
         }
     }
 }
-impl<'a> Track<'a, Immutable> {
-    pub fn get_parent_track(&self) -> Option<Track<Immutable>> {
-        let ptr =
-            unsafe { Reaper::get().low().GetParentTrack(self.get().as_ptr()) };
+impl Track {
+    pub fn get_parent_track(&self) -> Option<Track> {
+        let ptr = unsafe {
+            Reaper::get().low().GetParentTrack(
+                self.get()?.as_ptr(),
+            )
+        };
         match MediaTrack::new(ptr) {
             None => None,
             Some(ptr) => Track::new(self.project(), ptr).into(),
         }
     }
 
-    pub fn get_item(&self, index: usize) -> Option<Item<Immutable>> {
+    pub fn get_item(&self, index: usize) -> Option<Item> {
         self.get_item_parametrized(index)
     }
 
-    pub fn get_envelope(
-        &self,
-        index: usize,
-    ) -> Option<Envelope<Self, Immutable>> {
+    pub fn get_envelope(&self, index: usize) -> Option<Envelope<Self>> {
         self.get_envelope_parametrized(index)
     }
 
     pub fn get_envelope_by_chunk(
         &self,
         selector: EnvelopeSelector,
-    ) -> Option<Envelope<Self, Immutable>> {
+    ) -> Option<Envelope<Self>> {
         self.get_envelope_by_chunk_parametrized(selector)
     }
     pub fn get_envelope_by_name(
         &self,
         name: impl Into<String>,
-    ) -> Option<Envelope<Self, Immutable>> {
+    ) -> Option<Envelope<Self>> {
         self.get_envelope_by_name_parametrized(name)
     }
 }
-impl<'a> Track<'a, Mutable> {
-    pub fn get_parent_track(mut self) -> Option<Track<'a, Mutable>> {
-        let ptr =
-            unsafe { Reaper::get().low().GetParentTrack(self.get().as_ptr()) };
+impl Track {
+    pub fn get_parent_track(mut self) -> Option<Track> {
+        let ptr = unsafe {
+            Reaper::get().low().GetParentTrack(
+                self.get()?.as_ptr(),
+            )
+        };
         match MediaTrack::new(ptr) {
             None => None,
             Some(ptr) => {
@@ -728,40 +733,39 @@ impl<'a> Track<'a, Mutable> {
         self.project()
             .with_current_project(|| {
                 unsafe {
-                    Reaper::get()
-                        .low()
-                        .SetOnlyTrackSelected(self.get().as_ptr())
+                    Reaper::get().low().SetOnlyTrackSelected(
+                        self.get()
+                            ?
+                            .as_ptr(),
+                    )
                 };
                 Ok(())
             })
             .unwrap();
     }
 
-    pub fn get_item(&mut self, index: usize) -> Option<Item<Mutable>> {
+    pub fn get_item(&mut self, index: usize) -> Option<Item> {
         self.get_item_parametrized(index)
     }
 
-    pub fn get_envelope(
-        &mut self,
-        index: usize,
-    ) -> Option<Envelope<Self, Mutable>> {
+    pub fn get_envelope(&mut self, index: usize) -> Option<Envelope<Self>> {
         self.get_envelope_parametrized(index)
     }
 
     pub fn get_envelope_by_chunk(
         &mut self,
         selector: EnvelopeSelector,
-    ) -> Option<Envelope<Self, Mutable>> {
+    ) -> Option<Envelope<Self>> {
         self.get_envelope_by_chunk_parametrized(selector)
     }
     pub fn get_envelope_by_name(
         &mut self,
         name: impl Into<String>,
-    ) -> Option<Envelope<Self, Mutable>> {
+    ) -> Option<Envelope<Self>> {
         self.get_envelope_by_name_parametrized(name)
     }
 
-    pub fn get_fx_mut(&mut self, index: usize) -> Option<TrackFX<Mutable>> {
+    pub fn get_fx_mut(&mut self, index: usize) -> Option<TrackFX> {
         let fx = TrackFX::from_index(self, index);
         fx
     }
@@ -771,7 +775,7 @@ impl<'a> Track<'a, Mutable> {
         &mut self,
         name: impl Into<String>,
         is_rec_fx: bool,
-    ) -> Option<TrackFX<Mutable>> {
+    ) -> Option<TrackFX> {
         let fx = TrackFX::from_name(self, name, is_rec_fx);
         fx
     }
@@ -784,7 +788,7 @@ impl<'a> Track<'a, Mutable> {
         let mut chunk = chunk.into();
         let result = unsafe {
             Reaper::get().low().SetTrackStateChunk(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 as_c_str(chunk.with_null()).as_ptr(),
                 need_undo,
             )
@@ -808,7 +812,7 @@ impl<'a> Track<'a, Mutable> {
         let result = unsafe {
             Reaper::get().low().SetTrackMIDINoteNameEx(
                 self.project().context().to_raw(),
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 pitch as i32,
                 channel as i32,
                 as_c_str(note_name.with_null()).as_ptr(),
@@ -831,7 +835,7 @@ impl<'a> Track<'a, Mutable> {
         let value = value.into();
         let result = unsafe {
             Reaper::get().low().GetSetMediaTrackInfo_String(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 as_c_str(&category.with_null()).as_ptr(),
                 as_c_string(&value).into_raw(),
                 true,
@@ -896,11 +900,11 @@ impl<'a> Track<'a, Mutable> {
 
     pub fn add_audio_accessor(
         &mut self,
-    ) -> anyhow::Result<AudioAccessor<Self, Mutable>> {
+    ) -> anyhow::Result<AudioAccessor<Self>> {
         let ptr = unsafe {
-            Reaper::get()
-                .low()
-                .CreateTrackAudioAccessor(self.get().as_ptr())
+            Reaper::get().low().CreateTrackAudioAccessor(
+                self.get()?.as_ptr(),
+            )
         };
         let ptr =
             NonNull::new(ptr).ok_or(ReaRsError::NullPtr("Audio Accessors"))?;
@@ -924,7 +928,7 @@ impl<'a> Track<'a, Mutable> {
         position: impl Into<Option<u8>>,
         input_fx: bool,
         even_if_exists: bool,
-    ) -> Option<TrackFX<Mutable>> {
+    ) -> Option<TrackFX> {
         let insatantinate = match even_if_exists {
             false => 1 as i32,
             true => match position.into() {
@@ -934,13 +938,13 @@ impl<'a> Track<'a, Mutable> {
         };
         let index = unsafe {
             Reaper::get().low().TrackFX_AddByName(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 as_c_str(name.into().with_null()).as_ptr(),
                 input_fx,
                 insatantinate,
             )
         };
-        TrackFX::<Mutable>::from_index(self, index as usize)
+        TrackFX::from_index(self, index as usize)
     }
 
     /// Add an empty [Item] to Track.
@@ -950,13 +954,15 @@ impl<'a> Track<'a, Mutable> {
         &mut self,
         start: impl Into<Position>,
         length: impl GetLength,
-    ) -> Item<Mutable> {
+    ) -> Item {
         let start = start.into();
         let ptr = unsafe {
-            Reaper::get().low().AddMediaItemToTrack(self.get().as_ptr())
+            Reaper::get().low().AddMediaItemToTrack(
+                self.get()?.as_ptr(),
+            )
         };
         let ptr = MediaItem::new(ptr).expect("Can not add track.");
-        let mut item = Item::<Mutable>::new(self.project(), ptr);
+        let mut item = Item::new(&self.project(), ptr);
         item.set_position(start);
         item.set_length(length.get_length(start));
         item
@@ -966,20 +972,20 @@ impl<'a> Track<'a, Mutable> {
         &mut self,
         start: impl Into<Position>,
         length: impl GetLength,
-    ) -> Item<Mutable> {
+    ) -> Item {
         let qn = MaybeUninit::new(false);
         let start = start.into();
         let end = Position::from(length.get_length(start)) + start;
         let ptr = unsafe {
             Reaper::get().low().CreateNewMIDIItemInProj(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 start.into(),
                 end.into(),
                 qn.as_ptr(),
             )
         };
         let ptr = MediaItem::new(ptr).expect("Can not make item.");
-        Item::<Mutable>::new(self.project, ptr)
+        Item::new(&self.project, ptr)
     }
 
     /// Add HardwareSend, that sends audio or midi to hardware outs.
@@ -992,13 +998,14 @@ impl<'a> Track<'a, Mutable> {
     /// # Note
     ///
     /// To add regular track send use [crate::send::TrackSend::create_new]
-    pub fn add_hardware_send(&mut self) -> HardwareSend<'_, Mutable> {
+    pub fn add_hardware_send(&mut self) -> HardwareSend<'_> {
         let index = unsafe {
-            Reaper::get()
-                .low()
-                .CreateTrackSend(self.get().as_ptr(), null_mut())
+            Reaper::get().low().CreateTrackSend(
+                self.get()?.as_ptr(),
+                null_mut(),
+            )
         };
-        HardwareSend::<Mutable>::new(self, index as usize)
+        HardwareSend::new(self, index as usize)
             .expect("No hardware send after creation")
     }
 
@@ -1008,18 +1015,14 @@ impl<'a> Track<'a, Mutable> {
     ///
     /// Try to keep send object as little as possible. It is accessed
     /// by indexing, so everything falls, as sends are changed.
-    pub fn add_send(
-        &mut self,
-        destination: &Track<'_, Immutable>,
-    ) -> TrackSend<'_, Mutable> {
+    pub fn add_send(&mut self, destination: &Track) -> TrackSend {
         let index = unsafe {
             Reaper::get().low().CreateTrackSend(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 destination.get_pointer().as_ptr(),
             )
         };
-        TrackSend::<Mutable>::new(self, index as usize)
-            .expect("No send after creation")
+        TrackSend::new(self, index as usize).expect("No send after creation")
     }
 
     /// Add TrackReceive, that sends audio or midi to other track.
@@ -1028,37 +1031,40 @@ impl<'a> Track<'a, Mutable> {
     ///
     /// Try to keep send object as little as possible. It is accessed
     /// by indexing, so everything falls, as sends are changed.
-    pub fn add_receive(
-        &mut self,
-        source: &Track<'_, Immutable>,
-    ) -> TrackReceive<'_, Mutable> {
+    pub fn add_receive(&mut self, source: &Track) -> TrackReceive {
         let index = unsafe {
             Reaper::get().low().CreateTrackSend(
                 source.get_pointer().as_ptr(),
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
             )
         };
-        TrackReceive::<Mutable>::new(self, index as usize)
+        TrackReceive::new(self, index as usize)
             .expect("No send after creation")
     }
 
     pub fn delete(self) {
-        unsafe { Reaper::get().low().DeleteTrack(self.get().as_ptr()) };
+        unsafe {
+            Reaper::get().low().DeleteTrack(
+                self.get()?.as_ptr(),
+            )
+        };
     }
 
     pub fn set_automation_mode(&mut self, mode: AutomationMode) {
         unsafe {
-            Reaper::get()
-                .low()
-                .SetTrackAutomationMode(self.get().as_ptr(), mode.int_value())
+            Reaper::get().low().SetTrackAutomationMode(
+                self.get()?.as_ptr(),
+                mode.int_value(),
+            )
         }
     }
 
     pub fn set_color(&mut self, color: impl Into<Color>) {
         unsafe {
-            Reaper::get()
-                .low()
-                .SetTrackColor(self.get().as_ptr(), color.into().to_native())
+            Reaper::get().low().SetTrackColor(
+                self.get()?.as_ptr(),
+                color.into().to_native(),
+            )
         }
     }
 
@@ -1070,7 +1076,7 @@ impl<'a> Track<'a, Mutable> {
         let mut param_name: String = param.into();
         let result = unsafe {
             Reaper::get().low().SetMediaTrackInfo_Value(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 as_c_str(&param_name.with_null()).as_ptr(),
                 value,
             )
@@ -1388,7 +1394,7 @@ impl<'a> Track<'a, Mutable> {
         high_groups_set_mask: impl Into<Option<u32>>,
     ) {
         let rpr_low = Reaper::get().low();
-        let ptr = self.get().as_ptr();
+        let ptr = self.get()?.as_ptr();
         let group_name = CString::new(group.as_str())
             .expect("Can not convert group to CString");
         unsafe {

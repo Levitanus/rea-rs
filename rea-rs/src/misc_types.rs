@@ -39,7 +39,7 @@ impl Measure {
         );
         let result = unsafe {
             rpr.TimeMap_GetMeasureInfo(
-                project.context().to_raw(),
+                project.get()?.as_ptr(),
                 index as i32 - 1,
                 qn_start.as_mut_ptr(),
                 qn_end.as_mut_ptr(),
@@ -65,9 +65,10 @@ impl Measure {
         let low = Reaper::get().low();
         let (mut start, mut end) =
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
+        let project_ptr = project.get()?.as_ptr();
         let index = unsafe {
             low.TimeMap_QNToMeasures(
-                project.context().to_raw(),
+                project_ptr,
                 position.as_quarters(project),
                 start.as_mut_ptr(),
                 end.as_mut_ptr(),
@@ -75,35 +76,23 @@ impl Measure {
         };
         Self::from_index(index as u32, project)
     }
-    pub fn ppq_start<T: ProbablyMutable>(
-        &self,
-        take: &Take<T>,
-        ppq: u32,
-    ) -> u32 {
+    pub fn ppq_start(&self, take: &Take, ppq: u32) -> u32 {
         let low = Reaper::get().low();
         let pos = unsafe {
-            low.MIDI_GetPPQPos_StartOfMeasure(take.get().as_ptr(), ppq as f64)
+            low.MIDI_GetPPQPos_StartOfMeasure(take.get()?.as_ptr(), ppq as f64)
         };
         pos as u32
     }
-    pub fn ppq_end<T: ProbablyMutable>(
-        &self,
-        take: &Take<T>,
-        ppq: u32,
-    ) -> u32 {
+    pub fn ppq_end(&self, take: &Take, ppq: u32) -> u32 {
         let low = Reaper::get().low();
         let pos = unsafe {
-            low.MIDI_GetPPQPos_EndOfMeasure(take.get().as_ptr(), ppq as f64)
+            low.MIDI_GetPPQPos_EndOfMeasure(take.get()?.as_ptr(), ppq as f64)
         };
         pos as u32
     }
-    pub fn from_ppq<T: ProbablyMutable>(
-        &self,
-        take: &Take<T>,
-        ppq: u32,
-    ) -> Self {
-        let pos = Position::from_ppq(ppq, take);
-        Self::from_position(pos, take.project())
+    pub fn from_ppq(&self, take: &Take, ppq: u32) -> Result<Self, ReaRsError> {
+        let pos = Position::from_ppq(ppq, take)?;
+        Ok(Self::from_position(pos, &take.project()))
     }
 }
 
@@ -296,29 +285,26 @@ impl Position {
             ))
         }
     }
-    pub fn as_ppq<T: ProbablyMutable>(&self, take: &Take<T>) -> u32 {
-        unsafe {
+    pub fn as_ppq(&self, take: &Take) -> Result<u32, ReaRsError> {
+        Ok(unsafe {
             Reaper::get().low().MIDI_GetPPQPosFromProjTime(
-                take.get().as_mut(),
+                take.get()?.as_mut(),
                 self.as_duration().as_secs_f64(),
             ) as u32
-        }
+        })
     }
 
-    pub fn from_ppq<'a, 'b, T: ProbablyMutable>(
+    pub fn from_ppq(
         ppq: impl Into<u32>,
-        take: &'a Take<T>,
-    ) -> Self
-    where
-        Self: 'b,
-    {
+        take: Take,
+    ) -> Result<Self, ReaRsError> {
         let val = unsafe {
             Reaper::get().low().MIDI_GetProjTimeFromPPQPos(
-                take.get().as_mut(),
+                take.get()?.as_mut(),
                 ppq.into() as f64,
             )
         };
-        Self::from(val)
+        Ok(Self::from(val))
     }
 }
 impl Add for Position {
@@ -701,24 +687,24 @@ impl TimeSignature {
     }
 }
 
-/// Generic mutability marker, that allows to
-/// mutate only one Reaper object at time.
-///
-/// Used as generic parameter (usually as marker),
-/// that resolved to [Mutable] or [Immutable].
-pub trait ProbablyMutable {}
-/// Guarantees, that only this object and its
-/// child (and sub_child) can be mutated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Mutable;
-impl ProbablyMutable for Mutable {}
-/// Guarantees, that object is immutable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Immutable;
-impl ProbablyMutable for Immutable {}
+// /// Generic mutability marker, that allows to
+// /// mutate only one Reaper object at time.
+// ///
+// /// Used as generic parameter (usually as marker),
+// /// that resolved to [Mutable] or [Immutable].
+// pub trait ProbablyMutable {}
+// /// Guarantees, that only this object and its
+// /// child (and sub_child) can be mutated.
+// #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+// pub struct Mutable;
+// impl ProbablyMutable for Mutable {}
+// /// Guarantees, that object is immutable.
+// #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+// pub struct Immutable;
+// impl ProbablyMutable for Immutable {}
 
 pub trait KnowsProject {
-    fn project(&self) -> &Project;
+    fn project(&self) -> Project;
 }
 
 /// GUID, that can help to track object, without knowing it's pointer and

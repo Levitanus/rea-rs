@@ -2,9 +2,9 @@ pub use crate::utils::WithReaperPtr;
 use crate::{
     ptr_wrappers::{MediaItem, MediaTrack, ReaProject},
     utils::{as_c_str, as_c_string, as_string, string_from_buf, WithNull},
-    Color, CommandId, Immutable, Item, MarkerRegionInfo, MarkerRegionIterator,
-    Mutable, PlayRate, Position, ProjectContext, ReaRsError, Reaper,
-    TimeRange, TimeRangeKind, TimeSignature, Track, UndoFlags,
+    Color, CommandId, Item, MarkerRegionInfo, MarkerRegionIterator, PlayRate,
+    Position, ProjectContext, ReaRsError, Reaper, TimeRange, TimeRangeKind,
+    TimeSignature, Track, UndoFlags,
 };
 use c_str_macro::c_str;
 use int_enum::IntEnum;
@@ -21,18 +21,18 @@ use self::project_info::{
 
 #[derive(Debug, PartialEq)]
 pub struct Project {
-    context: ProjectContext,
+    // context: ProjectContext,
+    pointer: ReaProject,
     checked: bool,
     info_buf_size: usize,
 }
 impl<'a> WithReaperPtr for Project {
     type Ptr = ReaProject;
     fn get_pointer(&self) -> Self::Ptr {
-        unsafe { NonNull::new_unchecked(self.context.to_raw()) }
+        unsafe { NonNull::new_unchecked(self.pointer.as_ptr()) }
     }
-    fn get(&self) -> Self::Ptr {
-        self.require_valid().unwrap();
-        self.get_pointer()
+    fn get(&self) -> Result<ReaProject, ReaRsError> {
+        self.require_valid()
     }
     fn make_unchecked(&mut self) {
         self.checked = false;
@@ -59,20 +59,19 @@ impl<'a> Project {
     pub fn new(context: ProjectContext) -> Self {
         let rpr = Reaper::get();
         unsafe {
-            let context = match context {
+            let pointer = match context {
                 ProjectContext::CurrentProject => {
                     let ptr = rpr.low().EnumProjects(
                         -1,
                         CString::from(c_str!("")).into_raw(),
                         0,
                     );
-                    let ptr = NonNull::new(ptr).expect("expect project");
-                    ProjectContext::Proj(ptr)
+                    NonNull::new(ptr).expect("expect project")
                 }
-                ProjectContext::Proj(ptr) => ProjectContext::Proj(ptr),
+                ProjectContext::Proj(ptr) => ptr,
             };
             Self {
-                context,
+                pointer,
                 checked: true,
                 info_buf_size: 1024 * 10,
             }
@@ -88,7 +87,7 @@ impl<'a> Project {
     pub fn from_name(name: impl Into<String>) -> anyhow::Result<Self> {
         let name: String = name.into();
         for project in Reaper::get().iter_projects() {
-            let mut pr_name = project.name();
+            let mut pr_name = project.name()?;
             let pr_name: String = pr_name.drain(..pr_name.len() - 4).collect();
             if name == pr_name {
                 return Ok(project);
@@ -97,19 +96,18 @@ impl<'a> Project {
         Err(ReaRsError::InvalidObject("No project with the given name").into())
     }
 
-    /// Get [reaper_medium::ProjectContext] to use with
-    /// `rea-rs` crates.
+    /// Get the underlying project context for compatibility with older APIs.
     pub fn context(&self) -> ProjectContext {
-        self.require_valid().unwrap();
-        self.context
+        ProjectContext::Proj(self.pointer)
     }
 
     /// Activate project tab with the project.
-    pub fn make_current_project(&self) {
+    pub fn make_current_project(&self) -> Result<(), ReaRsError> {
         let low = Reaper::get().low();
         unsafe {
-            low.SelectProjectInstance(self.context().to_raw());
+            low.SelectProjectInstance(self.get()?.as_ptr());
         }
+        Ok(())
     }
 
     /// If the project tab is active.
@@ -118,7 +116,7 @@ impl<'a> Project {
             let low = Reaper::get().low();
             let ptr =
                 low.EnumProjects(-1, CString::from(c_str!("")).into_raw(), 0);
-            self.context.to_raw() == ptr
+            self.pointer.as_ptr() == ptr
         }
     }
 
@@ -139,22 +137,21 @@ impl<'a> Project {
     }
 
     /// Whether project is dirty (i.e. needing save).
-    pub fn is_dirty(&self) -> bool {
+    pub fn is_dirty(&self) -> Result<bool, ReaRsError> {
         unsafe {
-            match Reaper::get().low().IsProjectDirty(self.context().to_raw()) {
-                x if x <= 0 => false,
-                _ => true,
+            match Reaper::get().low().IsProjectDirty(self.get()?.as_ptr()) {
+                x if x <= 0 => Ok(false),
+                _ => Ok(true),
             }
         }
     }
 
     /// Mark project dirty (i.e. needing save).
-    pub fn mark_dirty(&mut self) {
+    pub fn mark_dirty(&mut self) -> Result<(), ReaRsError> {
         unsafe {
-            Reaper::get()
-                .low()
-                .MarkProjectDirty(self.context().to_raw())
+            Reaper::get().low().MarkProjectDirty(self.get()?.as_ptr());
         }
+        Ok(())
     }
 
     pub fn get_last_touched_track(&self) -> Option<Track<'_, Immutable>> {
@@ -176,26 +173,32 @@ impl<'a> Project {
     }
 
     /// Direct way to simulate pause button hit.
-    pub fn pause(&mut self) {
-        unsafe { Reaper::get().low().OnPauseButtonEx(self.context().to_raw()) }
+    pub fn pause(&mut self) -> Result<(), ReaRsError> {
+        unsafe { Reaper::get().low().OnPauseButtonEx(self.get()?.as_ptr()) }
+        Ok(())
     }
 
-    pub fn is_paused(&self) -> bool {
+    pub fn is_paused(&self) -> Result<bool, ReaRsError> {
         unsafe {
-            (Reaper::get().low().GetPlayStateEx(self.context().to_raw()) & 2)
-                != 0
+            Ok(
+                (Reaper::get().low().GetPlayStateEx(self.get()?.as_ptr()) & 2)
+                    != 0,
+            )
         }
     }
 
     /// Direct way to simulate play button hit.
-    pub fn play(&mut self) {
-        unsafe { Reaper::get().low().OnPlayButtonEx(self.context().to_raw()) }
+    pub fn play(&mut self) -> Result<(), ReaRsError> {
+        unsafe { Reaper::get().low().OnPlayButtonEx(self.get()?.as_ptr()) }
+        Ok(())
     }
 
-    pub fn is_playing(&self) -> bool {
+    pub fn is_playing(&self) -> Result<bool, ReaRsError> {
         unsafe {
-            (Reaper::get().low().GetPlayStateEx(self.context().to_raw()) & 1)
-                != 0
+            Ok(
+                (Reaper::get().low().GetPlayStateEx(self.get()?.as_ptr()) & 1)
+                    != 0,
+            )
         }
     }
 
@@ -211,33 +214,34 @@ impl<'a> Project {
         })
         .unwrap()
     }
-    pub fn is_recording(&self) -> bool {
+    pub fn is_recording(&self) -> Result<bool, ReaRsError> {
         unsafe {
-            (Reaper::get().low().GetPlayStateEx(self.context().to_raw()) & 4)
-                != 0
+            Ok(
+                (Reaper::get().low().GetPlayStateEx(self.get()?.as_ptr()) & 4)
+                    != 0,
+            )
         }
     }
 
     /// Direct way to simulate stop button hit.
-    pub fn stop(&mut self) {
-        unsafe { Reaper::get().low().OnStopButtonEx(self.context().to_raw()) }
+    pub fn stop(&mut self) -> Result<(), ReaRsError> {
+        unsafe { Reaper::get().low().OnStopButtonEx(self.get()?.as_ptr()) }
+        Ok(())
     }
 
-    pub fn is_stopped(&self) -> bool {
+    pub fn is_stopped(&self) -> Result<bool, ReaRsError> {
         unsafe {
-            (Reaper::get().low().GetPlayStateEx(self.context().to_raw())
+            Ok((Reaper::get().low().GetPlayStateEx(self.get()?.as_ptr())
                 & (1 | 2))
-                == 0
+                == 0)
         }
     }
 
-    pub fn length(&self) -> Duration {
+    pub fn length(&self) -> Result<Duration, ReaRsError> {
         unsafe {
-            Duration::from_secs_f64(
-                Reaper::get()
-                    .low()
-                    .GetProjectLength(self.context().to_raw()),
-            )
+            Ok(Duration::from_secs_f64(
+                Reaper::get().low().GetProjectLength(self.get()?.as_ptr()),
+            ))
         }
     }
 
@@ -252,16 +256,17 @@ impl<'a> Project {
         TimeRange::new(self, TimeRangeKind::TimeSelection)
     }
 
-    pub fn is_loop_enabled(&self) -> bool {
+    pub fn is_loop_enabled(&self) -> Result<bool, ReaRsError> {
         unsafe {
-            Reaper::get()
-                .low()
-                .GetSetRepeatEx(self.context().to_raw(), -1)
-                != 0
+            Ok(Reaper::get().low().GetSetRepeatEx(self.get()?.as_ptr(), -1)
+                != 0)
         }
     }
 
-    pub fn set_loop_enabled(&mut self, should_loop: bool) {
+    pub fn set_loop_enabled(
+        &mut self,
+        should_loop: bool,
+    ) -> Result<(), ReaRsError> {
         unsafe {
             let val = match should_loop {
                 true => 1,
@@ -269,15 +274,16 @@ impl<'a> Project {
             };
             Reaper::get()
                 .low()
-                .GetSetRepeatEx(self.context().to_raw(), val);
+                .GetSetRepeatEx(self.get()?.as_ptr(), val);
         }
+        Ok(())
     }
 
     /// Close the project.
     pub fn close(self) {
         let rpr = Reaper::get();
         let current = rpr.current_project();
-        if current.context == self.context {
+        if current.get_pointer() == self.get_pointer() {
             rpr.perform_action(CommandId::new(40860), 0, None);
         } else {
             self.make_current_project();
@@ -290,7 +296,7 @@ impl<'a> Project {
     pub fn time_signature_at_position(
         &self,
         position: Position,
-    ) -> (TimeSignature, f64) {
+    ) -> Result<(TimeSignature, f64), ReaRsError> {
         unsafe {
             let (mut num, mut denom, mut tempo) = (
                 MaybeUninit::zeroed(),
@@ -298,19 +304,19 @@ impl<'a> Project {
                 MaybeUninit::zeroed(),
             );
             Reaper::get().low().TimeMap_GetTimeSigAtTime(
-                self.context().to_raw(),
+                self.get()?.as_ptr(),
                 position.into(),
                 num.as_mut_ptr(),
                 denom.as_mut_ptr(),
                 tempo.as_mut_ptr(),
             );
-            (
+            Ok((
                 TimeSignature::new(
                     num.assume_init() as u32,
                     denom.assume_init() as u32,
                 ),
                 tempo.assume_init(),
-            )
+            ))
         }
     }
 
@@ -390,7 +396,7 @@ impl<'a> Project {
         };
         unsafe {
             let result = rpr.low().AddProjectMarker2(
-                self.context().to_raw(),
+                self.get()?.as_ptr(),
                 is_region,
                 start.into(),
                 end.into(),
@@ -412,7 +418,7 @@ impl<'a> Project {
     ) -> anyhow::Result<()> {
         unsafe {
             match Reaper::get().low().SetProjectMarker3(
-                self.context.to_raw(),
+                self.get()?.as_ptr(),
                 info.user_index as i32,
                 info.is_region,
                 info.position.into(),
@@ -441,7 +447,7 @@ impl<'a> Project {
     ) -> anyhow::Result<()> {
         unsafe {
             match Reaper::get().low().DeleteProjectMarker(
-                self.context.to_raw(),
+                self.get()?.as_ptr(),
                 user_index as i32,
                 region,
             ) {
@@ -475,69 +481,69 @@ impl<'a> Project {
         MarkerRegionIterator::new(self)
     }
 
-    pub fn n_tracks(&self) -> usize {
+    pub fn n_tracks(&self) -> Result<usize, ReaRsError> {
         unsafe {
-            Reaper::get().low().CountTracks(self.context().to_raw()) as usize
+            Ok(Reaper::get().low().CountTracks(self.get()?.as_ptr()) as usize)
         }
     }
 
-    pub fn n_selected_tracks(&self) -> usize {
+    pub fn n_selected_tracks(&self) -> Result<usize, ReaRsError> {
         unsafe {
-            Reaper::get()
+            Ok(Reaper::get()
                 .low()
-                .CountSelectedTracks2(self.context().to_raw(), false)
-                as usize
+                .CountSelectedTracks2(self.get()?.as_ptr(), false)
+                as usize)
         }
     }
 
-    pub fn n_items(&self) -> usize {
+    pub fn n_items(&self) -> Result<usize, ReaRsError> {
         unsafe {
-            Reaper::get().low().CountMediaItems(self.context().to_raw())
-                as usize
+            Ok(Reaper::get().low().CountMediaItems(self.get()?.as_ptr())
+                as usize)
         }
     }
 
-    pub fn n_selected_items(&self) -> usize {
+    pub fn n_selected_items(&self) -> Result<usize, ReaRsError> {
         unsafe {
-            Reaper::get()
+            Ok(Reaper::get()
                 .low()
-                .CountSelectedMediaItems(self.context().to_raw())
-                as usize
+                .CountSelectedMediaItems(self.get()?.as_ptr())
+                as usize)
         }
     }
 
-    pub fn n_tempo_markers(&self) -> usize {
+    pub fn n_tempo_markers(&self) -> Result<usize, ReaRsError> {
         unsafe {
-            Reaper::get()
+            Ok(Reaper::get()
                 .low()
-                .CountTempoTimeSigMarkers(self.context().to_raw())
-                as usize
+                .CountTempoTimeSigMarkers(self.get()?.as_ptr())
+                as usize)
         }
     }
 
-    pub fn n_markers(&self) -> usize {
-        self.count_markers_and_regions().0
+    pub fn n_markers(&self) -> Result<usize, ReaRsError> {
+        Ok(self.count_markers_and_regions()?.0)
     }
-    pub fn n_regions(&self) -> usize {
-        self.count_markers_and_regions().1
+    pub fn n_regions(&self) -> Result<usize, ReaRsError> {
+        Ok(self.count_markers_and_regions()?.1)
     }
 
-    fn count_markers_and_regions(&self) -> (usize, usize) {
+    fn count_markers_and_regions(&self) -> Result<(usize, usize), ReaRsError> {
         unsafe {
             let (mut n_markers, mut n_regions) =
                 (MaybeUninit::zeroed(), MaybeUninit::zeroed());
             let result = Reaper::get().low().CountProjectMarkers(
-                self.context().to_raw(),
+                self.get()?.as_ptr(),
                 n_markers.as_mut_ptr(),
                 n_regions.as_mut_ptr(),
             );
             if result <= 0 {
-                return (0, 0);
+                return Ok((0, 0));
             }
-            (
+            Ok((
                 n_markers.assume_init() as usize,
                 n_regions.assume_init() as usize,
-            )
+            ))
         }
     }
 
@@ -545,8 +551,8 @@ impl<'a> Project {
         &mut self,
         index: impl Into<Option<usize>>,
         name: impl Into<String>,
-    ) -> Track<Mutable> {
-        let n_tracks = self.n_tracks();
+    ) -> Result<Track<Mutable>, ReaRsError> {
+        let n_tracks = self.n_tracks()?;
         let index = match index.into() {
             None => n_tracks,
             Some(idx) => {
@@ -568,7 +574,7 @@ impl<'a> Project {
         if !name.is_empty() {
             track.set_name(name).expect("Can not set track name.")
         }
-        track
+        Ok(track)
     }
 
     pub fn get_track(&self, index: usize) -> Option<Track<Immutable>> {
@@ -582,10 +588,12 @@ impl<'a> Project {
         Some(track)
     }
     pub(crate) fn get_track_ptr(&self, index: usize) -> Option<MediaTrack> {
+        let project_ptr = match self.get() {
+            Ok(project) => project.as_ptr(),
+            Err(_) => return None,
+        };
         unsafe {
-            let ptr = Reaper::get()
-                .low()
-                .GetTrack(self.context.to_raw(), index as i32);
+            let ptr = Reaper::get().low().GetTrack(project_ptr, index as i32);
             match MediaTrack::new(ptr) {
                 None => None,
                 Some(ptr) => Some(ptr),
@@ -610,11 +618,15 @@ impl<'a> Project {
         Some(track)
     }
     fn get_selected_track_ptr(&self, index: usize) -> Option<MediaTrack> {
+        let project_ptr = match self.get() {
+            Ok(project) => project.as_ptr(),
+            Err(_) => return None,
+        };
         unsafe {
             let ptr = MediaTrack::new(
                 Reaper::get()
                     .low()
-                    .GetSelectedTrack(self.context().to_raw(), index as i32),
+                    .GetSelectedTrack(project_ptr, index as i32),
             );
             match ptr {
                 None => None,
@@ -630,11 +642,10 @@ impl<'a> Project {
         Track::new(self, self.get_master_track_ptr())
     }
     fn get_master_track_ptr(&self) -> MediaTrack {
+        let project_ptr = self.get().expect("should get project ptr").as_ptr();
         unsafe {
-            NonNull::new(
-                Reaper::get().low().GetMasterTrack(self.context().to_raw()),
-            )
-            .expect("should get master track")
+            NonNull::new(Reaper::get().low().GetMasterTrack(project_ptr))
+                .expect("should get master track")
         }
     }
 
@@ -646,7 +657,7 @@ impl<'a> Project {
         mut f: impl FnMut(Track<Mutable>) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
         for track in TracksIterator::new(self) {
-            let track = Track::<Mutable>::new(self, track.get());
+            let track = Track::<Mutable>::new(self, track.get()?);
             f(track)?
         }
         Ok(())
@@ -660,7 +671,7 @@ impl<'a> Project {
         mut f: impl FnMut(Track<Mutable>) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
         for track in SelectedTracksIterator::new(self) {
-            let track = Track::<Mutable>::new(self, track.get());
+            let track = Track::<Mutable>::new(self, track.get()?);
             f(track)?
         }
         Ok(())
@@ -683,10 +694,12 @@ impl<'a> Project {
         Some(item)
     }
     fn get_item_ptr(&self, index: usize) -> Option<MediaItem> {
+        let project_ptr = match self.get() {
+            Ok(project) => project.as_ptr(),
+            Err(_) => return None,
+        };
         let ptr = unsafe {
-            Reaper::get()
-                .low()
-                .GetMediaItem(self.context().to_raw(), index as i32)
+            Reaper::get().low().GetMediaItem(project_ptr, index as i32)
         };
         match MediaItem::new(ptr) {
             None => None,
@@ -710,10 +723,14 @@ impl<'a> Project {
         }
     }
     fn selected_item_ptr(&self, index: usize) -> Option<MediaItem> {
+        let project_ptr = match self.get() {
+            Ok(project) => project.as_ptr(),
+            Err(_) => return None,
+        };
         let ptr = unsafe {
             Reaper::get()
                 .low()
-                .GetSelectedMediaItem(self.context().to_raw(), index as i32)
+                .GetSelectedMediaItem(project_ptr, index as i32)
         };
         MediaItem::new(ptr)
     }
@@ -727,8 +744,8 @@ impl<'a> Project {
         Reaper::get().perform_action(action_id, 0, Some(self))
     }
 
-    pub fn any_track_solo(&self) -> bool {
-        unsafe { Reaper::get().low().AnyTrackSolo(self.context().to_raw()) }
+    pub fn any_track_solo(&self) -> Result<bool, ReaRsError> {
+        unsafe { Ok(Reaper::get().low().AnyTrackSolo(self.get()?.as_ptr())) }
     }
 
     /// Verbose way to make undo.
@@ -736,12 +753,11 @@ impl<'a> Project {
     /// # Safety
     ///
     /// [Project::end_undo_block] has to be called after.
-    pub fn begin_undo_block(&mut self) {
+    pub fn begin_undo_block(&mut self) -> Result<(), ReaRsError> {
         unsafe {
-            Reaper::get()
-                .low()
-                .Undo_BeginBlock2(self.context().to_raw());
+            Reaper::get().low().Undo_BeginBlock2(self.get()?.as_ptr());
         }
+        Ok(())
     }
 
     /// Verbose way to make undo: name is the name shown in undo list.
@@ -753,14 +769,15 @@ impl<'a> Project {
         &mut self,
         name: impl Into<String>,
         flags: UndoFlags,
-    ) {
+    ) -> Result<(), ReaRsError> {
         unsafe {
             Reaper::get().low().Undo_EndBlock2(
-                self.context().to_raw(),
+                self.get()?.as_ptr(),
                 as_c_str(&name.into().with_null()).as_ptr(),
                 flags.bits() as i32,
             )
         }
+        Ok(())
     }
 
     /// Call function in undo block with given name.
@@ -781,7 +798,7 @@ impl<'a> Project {
     /// Try to undo last action.
     pub fn undo(&mut self) -> Result<(), ReaRsError> {
         unsafe {
-            match Reaper::get().low().Undo_DoUndo2(self.context().to_raw()) {
+            match Reaper::get().low().Undo_DoUndo2(self.get()?.as_ptr()) {
                 0 => Err(ReaRsError::UnsuccessfulOperation("can not do undo")),
                 _ => Ok(()),
             }
@@ -791,7 +808,7 @@ impl<'a> Project {
     /// Try to redo last undone action.
     pub fn redo(&mut self) -> Result<(), ReaRsError> {
         unsafe {
-            match Reaper::get().low().Undo_DoRedo2(self.context().to_raw()) {
+            match Reaper::get().low().Undo_DoRedo2(self.get()?.as_ptr()) {
                 0 => Err(ReaRsError::UnsuccessfulOperation("can not do redo")),
                 _ => Ok(()),
             }
@@ -801,26 +818,22 @@ impl<'a> Project {
     /// Position of next audio block being processed.
     ///
     /// [Project::play_position]
-    pub fn next_buffer_position(&self) -> Position {
+    pub fn next_buffer_position(&self) -> Result<Position, ReaRsError> {
         unsafe {
-            Position::from(
-                Reaper::get()
-                    .low()
-                    .GetPlayPosition2Ex(self.context().to_raw()),
-            )
+            Ok(Position::from(
+                Reaper::get().low().GetPlayPosition2Ex(self.get()?.as_ptr()),
+            ))
         }
     }
 
     /// Latency-compensated actual-what-you-hear position.
     ///
     /// [Project::next_buffer_position]
-    pub fn play_position(&self) -> Position {
+    pub fn play_position(&self) -> Result<Position, ReaRsError> {
         unsafe {
-            Position::from(
-                Reaper::get()
-                    .low()
-                    .GetPlayPositionEx(self.context().to_raw()),
-            )
+            Ok(Position::from(
+                Reaper::get().low().GetPlayPositionEx(self.get()?.as_ptr()),
+            ))
         }
     }
 
@@ -834,41 +847,38 @@ impl<'a> Project {
     }
 
     /// Get the name of the next action in redo queue, if any.
-    pub fn next_redo(&self) -> Option<String> {
+    pub fn next_redo(&self) -> Result<Option<String>, ReaRsError> {
         unsafe {
-            let ptr =
-                Reaper::get().low().Undo_CanRedo2(self.context().to_raw());
+            let ptr = Reaper::get().low().Undo_CanRedo2(self.get()?.as_ptr());
             match ptr.is_null() {
-                true => None,
-                false => {
-                    Some(as_string(ptr).expect("can not convert to string"))
-                }
+                true => Ok(None),
+                false => Ok(Some(
+                    as_string(ptr).expect("can not convert to string"),
+                )),
             }
         }
     }
 
     /// Get the name of the next action in undo queue, if any.
-    pub fn next_undo(&self) -> Option<String> {
+    pub fn next_undo(&self) -> Result<Option<String>, ReaRsError> {
         unsafe {
-            let ptr =
-                Reaper::get().low().Undo_CanUndo2(self.context().to_raw());
+            let ptr = Reaper::get().low().Undo_CanUndo2(self.get()?.as_ptr());
             match ptr.is_null() {
-                true => None,
-                false => {
-                    Some(as_string(ptr).expect("can not convert to string"))
-                }
+                true => Ok(None),
+                false => Ok(Some(
+                    as_string(ptr).expect("can not convert to string"),
+                )),
             }
         }
     }
 
     /// Edit cursor position.
-    pub fn get_cursor_position(&self) -> Position {
+    pub fn get_cursor_position(&self) -> Result<Position, ReaRsError> {
+        let project = self.get()?;
         unsafe {
-            Position::from(
-                Reaper::get()
-                    .low()
-                    .GetCursorPositionEx(self.context().to_raw()),
-            )
+            Ok(Position::from(
+                Reaper::get().low().GetCursorPositionEx(project.as_ptr()),
+            ))
         }
     }
 
@@ -878,15 +888,17 @@ impl<'a> Project {
         position: Position,
         move_view: bool,
         seek_play: bool,
-    ) {
+    ) -> Result<(), ReaRsError> {
+        let project = self.get()?;
         unsafe {
             Reaper::get().low().SetEditCurPos2(
-                self.context().to_raw(),
+                project.as_ptr(),
                 position.into(),
                 move_view,
                 seek_play,
             )
         }
+        Ok(())
     }
 
     /// Disarm record on all tracks.
@@ -977,17 +989,18 @@ impl<'a> Project {
             }
             let mut param_name: String = param_name.into();
             let mut buf = vec![0_i8; self.info_buf_size];
+            let project = self.get()?;
             let result = Reaper::get().low().GetSetProjectInfo_String(
-                self.context().to_raw(),
+                project.as_ptr(),
                 as_c_str(&param_name.with_null()).as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             );
             if !result {
-                return Err(
-                    ReaRsError::InvalidObject("Can not get Project info.")
-                        .into(),
-                );
+                return Err(ReaRsError::InvalidObject(
+                    "Can not get Project info.",
+                )
+                .into());
             }
 
             let result_string = string_from_buf(&buf).map_err(|err| match err {
@@ -1012,8 +1025,9 @@ impl<'a> Project {
             let mut param_name: String = param_name.into();
             let value: String = value.into();
             let val = as_c_string(&value).into_raw();
+            let project = self.get()?;
             let result = Reaper::get().low().GetSetProjectInfo_String(
-                self.context().to_raw(),
+                project.as_ptr(),
                 as_c_str(&param_name.with_null()).as_ptr(),
                 val,
                 true,
@@ -1029,15 +1043,16 @@ impl<'a> Project {
         }
     }
 
-    pub fn name(&self) -> String {
+    pub fn name(&self) -> Result<String, ReaRsError> {
+        let project = self.get()?;
         unsafe {
             let mut name = vec![0_i8; self.info_buf_size];
             Reaper::get().low().GetProjectName(
-                self.context().to_raw(),
+                project.as_ptr(),
                 name.as_mut_ptr(),
                 self.info_buf_size as i32,
             );
-            string_from_buf(&name).expect("shoudl return project name")
+            string_from_buf(&name)
         }
     }
 
@@ -1126,10 +1141,11 @@ impl<'a> Project {
 
     /// Project path.
     pub fn get_path(&self) -> anyhow::Result<PathBuf> {
+        let project = self.get()?;
         unsafe {
             let mut buf = vec![0_i8; self.info_buf_size];
             Reaper::get().low().GetProjectPathEx(
-                self.context().to_raw(),
+                project.as_ptr(),
                 buf.as_mut_ptr(),
                 self.info_buf_size as i32,
             );
@@ -1235,28 +1251,36 @@ impl<'a> Project {
 
     /// Will return `PlayRate::from(1.0)` in normal conditions.
     pub fn get_play_rate(&self, position: impl Into<Position>) -> PlayRate {
+        let project = self.get().expect("should get project ptr");
         unsafe {
             PlayRate::from(Reaper::get().low().Master_GetPlayRateAtTime(
                 position.into().into(),
-                self.context().to_raw(),
+                project.as_ptr(),
             ))
         }
     }
 
-    pub fn save(&mut self, force_save_as: bool) {
+    pub fn save(&mut self, force_save_as: bool) -> Result<(), ReaRsError> {
+        let project = self.get()?;
         unsafe {
             Reaper::get()
                 .low()
-                .Main_SaveProject(self.context().to_raw(), force_save_as)
+                .Main_SaveProject(project.as_ptr(), force_save_as)
         }
+        Ok(())
     }
 
-    pub fn select_all_items(&mut self, should_select: bool) {
+    pub fn select_all_items(
+        &mut self,
+        should_select: bool,
+    ) -> Result<(), ReaRsError> {
+        let project = self.get()?;
         unsafe {
             Reaper::get()
                 .low()
-                .SelectAllMediaItems(self.context().to_raw(), should_select)
+                .SelectAllMediaItems(project.as_ptr(), should_select)
         }
+        Ok(())
     }
 
     pub fn select_all_tracks(&mut self, should_select: bool) {
@@ -1297,9 +1321,10 @@ impl<'a> Project {
     }
 
     fn get_info_value(&self, param_name: impl Into<String>) -> f64 {
+        let project = self.get().expect("should get project ptr");
         unsafe {
             Reaper::get().low().GetSetProjectInfo(
-                self.context().to_raw(),
+                project.as_ptr(),
                 as_c_str(&param_name.into().with_null()).as_ptr(),
                 0.0,
                 false,
@@ -1307,9 +1332,10 @@ impl<'a> Project {
         }
     }
     fn set_info_value(&mut self, param_name: impl Into<String>, value: f64) {
+        let project = self.get().expect("should get project ptr");
         unsafe {
             Reaper::get().low().GetSetProjectInfo(
-                self.context().to_raw(),
+                project.as_ptr(),
                 as_c_str(&param_name.into().with_null()).as_ptr(),
                 value,
                 true,
@@ -1542,13 +1568,14 @@ impl<'a> Iterator for TracksIterator<'a> {
 }
 impl<'a> DoubleEndedIterator for TracksIterator<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
+        let count = self.project.n_tracks().unwrap_or(0);
         if self.index == 0 {
-            self.index = self.project.n_tracks();
+            self.index = count;
         }
         let track = self.project.get_track(self.index - 1);
         self.index -= 1;
         if self.index == 0 {
-            self.index = self.project.n_tracks() + 2;
+            self.index = count + 2;
         }
         return track;
     }
