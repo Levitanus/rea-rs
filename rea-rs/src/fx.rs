@@ -1,24 +1,30 @@
 use std::{
-    ffi::CString, marker::PhantomData, mem::{MaybeUninit, transmute}, ops::Range, ptr::NonNull,
+    ffi::CString,
+    marker::PhantomData,
+    mem::{transmute, MaybeUninit},
+    ops::Range,
+    ptr::NonNull,
 };
 
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
+    ptr_wrappers::{MediaItemTake, MediaTrack},
     utils::{as_c_str, as_string_mut, make_c_string_buf, WithNull},
-    Envelope, Immutable, KnowsProject, Mutable, ProbablyMutable, ReaRsError,
-    Reaper, ReaperResult, Take, Track, WithReaperPtr,
+    Envelope, KnowsProject, ReaRsError, Reaper, ReaperResult, Take, Track,
+    WithReaperPtr,
 };
 
 /// Parametrizes FX functionality for [TrackFX] asn [TakeFX].
-pub trait FX<T: ProbablyMutable>
+pub trait FX
 where
     Self: Sized,
 {
     type Parent;
     /// Get FX from parent, if exists.
-    fn from_index(parent: Self::Parent, index: usize) -> Option<Self>;
+    fn from_index(parent: &Self::Parent, index: usize) -> Option<Self>;
     fn name(&self) -> String;
+    fn index(&self) -> usize;
     fn is_enabled(&self) -> bool;
     fn is_online(&self) -> bool;
     fn is_instrument(&self) -> bool;
@@ -29,24 +35,17 @@ where
     /// FX Preset name
     fn preset(&self) -> ReaperResult<String>;
     fn preset_index(&self) -> ReaperResult<usize>;
-    fn copy_to_take(&self, take: &mut Take<Mutable>, desired_index: usize);
-    fn copy_to_track(&self, track: &mut Track<Mutable>, desired_index: usize);
-}
+    fn copy_to_take(&self, take: &mut Take, desired_index: usize);
+    fn copy_to_track(&self, track: &mut Track, desired_index: usize);
 
-/// Parametrizes mutable FX functionality for [TrackFX] asn [TakeFX].
-pub trait FXMut
-where
-    Self: Sized,
-{
-    type Parent;
     fn set_enabled(&mut self, enable: bool);
     fn set_online(&mut self, online: bool);
     fn close_chain(&mut self);
     fn close_floating_window(&mut self);
     fn show_chain(&mut self);
     fn show_floating_window(&mut self);
-    fn move_to_take(self, take: &Take<Mutable>, desired_index: usize);
-    fn move_to_track(self, track: &Track<Mutable>, desired_index: usize);
+    fn move_to_take(self, take: &Take, desired_index: usize);
+    fn move_to_track(self, track: &Track, desired_index: usize);
     /// Preset can be as preset name from list of fx presets. Or path to
     /// `.vstpreset` file.
     fn set_preset(&mut self, preset: impl Into<String>) -> ReaperResult<()>;
@@ -56,21 +55,21 @@ where
     fn delete(self) -> Result<(), ReaRsError>;
 }
 
-pub struct TrackFX<'a, T: ProbablyMutable> {
-    parent: &'a Track<'a, T>,
+pub struct TrackFX {
+    parent_ptr: MediaTrack,
     index: usize,
 }
-impl<'a, T: ProbablyMutable> TrackFX<'a, T> {
+impl TrackFX {
     /// On Master Track is_rec_fx represents monitoring chain.
     pub fn from_name(
-        parent: &'a Track<'a, T>,
+        parent: &Track,
         name: impl Into<String>,
         is_rec_fx: bool,
     ) -> Option<Self> {
         let mut name = name.into();
         let index = unsafe {
             Reaper::get().low().TrackFX_AddByName(
-                parent.get().as_ptr(),
+                parent.get()?.as_ptr(),
                 as_c_str(name.with_null()).as_ptr(),
                 is_rec_fx,
                 0,
@@ -79,39 +78,45 @@ impl<'a, T: ProbablyMutable> TrackFX<'a, T> {
         match index {
             -1 => None,
             x => Some(Self {
-                parent,
+                parent_ptr: parent.get_pointer(),
                 index: x as usize,
             }),
         }
     }
     /// Iterate through (Immutable) FX params
-    pub fn iter_params(&'a self) -> FXParamIterator<'a, T, Track<'a, T>, Self> {
+    pub fn iter_params(&self) -> FXParamIterator<Track, Self> {
         FXParamIterator::new(self)
     }
 }
-impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
-    type Parent = &'a Track<'a, T>;
-    fn from_index(parent: Self::Parent, index: usize) -> Option<Self> {
+impl FX for TrackFX {
+    type Parent = Track;
+    fn from_index(parent: &Self::Parent, index: usize) -> Option<Self> {
         let size = 512;
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
             Reaper::get().low().TrackFX_GetFXName(
-                parent.get().as_ptr(),
+                parent.get()?.as_ptr(),
                 index as i32,
                 buf,
                 size as i32,
             )
         };
         match result {
-            true => Some(Self { parent, index }),
+            true => Some(Self {
+                parent_ptr: parent.get_pointer(),
+                index,
+            }),
             false => None,
         }
+    }
+    fn index(&self) -> usize {
+        self.index
     }
 
     fn is_enabled(&self) -> bool {
         unsafe {
             Reaper::get().low().TrackFX_GetEnabled(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
             )
         }
@@ -119,18 +124,19 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
     fn is_online(&self) -> bool {
         unsafe {
             !Reaper::get().low().TrackFX_GetOffline(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
             )
         }
     }
     fn is_instrument(&self) -> bool {
-        let parmname = CString::new("is_instrument").expect("failed to make CString");
+        let parmname =
+            CString::new("is_instrument").expect("failed to make CString");
         let size = 8;
         let buf = make_c_string_buf(size).into_raw();
         let got_value = unsafe {
             Reaper::get().low().TrackFX_GetNamedConfigParm(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 parmname.as_ptr(),
                 buf,
@@ -154,16 +160,16 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
         let result = unsafe {
             Reaper::get().low().TrackFX_GetIOSize(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 ins.as_mut_ptr(),
                 outs.as_mut_ptr(),
             )
         };
         match result {
-            x if x < 0 => Err(ReaRsError::UnsuccessfulOperation(
-                "Can not get n_inputs.",
-            )),
+            x if x < 0 => {
+                Err(ReaRsError::UnsuccessfulOperation("Can not get n_inputs."))
+            }
             _ => Ok(unsafe { ins.assume_init() as usize }),
         }
     }
@@ -172,7 +178,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
         let result = unsafe {
             Reaper::get().low().TrackFX_GetIOSize(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 ins.as_mut_ptr(),
                 outs.as_mut_ptr(),
@@ -188,14 +194,14 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
     fn n_params(&self) -> ReaperResult<usize> {
         let result = unsafe {
             Reaper::get().low().TrackFX_GetNumParams(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
             )
         };
         match result {
-            x if x < 0 => Err(ReaRsError::UnsuccessfulOperation(
-                "Can not get n_params.",
-            )),
+            x if x < 0 => {
+                Err(ReaRsError::UnsuccessfulOperation("Can not get n_params."))
+            }
             _ => Ok(result as usize),
         }
     }
@@ -204,7 +210,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
         let mut presets = MaybeUninit::zeroed();
         let result = unsafe {
             Reaper::get().low().TrackFX_GetPresetIndex(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 presets.as_mut_ptr(),
             )
@@ -221,7 +227,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
             Reaper::get().low().TrackFX_GetPreset(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 buf,
                 size as i32,
@@ -242,7 +248,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
         let mut presets = MaybeUninit::zeroed();
         let result = unsafe {
             Reaper::get().low().TrackFX_GetPresetIndex(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 presets.as_mut_ptr(),
             )
@@ -254,24 +260,24 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
         }
     }
 
-    fn copy_to_take(&self, take: &mut Take<Mutable>, desired_index: usize) {
+    fn copy_to_take(&self, take: &mut Take, desired_index: usize) {
         unsafe {
             Reaper::get().low().TrackFX_CopyToTake(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
-                take.get().as_ptr(),
+                take.get()?.as_ptr(),
                 desired_index as i32,
                 false,
             )
         }
     }
 
-    fn copy_to_track(&self, track: &mut Track<Mutable>, desired_index: usize) {
+    fn copy_to_track(&self, track: &mut Track, desired_index: usize) {
         unsafe {
             Reaper::get().low().TrackFX_CopyToTrack(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
-                track.get().as_ptr(),
+                track.get()?.as_ptr(),
                 desired_index as i32,
                 false,
             )
@@ -282,7 +288,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
             Reaper::get().low().TrackFX_GetFXName(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 buf,
                 size as i32,
@@ -295,13 +301,10 @@ impl<'a, T: ProbablyMutable> FX<T> for TrackFX<'a, T> {
             false => panic!("Can not get FX name. Probably, it's deleted"),
         }
     }
-}
-impl<'a> FXMut for TrackFX<'a, Mutable> {
-    type Parent = Track<'a, Mutable>;
     fn set_enabled(&mut self, enable: bool) {
         unsafe {
             Reaper::get().low().TrackFX_SetEnabled(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 enable,
             )
@@ -310,7 +313,7 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
     fn set_online(&mut self, online: bool) {
         unsafe {
             Reaper::get().low().TrackFX_SetOffline(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 !online,
             )
@@ -319,7 +322,7 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
     fn close_chain(&mut self) {
         unsafe {
             Reaper::get().low().TrackFX_Show(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 0,
             )
@@ -328,7 +331,7 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
     fn close_floating_window(&mut self) {
         unsafe {
             Reaper::get().low().TrackFX_Show(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 2,
             )
@@ -337,7 +340,7 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
     fn show_chain(&mut self) {
         unsafe {
             Reaper::get().low().TrackFX_Show(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 1,
             )
@@ -346,30 +349,30 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
     fn show_floating_window(&mut self) {
         unsafe {
             Reaper::get().low().TrackFX_Show(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 3,
             )
         }
     }
 
-    fn move_to_take(self, take: &Take<Mutable>, desired_index: usize) {
+    fn move_to_take(self, take: &Take, desired_index: usize) {
         unsafe {
             Reaper::get().low().TrackFX_CopyToTake(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
-                take.get().as_ptr(),
+                take.get()?.as_ptr(),
                 desired_index as i32,
                 true,
             )
         }
     }
-    fn move_to_track(self, track: &Track<Mutable>, desired_index: usize) {
+    fn move_to_track(self, track: &Track, desired_index: usize) {
         unsafe {
             Reaper::get().low().TrackFX_CopyToTrack(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
-                track.get().as_ptr(),
+                track.get()?.as_ptr(),
                 desired_index as i32,
                 true,
             )
@@ -379,7 +382,7 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
         match unsafe {
             Reaper::get()
                 .low()
-                .TrackFX_Delete(self.parent.get().as_ptr(), self.index as i32)
+                .TrackFX_Delete(self.parent.get()?.as_ptr(), self.index as i32)
         } {
             true => Ok(()),
             false => {
@@ -392,7 +395,7 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
         let mut name = preset.into();
         let result = unsafe {
             Reaper::get().low().TrackFX_SetPreset(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 as_c_str(name.with_null()).as_ptr(),
             )
@@ -408,7 +411,7 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
     fn set_preset_index(&mut self, preset: usize) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TrackFX_SetPresetByIndex(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 preset as i32,
             )
@@ -424,7 +427,7 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
     fn previous_preset(&mut self) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TrackFX_NavigatePresets(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 -1,
             )
@@ -440,7 +443,7 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
     fn next_preset(&mut self) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TrackFX_NavigatePresets(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 1,
             )
@@ -454,13 +457,8 @@ impl<'a> FXMut for TrackFX<'a, Mutable> {
     }
 }
 
-impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
-    for TrackFX<'a, M>
-{
-    fn param(
-        &'a self,
-        index: usize,
-    ) -> Option<FXParam<'a, M, Track<'a, M>, Self>> {
+impl param_parent::FXParamParent<Track> for TrackFX {
+    fn param(&self, index: usize) -> Option<FXParam<Track, Self>> {
         match self.n_params() {
             Ok(n_params) => match index < n_params {
                 true => Some(FXParam::new(self, index)),
@@ -471,13 +469,13 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
     }
 
     fn param_from_ident_string(
-        &'a self,
+        &self,
         param: impl Into<String>,
-    ) -> Option<FXParam<'a, M, Track<'a, M>, Self>> {
+    ) -> Option<FXParam<Track, Self>> {
         let mut param = param.into();
         let index = unsafe {
             Reaper::get().low().TrackFX_GetParamFromIdent(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 as_c_str(param.with_null()).as_ptr(),
             )
@@ -494,7 +492,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
             Reaper::get().low().TrackFX_GetParamName(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 buf,
@@ -512,7 +510,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
             Reaper::get().low().TrackFX_GetParamIdent(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 buf,
@@ -530,7 +528,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
         unsafe {
             Reaper::get().low().TrackFX_GetParam(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 min.as_mut_ptr(),
@@ -542,7 +540,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
     fn param_value_normalized(&self, param: usize) -> f64 {
         unsafe {
             Reaper::get().low().TrackFX_GetParamNormalized(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
             )
@@ -554,7 +552,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
             Reaper::get().low().TrackFX_GetFormattedParamValue(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 buf,
@@ -575,7 +573,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
         );
         unsafe {
             Reaper::get().low().TrackFX_GetParamEx(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 min.as_mut_ptr(),
@@ -591,7 +589,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
         unsafe {
             Reaper::get().low().TrackFX_GetParam(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 min.as_mut_ptr(),
@@ -605,10 +603,10 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
         &self,
         param: usize,
         create_if_not_exists: bool,
-    ) -> Option<Envelope<'a, Track<'a, M>, Immutable>> {
+    ) -> Option<Envelope<Track>> {
         let ptr = unsafe {
             Reaper::get().low().GetFXEnvelope(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 create_if_not_exists,
@@ -634,7 +632,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
         );
         let result = unsafe {
             Reaper::get().low().TrackFX_GetParameterStepSizes(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 step.as_mut_ptr(),
@@ -657,14 +655,8 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Track<'a, M>>
             },
         }
     }
-}
-impl<'a> param_parent::FXParamParentMut<'a, Track<'a, Mutable>>
-    for TrackFX<'a, Mutable>
-{
-    fn param_mut(
-        &'a mut self,
-        index: usize,
-    ) -> Option<FXParam<'a, Mutable, Track<'a, Mutable>, Self>> {
+
+    fn param_mut(&mut self, index: usize) -> Option<FXParam<Track, Self>> {
         match self.n_params() {
             Ok(n_params) => match index < n_params {
                 true => Some(FXParam::new(self, index)),
@@ -674,13 +666,13 @@ impl<'a> param_parent::FXParamParentMut<'a, Track<'a, Mutable>>
         }
     }
     fn param_from_ident_string_mut(
-        &'a mut self,
+        &mut self,
         param: impl Into<String>,
-    ) -> Option<FXParam<'a, Mutable, Track<'a, Mutable>, Self>> {
+    ) -> Option<FXParam<Track, Self>> {
         let mut param = param.into();
         let index = unsafe {
             Reaper::get().low().TrackFX_GetParamFromIdent(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 as_c_str(param.with_null()).as_ptr(),
             )
@@ -696,10 +688,10 @@ impl<'a> param_parent::FXParamParentMut<'a, Track<'a, Mutable>>
         &self,
         param: usize,
         create_if_not_exists: bool,
-    ) -> Option<Envelope<'a, Track<'a, Mutable>, Mutable>> {
+    ) -> Option<Envelope<Track>> {
         let ptr = unsafe {
             Reaper::get().low().GetFXEnvelope(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 create_if_not_exists,
@@ -716,7 +708,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Track<'a, Mutable>>
     fn set_param_value(&self, param: usize, value: f64) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TrackFX_SetParam(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 value,
@@ -737,7 +729,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Track<'a, Mutable>>
     ) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TrackFX_SetParamNormalized(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 value,
@@ -752,19 +744,16 @@ impl<'a> param_parent::FXParamParentMut<'a, Track<'a, Mutable>>
     }
 }
 
-pub struct TakeFX<'a, T: ProbablyMutable> {
-    parent: &'a Take<'a, T>,
+pub struct TakeFX {
+    parent_ptr: MediaItemTake,
     index: usize,
 }
-impl<'a, T: ProbablyMutable> TakeFX<'a, T> {
-    pub fn from_name(
-        parent: &'a Take<'a, T>,
-        name: impl Into<String>,
-    ) -> Option<Self> {
+impl TakeFX {
+    pub fn from_name(parent: &Take, name: impl Into<String>) -> Option<Self> {
         let mut name = name.into();
         let index = unsafe {
             Reaper::get().low().TakeFX_AddByName(
-                parent.get().as_ptr(),
+                parent.get()?.as_ptr(),
                 as_c_str(name.with_null()).as_ptr(),
                 0,
             )
@@ -772,38 +761,44 @@ impl<'a, T: ProbablyMutable> TakeFX<'a, T> {
         match index {
             -1 => None,
             x => Some(Self {
-                parent,
+                parent_ptr: parent.get_pointer(),
                 index: x as usize,
             }),
         }
     }
     /// Iterate through (Immutable) FX params
-    pub fn iter_params(&'a self) -> FXParamIterator<'a, T, Take<'a, T>, Self> {
+    pub fn iter_params(&self) -> FXParamIterator<Take, Self> {
         FXParamIterator::new(self)
     }
 }
-impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
-    type Parent = &'a Take<'a, T>;
+impl FX for TakeFX {
+    type Parent = Take;
     fn from_index(parent: Self::Parent, index: usize) -> Option<Self> {
         let size = 512;
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
             Reaper::get().low().TakeFX_GetFXName(
-                parent.get().as_ptr(),
+                parent.get()?.as_ptr(),
                 index as i32,
                 buf,
                 size as i32,
             )
         };
         match result {
-            true => Some(Self { parent, index }),
+            true => Some(Self {
+                parent_ptr: parent.get_pointer(),
+                index,
+            }),
             false => None,
         }
+    }
+    fn index(&self) -> usize {
+        self.index
     }
     fn is_enabled(&self) -> bool {
         unsafe {
             Reaper::get().low().TakeFX_GetEnabled(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
             )
         }
@@ -811,18 +806,19 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
     fn is_online(&self) -> bool {
         unsafe {
             !Reaper::get().low().TakeFX_GetOffline(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
             )
         }
     }
     fn is_instrument(&self) -> bool {
-        let parmname = CString::new("is_instrument").expect("failed to make CString");
+        let parmname =
+            CString::new("is_instrument").expect("failed to make CString");
         let size = 8;
         let buf = make_c_string_buf(size).into_raw();
         let got_value = unsafe {
             Reaper::get().low().TakeFX_GetNamedConfigParm(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 parmname.as_ptr(),
                 buf,
@@ -845,16 +841,16 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
         let result = unsafe {
             Reaper::get().low().TakeFX_GetIOSize(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 ins.as_mut_ptr(),
                 outs.as_mut_ptr(),
             )
         };
         match result {
-            x if x < 0 => Err(ReaRsError::UnsuccessfulOperation(
-                "Can not get n_inputs.",
-            )),
+            x if x < 0 => {
+                Err(ReaRsError::UnsuccessfulOperation("Can not get n_inputs."))
+            }
             _ => Ok(unsafe { ins.assume_init() as usize }),
         }
     }
@@ -863,7 +859,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
         let result = unsafe {
             Reaper::get().low().TakeFX_GetIOSize(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 ins.as_mut_ptr(),
                 outs.as_mut_ptr(),
@@ -879,14 +875,14 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
     fn n_params(&self) -> ReaperResult<usize> {
         let result = unsafe {
             Reaper::get().low().TakeFX_GetNumParams(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
             )
         };
         match result {
-            x if x < 0 => Err(ReaRsError::UnsuccessfulOperation(
-                "Can not get n_params.",
-            )),
+            x if x < 0 => {
+                Err(ReaRsError::UnsuccessfulOperation("Can not get n_params."))
+            }
             _ => Ok(result as usize),
         }
     }
@@ -895,7 +891,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
         let mut presets = MaybeUninit::zeroed();
         let result = unsafe {
             Reaper::get().low().TakeFX_GetPresetIndex(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 presets.as_mut_ptr(),
             )
@@ -912,7 +908,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
             Reaper::get().low().TakeFX_GetPreset(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 buf,
                 size as i32,
@@ -933,7 +929,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
         let mut presets = MaybeUninit::zeroed();
         let result = unsafe {
             Reaper::get().low().TakeFX_GetPresetIndex(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 presets.as_mut_ptr(),
             )
@@ -945,23 +941,23 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
         }
     }
 
-    fn copy_to_take(&self, take: &mut Take<Mutable>, desired_index: usize) {
+    fn copy_to_take(&self, take: &mut Take, desired_index: usize) {
         unsafe {
             Reaper::get().low().TakeFX_CopyToTake(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
-                take.get().as_ptr(),
+                take.get()?.as_ptr(),
                 desired_index as i32,
                 false,
             )
         }
     }
-    fn copy_to_track(&self, track: &mut Track<Mutable>, desired_index: usize) {
+    fn copy_to_track(&self, track: &mut Track, desired_index: usize) {
         unsafe {
             Reaper::get().low().TakeFX_CopyToTrack(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
-                track.get().as_ptr(),
+                track.get()?.as_ptr(),
                 desired_index as i32,
                 false,
             )
@@ -972,7 +968,7 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
             Reaper::get().low().TakeFX_GetFXName(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 buf,
                 size as i32,
@@ -985,13 +981,11 @@ impl<'a, T: ProbablyMutable> FX<T> for TakeFX<'a, T> {
             false => panic!("Can not get FX name. Probably, it's deleted"),
         }
     }
-}
-impl<'a> FXMut for TakeFX<'a, Mutable> {
-    type Parent = Track<'a, Mutable>;
+
     fn set_enabled(&mut self, enable: bool) {
         unsafe {
             Reaper::get().low().TakeFX_SetEnabled(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 enable,
             )
@@ -1000,7 +994,7 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
     fn set_online(&mut self, online: bool) {
         unsafe {
             Reaper::get().low().TakeFX_SetOffline(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 !online,
             )
@@ -1009,7 +1003,7 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
     fn close_chain(&mut self) {
         unsafe {
             Reaper::get().low().TakeFX_Show(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 0,
             )
@@ -1018,7 +1012,7 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
     fn close_floating_window(&mut self) {
         unsafe {
             Reaper::get().low().TakeFX_Show(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 2,
             )
@@ -1027,7 +1021,7 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
     fn show_chain(&mut self) {
         unsafe {
             Reaper::get().low().TakeFX_Show(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 1,
             )
@@ -1036,29 +1030,29 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
     fn show_floating_window(&mut self) {
         unsafe {
             Reaper::get().low().TakeFX_Show(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 3,
             )
         }
     }
-    fn move_to_take(self, take: &Take<Mutable>, desired_index: usize) {
+    fn move_to_take(self, take: &Take, desired_index: usize) {
         unsafe {
             Reaper::get().low().TakeFX_CopyToTake(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
-                take.get().as_ptr(),
+                take.get()?.as_ptr(),
                 desired_index as i32,
                 true,
             )
         }
     }
-    fn move_to_track(self, track: &Track<Mutable>, desired_index: usize) {
+    fn move_to_track(self, track: &Track, desired_index: usize) {
         unsafe {
             Reaper::get().low().TakeFX_CopyToTrack(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
-                track.get().as_ptr(),
+                track.get()?.as_ptr(),
                 desired_index as i32,
                 true,
             )
@@ -1068,7 +1062,7 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
         match unsafe {
             Reaper::get()
                 .low()
-                .TakeFX_Delete(self.parent.get().as_ptr(), self.index as i32)
+                .TakeFX_Delete(self.parent.get()?.as_ptr(), self.index as i32)
         } {
             true => Ok(()),
             false => {
@@ -1081,7 +1075,7 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
         let mut name = preset.into();
         let result = unsafe {
             Reaper::get().low().TakeFX_SetPreset(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 as_c_str(name.with_null()).as_ptr(),
             )
@@ -1097,7 +1091,7 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
     fn set_preset_index(&mut self, preset: usize) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TakeFX_SetPresetByIndex(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 preset as i32,
             )
@@ -1112,7 +1106,7 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
     fn previous_preset(&mut self) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TakeFX_NavigatePresets(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 -1,
             )
@@ -1128,7 +1122,7 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
     fn next_preset(&mut self) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TakeFX_NavigatePresets(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 1,
             )
@@ -1142,13 +1136,8 @@ impl<'a> FXMut for TakeFX<'a, Mutable> {
     }
 }
 
-impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
-    for TakeFX<'a, M>
-{
-    fn param(
-        &'a self,
-        index: usize,
-    ) -> Option<FXParam<'a, M, Take<'a, M>, Self>> {
+impl param_parent::FXParamParent<Take> for TakeFX {
+    fn param(&self, index: usize) -> Option<FXParam<Take, Self>> {
         match self.n_params() {
             Ok(n_params) => match index < n_params {
                 true => Some(FXParam::new(self, index)),
@@ -1159,13 +1148,13 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
     }
 
     fn param_from_ident_string(
-        &'a self,
+        &self,
         param: impl Into<String>,
-    ) -> Option<FXParam<'a, M, Take<'a, M>, Self>> {
+    ) -> Option<FXParam<Take, Self>> {
         let mut param = param.into();
         let index = unsafe {
             Reaper::get().low().TakeFX_GetParamFromIdent(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 as_c_str(param.with_null()).as_ptr(),
             )
@@ -1182,7 +1171,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
             Reaper::get().low().TakeFX_GetParamName(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 buf,
@@ -1200,7 +1189,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
             Reaper::get().low().TakeFX_GetParamIdent(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 buf,
@@ -1218,7 +1207,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
         unsafe {
             Reaper::get().low().TakeFX_GetParam(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 min.as_mut_ptr(),
@@ -1230,7 +1219,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
     fn param_value_normalized(&self, param: usize) -> f64 {
         unsafe {
             Reaper::get().low().TakeFX_GetParamNormalized(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
             )
@@ -1242,7 +1231,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
         let buf = make_c_string_buf(size).into_raw();
         let result = unsafe {
             Reaper::get().low().TakeFX_GetFormattedParamValue(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 buf,
@@ -1263,7 +1252,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
         );
         unsafe {
             Reaper::get().low().TakeFX_GetParamEx(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 min.as_mut_ptr(),
@@ -1279,7 +1268,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
         unsafe {
             Reaper::get().low().TakeFX_GetParam(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 min.as_mut_ptr(),
@@ -1293,10 +1282,10 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
         &self,
         param: usize,
         create_if_not_exists: bool,
-    ) -> Option<Envelope<'a, Take<'a, M>, Immutable>> {
+    ) -> Option<Envelope<Take>> {
         let ptr = unsafe {
             Reaper::get().low().TakeFX_GetEnvelope(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 create_if_not_exists,
@@ -1322,7 +1311,7 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
         );
         let result = unsafe {
             Reaper::get().low().TakeFX_GetParameterStepSizes(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 step.as_mut_ptr(),
@@ -1345,15 +1334,8 @@ impl<'a, M: ProbablyMutable> param_parent::FXParamParent<'a, M, Take<'a, M>>
             },
         }
     }
-}
 
-impl<'a> param_parent::FXParamParentMut<'a, Take<'a, Mutable>>
-    for TakeFX<'a, Mutable>
-{
-    fn param_mut(
-        &'a mut self,
-        index: usize,
-    ) -> Option<FXParam<'a, Mutable, Take<'a, Mutable>, Self>> {
+    fn param_mut(&mut self, index: usize) -> Option<FXParam<Take, Self>> {
         match self.n_params() {
             Ok(n_params) => match index < n_params {
                 true => Some(FXParam::new(self, index)),
@@ -1363,13 +1345,13 @@ impl<'a> param_parent::FXParamParentMut<'a, Take<'a, Mutable>>
         }
     }
     fn param_from_ident_string_mut(
-        &'a mut self,
+        &mut self,
         param: impl Into<String>,
-    ) -> Option<FXParam<'a, Mutable, Take<'a, Mutable>, Self>> {
+    ) -> Option<FXParam<Take, Self>> {
         let mut param = param.into();
         let index = unsafe {
             Reaper::get().low().TakeFX_GetParamFromIdent(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 as_c_str(param.with_null()).as_ptr(),
             )
@@ -1385,10 +1367,10 @@ impl<'a> param_parent::FXParamParentMut<'a, Take<'a, Mutable>>
         &self,
         param: usize,
         create_if_not_exists: bool,
-    ) -> Option<Envelope<'a, Take<'a, Mutable>, Mutable>> {
+    ) -> Option<Envelope<Take>> {
         let ptr = unsafe {
             Reaper::get().low().TakeFX_GetEnvelope(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 create_if_not_exists,
@@ -1405,7 +1387,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Take<'a, Mutable>>
     fn set_param_value(&self, param: usize, value: f64) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TakeFX_SetParam(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 value,
@@ -1426,7 +1408,7 @@ impl<'a> param_parent::FXParamParentMut<'a, Take<'a, Mutable>>
     ) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().TakeFX_SetParamNormalized(
-                self.parent.get().as_ptr(),
+                self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
                 value,
@@ -1443,36 +1425,22 @@ impl<'a> param_parent::FXParamParentMut<'a, Take<'a, Mutable>>
 
 /// Parameter of a plugin. Created by [TrackFX] or [TakeFX].
 #[derive(Debug)]
-pub struct FXParam<
-    'a,
-    M: ProbablyMutable,
-    P: KnowsProject,
-    F: param_parent::FXParamParent<'a, M, P>,
-> {
-    parent: &'a F,
+pub struct FXParam<P: KnowsProject, F: param_parent::FXParamParent<P>> {
+    parent_idx: usize,
     index: usize,
     fx_parent: PhantomData<P>,
-    mutability: PhantomData<M>,
+    parent: PhantomData<F>,
 }
-impl<
-        'a,
-        M: ProbablyMutable,
-        P: KnowsProject,
-        F: param_parent::FXParamParent<'a, M, P>,
-    > FXParam<'a, M, P, F>
-{
-    fn new(parent: &'a F, index: usize) -> Self {
+impl<P: KnowsProject, F: param_parent::FXParamParent<P>> FXParam<P, F> {
+    fn new(parent: &F, index: usize) -> Self {
         Self {
-            parent,
+            parent_idx: parent.index(),
             index,
             fx_parent: PhantomData::default(),
-            mutability: PhantomData::default(),
+            parent: PhantomData::default(),
         }
     }
-    pub fn envelope(
-        &self,
-        create_if_not_exists: bool,
-    ) -> Option<Envelope<'a, P, Immutable>> {
+    pub fn envelope(&self, create_if_not_exists: bool) -> Option<Envelope<P>> {
         self.parent.param_envelope(self.index, create_if_not_exists)
     }
 
@@ -1505,14 +1473,7 @@ impl<
     pub fn step_sizes(&self) -> ReaperResult<FXParamStepSizes> {
         self.parent.param_step_sizes(self.index)
     }
-}
-impl<
-        'a,
-        P: KnowsProject,
-        F: param_parent::FXParamParentMut<'a, P>
-            + param_parent::FXParamParent<'a, Mutable, P>,
-    > FXParam<'a, Mutable, P, F>
-{
+
     pub fn set_value(&mut self, value: f64) -> ReaperResult<()> {
         self.parent.set_param_value(self.index, value)
     }
@@ -1524,7 +1485,7 @@ impl<
     pub fn envelope_mut(
         &self,
         create_if_not_exists: bool,
-    ) -> Option<Envelope<'a, P, Mutable>> {
+    ) -> Option<Envelope<P>> {
         self.parent
             .param_envelope_mut(self.index, create_if_not_exists)
     }
@@ -1535,18 +1496,15 @@ mod param_parent {
     use std::ops::Range;
 
     use crate::{
-        Envelope, FXMut, FXParam, FXParamStepSizes, Immutable, KnowsProject,
-        Mutable, ProbablyMutable, ReaperResult, FX,
+        Envelope, FXParam, FXParamStepSizes, KnowsProject, ReaperResult, FX,
     };
 
-    pub trait FXParamParent<'a, M: ProbablyMutable, P: KnowsProject>:
-        FX<M>
-    {
-        fn param(&'a self, index: usize) -> Option<FXParam<'a, M, P, Self>>;
+    pub trait FXParamParent<P: KnowsProject>: FX {
+        fn param(&self, index: usize) -> Option<FXParam<P, Self>>;
         fn param_from_ident_string(
-            &'a self,
+            &self,
             param: impl Into<String>,
-        ) -> Option<FXParam<'a, M, P, Self>>;
+        ) -> Option<FXParam<P, Self>>;
         fn param_name(&self, param: usize) -> String;
         fn param_ident_string(&self, param: usize) -> String;
         fn param_value(&self, param: usize) -> f64;
@@ -1558,29 +1516,22 @@ mod param_parent {
             &self,
             param: usize,
             create_if_not_exists: bool,
-        ) -> Option<Envelope<'a, P, Immutable>>;
+        ) -> Option<Envelope<P>>;
         fn param_step_sizes(
             &self,
             param: usize,
         ) -> ReaperResult<FXParamStepSizes>;
-    }
-    pub trait FXParamParentMut<'a, P: KnowsProject>: FXMut
-    where
-        Self: FXParamParent<'a, Mutable, P>,
-    {
-        fn param_mut(
-            &'a mut self,
-            index: usize,
-        ) -> Option<FXParam<'a, Mutable, P, Self>>;
+
+        fn param_mut(&mut self, index: usize) -> Option<FXParam<P, Self>>;
         fn param_from_ident_string_mut(
-            &'a mut self,
+            &mut self,
             param: impl Into<String>,
-        ) -> Option<FXParam<'a, Mutable, P, Self>>;
+        ) -> Option<FXParam<P, Self>>;
         fn param_envelope_mut(
             &self,
             param: usize,
             create_if_not_exists: bool,
-        ) -> Option<Envelope<'a, P, Mutable>>;
+        ) -> Option<Envelope<P>>;
         fn set_param_value(
             &self,
             param: usize,
@@ -1604,10 +1555,10 @@ pub struct FXParamStepSizes {
 }
 
 /// Indicates, that type can hold FX ([Track] or [Take])
-pub trait FXParent<'a, T: FX<Immutable> + 'a> {
+pub trait FXParent<T: FX> {
     fn n_fx(&self) -> usize;
-    fn get_fx(&'a self, index: usize) -> Option<T>;
-    fn iter_fx(&'a self) -> FXIterator<'a, T, Self>
+    fn get_fx(&self, index: usize) -> Option<T>;
+    fn iter_fx(&self) -> FXIterator<T, Self>
     where
         Self: Sized,
     {
@@ -1616,13 +1567,13 @@ pub trait FXParent<'a, T: FX<Immutable> + 'a> {
 }
 
 /// Iterates through all FX of [Track] os [Take].
-pub struct FXIterator<'a, T: FX<Immutable> + 'a, P: FXParent<'a, T>> {
+pub struct FXIterator<'a, T: FX, P: FXParent<T>> {
     parent: &'a P,
     index: usize,
     phantom: PhantomData<T>,
 }
-impl<'a, T: FX<Immutable> + 'a, P: FXParent<'a, T>> FXIterator<'a, T, P> {
-    pub fn new(parent: &'a P) -> Self {
+impl<T: FX, P: FXParent<T>> FXIterator<'_, T, P> {
+    pub fn new(parent: &P) -> Self {
         Self {
             parent,
             index: 0,
@@ -1630,9 +1581,7 @@ impl<'a, T: FX<Immutable> + 'a, P: FXParent<'a, T>> FXIterator<'a, T, P> {
         }
     }
 }
-impl<'a, T: FX<Immutable> + 'a, P: FXParent<'a, T>> Iterator
-    for FXIterator<'a, T, P>
-{
+impl<T: FX, P: FXParent<T>> Iterator for FXIterator<'_, T, P> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1647,44 +1596,35 @@ impl<'a, T: FX<Immutable> + 'a, P: FXParent<'a, T>> Iterator
 
 // M: ProbablyMutable,
 //     P: KnowsProject,
-//     F: param_parent::FXParamParent<'a, M, P>
+//     F: param_parent::FXParamParent<, M, P>
 
 /// Iterates through all FXParams of [TrackFX] os [TakeFX].
 pub struct FXParamIterator<
     'a,
-    M: ProbablyMutable,
     P: KnowsProject,
-    F: param_parent::FXParamParent<'a, M, P>,
+    F: param_parent::FXParamParent<P>,
 > {
     parent: &'a F,
     index: usize,
-    mutability: PhantomData<M>,
+
     fx_parent: PhantomData<P>,
 }
-impl<
-        'a,
-        M: ProbablyMutable,
-        P: KnowsProject,
-        F: param_parent::FXParamParent<'a, M, P>,
-    > FXParamIterator<'a, M, P, F>
+impl<P: KnowsProject, F: param_parent::FXParamParent<P>>
+    FXParamIterator<'_, P, F>
 {
-    pub fn new(parent: &'a F) -> Self {
+    pub fn new(parent: &F) -> Self {
         Self {
             parent,
             index: 0,
-            mutability: PhantomData::default(),
+
             fx_parent: PhantomData::default(),
         }
     }
 }
-impl<
-        'a,
-        M: ProbablyMutable,
-        P: KnowsProject,
-        F: param_parent::FXParamParent<'a, M, P>,
-    > Iterator for FXParamIterator<'a, M, P, F>
+impl<P: KnowsProject, F: param_parent::FXParamParent<P>> Iterator
+    for FXParamIterator<'_, P, F>
 {
-    type Item = FXParam<'a, M, P, F>;
+    type Item = FXParam<P, F>;
     fn next(&mut self) -> Option<Self::Item> {
         let n_params = match self.parent.n_params() {
             Ok(n_params) => n_params,
