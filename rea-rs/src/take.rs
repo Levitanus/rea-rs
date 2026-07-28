@@ -1,51 +1,54 @@
 use std::{
     ffi::c_char,
-    mem::{transmute, MaybeUninit},
+    mem::MaybeUninit,
 };
 
 use crate::{
-    ptr_wrappers::{self, MediaItemTake, PcmSource, TrackEnvelope},
+    ptr_wrappers::{self, MediaItem, MediaItemTake, PcmSource, ReaProject, TrackEnvelope},
     utils::{as_c_str, as_c_string, as_string, string_from_buf, WithNull},
-    AudioAccessor, Color, Envelope, FXParent, Immutable, Item, KnowsProject,
-    MidiEventBuilder, Mutable, Pan, PanLaw, Pitch, PlayRate, ProbablyMutable,
-    Project, ReaRsError, Reaper, ReaperResult, Source, SourceOffset, TakeFX,
-    Volume, WithReaperPtr, FX, GUID,
+    AudioAccessor, Color, Envelope, FXParent, Item, KnowsProject,
+    MidiEventBuilder, Pan, PanLaw, Pitch, PlayRate, Project, ProjectContext,
+    ReaRsError, Reaper, ReaperResult, Source, SourceOffset, TakeFX, Volume,
+    WithReaperPtr, FX, GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq)]
-pub struct Take<'a, T: ProbablyMutable> {
+pub struct Take {
     ptr: MediaItemTake,
     should_check: bool,
-    item: &'a Item<'a, T>,
+    item_ptr: Option<MediaItem>,
+    project_ptr: Option<ReaProject>,
 }
-impl<'a, T: ProbablyMutable> FXParent<'a, TakeFX<'a, Immutable>>
-    for Take<'a, T>
-{
+impl FXParent<TakeFX> for Take {
     fn n_fx(&self) -> usize {
         unsafe {
-            Reaper::get().low().TakeFX_GetCount(self.get().as_ptr()) as usize
+            Reaper::get()
+                .low()
+                .TakeFX_GetCount(self.get_pointer().as_ptr()) as usize
         }
     }
-    fn get_fx(&self, index: usize) -> Option<TakeFX<Immutable>> {
-        let fx = TakeFX::from_index(unsafe { transmute(self) }, index);
+    fn get_fx(&self, index: usize) -> Option<TakeFX> {
+        let fx = TakeFX::from_index(self, index);
         fx
     }
 }
-impl<'a, T: ProbablyMutable> KnowsProject for Take<'a, T> {
-    fn project(&self) -> &Project {
-        self.item.project()
+impl KnowsProject for Take {
+    fn project(&self) -> Project {
+        match self.project_ptr {
+            Some(ptr) => Project::new(ProjectContext::Proj(ptr)),
+            None => Project::new(ProjectContext::CurrentProject),
+        }
     }
 }
-impl<'a, T: ProbablyMutable> WithReaperPtr for Take<'a, T> {
+impl WithReaperPtr for Take {
     type Ptr = MediaItemTake;
     fn get_pointer(&self) -> Self::Ptr {
         self.ptr
     }
-    fn get(&self) -> Self::Ptr {
-        self.require_valid_2(self.item().project()).unwrap();
-        self.ptr
+    fn get(&self) -> Result<Self::Ptr, ReaRsError> {
+        self.require_valid_2(&self.project())
     }
     fn make_unchecked(&mut self) {
         self.should_check = false;
@@ -57,74 +60,83 @@ impl<'a, T: ProbablyMutable> WithReaperPtr for Take<'a, T> {
         self.should_check
     }
 }
-impl<'a, T: ProbablyMutable> Take<'a, T> {
-    pub fn new(ptr: MediaItemTake, item: &'a Item<'a, T>) -> Self {
+impl Take {
+    pub fn new(ptr: MediaItemTake, item: &Item) -> Self {
         Self {
             ptr,
             should_check: true,
-            item,
+            item_ptr: Some(item.get_pointer()),
+            project_ptr: Some(item.project().get_pointer()),
         }
     }
-    pub fn item(&self) -> &Item<T> {
-        self.item
+
+    pub fn item(&self) -> Option<Item> {
+        self.item_ptr
+            .map(|ptr| Item::from_raw_project_ptr(self.project_ptr, ptr))
     }
-    pub fn get_visible_fx(&'a self) -> Option<TakeFX<'a, Immutable>> {
+
+    pub fn get_visible_fx(&self) -> ReaperResult<Option<TakeFX>> {
         let result = unsafe {
             Reaper::get()
                 .low()
-                .TakeFX_GetChainVisible(self.get().as_ptr())
+                .TakeFX_GetChainVisible(self.get()?.as_ptr())
         };
         if result < 0 {
-            None
+            Ok(None)
         } else {
-            TakeFX::from_index(unsafe { transmute(self) }, result as usize)
+            Ok(TakeFX::from_index(self, result as usize))
         }
     }
-    pub fn is_active(&self) -> bool {
-        self.get() == self.item().active_take().get()
-    }
-    pub fn is_midi(&self) -> bool {
-        unsafe { Reaper::get().low().TakeIsMIDI(self.get().as_ptr()) }
-    }
-    pub fn n_envelopes(&self) -> usize {
-        unsafe {
-            Reaper::get().low().CountTakeEnvelopes(self.get().as_ptr())
-                as usize
+
+    pub fn is_active(&self) -> ReaperResult<bool> {
+        match self.item() {
+            None => Ok(false),
+            Some(item) => Ok(self.get()? == item.active_take()?.get()?),
         }
     }
-    pub fn n_fx(&self) -> usize {
-        unsafe {
-            Reaper::get().low().TakeFX_GetCount(self.get().as_ptr()) as usize
-        }
+
+    pub fn is_midi(&self) -> ReaperResult<bool> {
+        Ok(unsafe { Reaper::get().low().TakeIsMIDI(self.get()?.as_ptr()) })
     }
-    pub fn n_midi_events(&self) -> usize {
+
+    pub fn n_envelopes(&self) -> ReaperResult<usize> {
+        Ok(unsafe {
+            Reaper::get()
+                .low()
+                .CountTakeEnvelopes(self.get()?.as_ptr()) as usize
+        })
+    }
+
+    pub fn n_midi_events(&self) -> ReaperResult<usize> {
         let mut notes = MaybeUninit::zeroed();
         let mut cc = MaybeUninit::zeroed();
         let mut sysex = MaybeUninit::zeroed();
-        unsafe {
+        Ok(unsafe {
             Reaper::get().low().MIDI_CountEvts(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 notes.as_mut_ptr(),
                 cc.as_mut_ptr(),
                 sysex.as_mut_ptr(),
             ) as usize
-        }
-    }
-    pub fn name(&self) -> String {
-        let result =
-            unsafe { Reaper::get().low().GetTakeName(self.get().as_ptr()) };
-        as_string(result).expect("Can not convert name to string")
+        })
     }
 
-    pub fn source(&self) -> Option<Source<Immutable>> {
+    pub fn name(&self) -> ReaperResult<String> {
+        let result = unsafe {
+            Reaper::get().low().GetTakeName(self.get()?.as_ptr())
+        };
+        Ok(as_string(result).expect("Can not convert name to string"))
+    }
+
+    pub fn source(&self) -> ReaperResult<Option<Source>> {
         let ptr = unsafe {
             Reaper::get()
                 .low()
-                .GetMediaItemTake_Source(self.get().as_ptr())
+                .GetMediaItemTake_Source(self.get()?.as_ptr())
         };
         match PcmSource::new(ptr) {
-            None => None,
-            Some(ptr) => Some(Source::new(unsafe { transmute(self) }, ptr)),
+            None => Ok(None),
+            Some(ptr) => Ok(Some(Source::new(self, ptr))),
         }
     }
 
@@ -144,23 +156,7 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
     /// It is quite useless as it is, but, it can be used several times with
     /// [MidiEventBuilder] for iterating through various event types.
     ///
-    /// if buffer_size is not overrided — max size will be used.
-    ///
-    /// # In the case one desire to iter through raw binary data
-    ///
-    /// MIDI buffer is returned as a list of `{ int offset, char flag, int
-    /// msglen, unsigned char msg[] }`.
-    /// - offset: MIDI ticks from previous event
-    /// - flag: &1=selected &2=muted
-    /// - flag high 4 bits for CC shape: &16=linear, &32=slow start/end,
-    ///   &16|32=fast start, &64=fast end, &64|16=bezier
-    /// - msg: the MIDI message.
-    /// - A meta-event of type 0xF followed by 'CCBZ ' and 5 more bytes
-    ///   represents bezier curve data for the previous MIDI event: 1 byte for
-    ///   the bezier type (usually 0) and 4 bytes for the bezier tension as a
-    ///   float.
-    /// - For tick intervals longer than a 32 bit word can represent,
-    ///   zero-length meta events may be placed between valid events.
+    /// if buffer_size is not overrided - max size will be used.
     pub fn get_midi(
         &self,
         buf_size_override: impl Into<Option<i32>>,
@@ -171,7 +167,7 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
         let mut size = MaybeUninit::new(size);
         let result = unsafe {
             Reaper::get().low().MIDI_GetAllEvts(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 raw,
                 size.as_mut_ptr(),
             )
@@ -200,7 +196,7 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
         let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 as_c_str(category.with_null()).as_ptr(),
                 buf.as_mut_ptr(),
                 false,
@@ -215,96 +211,98 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
         string_from_buf(&buf)
     }
 
-    pub fn guid(&self) -> GUID {
+    pub fn guid(&self) -> ReaperResult<GUID> {
         let guid_str = self
-            .get_info_string("GUID", 50)
-            .expect("Can not get guid string");
-        GUID::from_string(guid_str).expect("can not convert string to GUID")
+            .get_info_string("GUID", 50)?;
+        Ok(GUID::from_string(guid_str).expect("can not convert string to GUID"))
     }
 
-    fn get_info_value(&self, category: impl Into<String>) -> f64 {
+    fn get_info_value(&self, category: impl Into<String>) -> ReaperResult<f64> {
         let mut category = category.into();
-        unsafe {
+        Ok(unsafe {
             Reaper::get().low().GetMediaItemTakeInfo_Value(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 as_c_str(category.with_null()).as_ptr(),
             )
-        }
+        })
     }
 
-    pub fn get_envelope(&self, index: usize) -> Option<Envelope<Take<T>, T>> {
+    pub fn get_envelope(&self, index: usize) -> ReaperResult<Option<Envelope<Self>>> {
         let rpr = Reaper::get();
         let ptr = unsafe {
-            rpr.low().GetTakeEnvelope(self.get().as_ptr(), index as i32)
+            rpr.low()
+                .GetTakeEnvelope(self.get()?.as_ptr(), index as i32)
         };
         if let Some(env) = TrackEnvelope::new(ptr) {
-            Some(Envelope::new(env, self))
+            Ok(Some(Envelope::new(env, self)))
         } else {
-            None
+            Ok(None)
         }
     }
 
-    pub fn start_offset(&self) -> SourceOffset {
-        SourceOffset::from_secs_f64(self.get_info_value("D_STARTOFFS"))
+    pub fn start_offset(&self) -> ReaperResult<SourceOffset> {
+        Ok(SourceOffset::from_secs_f64(self.get_info_value("D_STARTOFFS")?))
     }
 
-    pub fn volume(&self) -> Volume {
-        Volume::from(self.get_info_value("D_VOL"))
+    pub fn volume(&self) -> ReaperResult<Volume> {
+        Ok(Volume::from(self.get_info_value("D_VOL")?))
     }
 
-    pub fn pan(&self) -> Pan {
-        Pan::from(self.get_info_value("D_PAN"))
+    pub fn pan(&self) -> ReaperResult<Pan> {
+        Ok(Pan::from(self.get_info_value("D_PAN")?))
     }
 
-    pub fn pan_law(&self) -> PanLaw {
-        PanLaw::from(self.get_info_value("D_PANLAW"))
+    pub fn pan_law(&self) -> ReaperResult<PanLaw> {
+        Ok(PanLaw::from(self.get_info_value("D_PANLAW")?))
     }
 
-    pub fn play_rate(&self) -> PlayRate {
-        PlayRate::from(self.get_info_value("D_PLAYRATE"))
+    pub fn play_rate(&self) -> ReaperResult<PlayRate> {
+        Ok(PlayRate::from(self.get_info_value("D_PLAYRATE")?))
     }
 
     /// take pitch adjustment in semitones, -12=one octave down, 0=normal,
     /// +12=one octave up, etc
-    pub fn pitch(&self) -> Pitch {
-        Pitch::from(self.get_info_value("D_PITCH"))
+    pub fn pitch(&self) -> ReaperResult<Pitch> {
+        Ok(Pitch::from(self.get_info_value("D_PITCH")?))
     }
 
     /// preserve pitch when changing playback rate
-    pub fn preserve_pitch(&self) -> bool {
-        self.get_info_value("B_PPITCH") != 0.0
+    pub fn preserve_pitch(&self) -> ReaperResult<bool> {
+        Ok(self.get_info_value("B_PPITCH")? != 0.0)
     }
 
     /// Y-position (relative to top of track) in pixels (read-only)
-    pub fn y_pos(&self) -> usize {
-        self.get_info_value("I_LASTY") as usize
+    pub fn y_pos(&self) -> ReaperResult<usize> {
+        Ok(self.get_info_value("I_LASTY")? as usize)
     }
 
     /// height in pixels (read-only)
-    pub fn height(&self) -> usize {
-        self.get_info_value("I_LASTH") as usize
+    pub fn height(&self) -> ReaperResult<usize> {
+        Ok(self.get_info_value("I_LASTH")? as usize)
     }
 
-    pub fn channel_mode(&self) -> TakeChannelMode {
-        TakeChannelMode::from_int(self.get_info_value("I_CHANMODE") as i32)
-            .expect("can not convert value to channel mode")
+    pub fn channel_mode(&self) -> ReaperResult<TakeChannelMode> {
+        Ok(
+            TakeChannelMode::from_int(self.get_info_value("I_CHANMODE")? as i32)
+                .expect("can not convert value to channel mode"),
+        )
     }
 
-    pub fn pitch_mode(&self) -> Option<TakePitchMode> {
-        let result = self.get_info_value("I_PITCHMODE") as i32;
+    pub fn pitch_mode(&self) -> ReaperResult<Option<TakePitchMode>> {
+        let result = self.get_info_value("I_PITCHMODE")? as i32;
         match result {
-            x if x < 0 => None,
-            y => Some(TakePitchMode::from_raw(y)),
+            x if x < 0 => Ok(None),
+            y => Ok(Some(TakePitchMode::from_raw(y))),
         }
     }
 
-    /// if None → default.
-    pub fn color(&self) -> Option<Color> {
-        let raw = self.get_info_value("I_CUSTOMCOLOR") as i32;
+    /// if None -> default.
+    pub fn color(&self) -> ReaperResult<Option<Color>> {
+        let raw = self.get_info_value("I_CUSTOMCOLOR")? as i32;
         if raw == 0 {
-            return None;
+            return Ok(None);
         }
-        Some(Color::from_native(raw & 0xffffff))
+        Ok(Some(Color::from_native(raw & 0xffffff)))
     }
 
     pub fn peaks(
@@ -314,7 +312,7 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
         numchannels: usize,
         numsamplesperchannel: usize,
         spectral_peaks: bool,
-    ) -> Result<TakePeaksResult, ()> {
+    ) -> ReaperResult<TakePeaksResult> {
         let block_size = match spectral_peaks {
             true => 3,
             false => 2,
@@ -330,7 +328,7 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
         };
         let result = unsafe {
             Reaper::get().low().GetMediaItemTake_Peaks(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 peakrate,
                 starttime,
                 numchannels as i32,
@@ -340,29 +338,29 @@ impl<'a, T: ProbablyMutable> Take<'a, T> {
             )
         };
         if result <= 0 {
-            return Err(());
+            return Err(ReaRsError::UnsuccessfulOperation("Can not get peaks"));
         }
         Ok(TakePeaksResult::new(result, buf, capacity / block_size))
     }
-}
 
-impl<'a> Take<'a, Mutable> {
-    pub fn add_audio_accessor(
-        &mut self,
-    ) -> AudioAccessor<'a, Take<Mutable>, Mutable> {
+    pub fn add_audio_accessor(&mut self) -> anyhow::Result<AudioAccessor<Self>> {
         let ptr = unsafe {
             Reaper::get()
                 .low()
-                .CreateTakeAudioAccessor(self.get().as_ptr())
+                .CreateTakeAudioAccessor(self.get()?.as_ptr())
         };
         match ptr_wrappers::AudioAccessor::new(ptr) {
-            None => panic!("Can not create audio accessor"),
-            Some(ptr) => AudioAccessor::new(self, ptr),
+            None => Err(ReaRsError::InvalidObject(
+                "Can not create audio accessor",
+            )
+            .into()),
+            Some(ptr) => Ok(AudioAccessor::new(self, ptr)),
         }
     }
 
-    pub fn set_active(&mut self) {
-        unsafe { Reaper::get().low().SetActiveTake(self.get().as_ptr()) }
+    pub fn set_active(&mut self) -> ReaperResult<()> {
+        unsafe { Reaper::get().low().SetActiveTake(self.get()?.as_ptr()) }
+        Ok(())
     }
 
     /// Add FX at given position, or return existing one.
@@ -370,7 +368,7 @@ impl<'a> Take<'a, Mutable> {
     /// If `even_if_exists` is `false`, plugin will be added only
     /// if no plugin exists on track.
     ///
-    /// Otherwise, if position is None → the last slot will be used.
+    /// Otherwise, if position is None -> the last slot will be used.
     /// The resulting FX will have real index, that may differ from the
     /// desired.
     pub fn add_fx(
@@ -378,92 +376,87 @@ impl<'a> Take<'a, Mutable> {
         name: impl Into<String>,
         position: impl Into<Option<u8>>,
         even_if_exists: bool,
-    ) -> Option<TakeFX<Mutable>> {
+    ) -> ReaperResult<Option<TakeFX>> {
         let insatantinate = match even_if_exists {
-            false => 1 as i32,
+            false => 1_i32,
             true => match position.into() {
-                None => -1 as i32,
+                None => -1_i32,
                 Some(pos) => -1000 - pos as i32,
             },
         };
         let index = unsafe {
             Reaper::get().low().TakeFX_AddByName(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 as_c_str(name.into().with_null()).as_ptr(),
                 insatantinate,
             )
         };
-        TakeFX::<Mutable>::from_index(self, index as usize)
+        Ok(TakeFX::from_index(self, index as usize))
     }
 
-    pub fn get_fx_mut(
-        &'a mut self,
-        index: usize,
-    ) -> Option<TakeFX<'a, Mutable>> {
+    pub fn get_fx_mut(&mut self, index: usize) -> Option<TakeFX> {
         TakeFX::from_index(self, index)
     }
-    pub fn get_visible_fx_mut(&'a mut self) -> Option<TakeFX<'a, Mutable>> {
+
+    pub fn get_visible_fx_mut(&mut self) -> ReaperResult<Option<TakeFX>> {
         let result = unsafe {
             Reaper::get()
                 .low()
-                .TakeFX_GetChainVisible(self.get().as_ptr())
+                .TakeFX_GetChainVisible(self.get()?.as_ptr())
         };
         if result < 0 {
-            None
+            Ok(None)
         } else {
-            TakeFX::from_index(self, result as usize)
+            Ok(TakeFX::from_index(self, result as usize))
         }
     }
 
-    pub fn get_envelope_mut(
-        &mut self,
-        index: usize,
-    ) -> Option<Envelope<Take<Mutable>, Mutable>> {
+    pub fn get_envelope_mut(&mut self, index: usize) -> ReaperResult<Option<Envelope<Self>>> {
         let rpr = Reaper::get();
         let ptr = unsafe {
-            rpr.low().GetTakeEnvelope(self.get().as_ptr(), index as i32)
+            rpr.low()
+                .GetTakeEnvelope(self.get()?.as_ptr(), index as i32)
         };
         if let Some(env) = TrackEnvelope::new(ptr) {
-            Some(Envelope::new(env, self))
+            Ok(Some(Envelope::new(env, self)))
         } else {
-            None
+            Ok(None)
         }
     }
 
-    pub fn select_all_midi_events(&mut self, select: bool) {
-        assert!(self.is_midi());
+    pub fn select_all_midi_events(&mut self, select: bool) -> ReaperResult<()> {
+        assert!(self.is_midi()?);
         unsafe {
             Reaper::get()
                 .low()
-                .MIDI_SelectAll(self.get().as_ptr(), select)
+                .MIDI_SelectAll(self.get()?.as_ptr(), select)
         }
+        Ok(())
     }
 
-    pub fn sort_midi(&mut self) {
-        assert!(self.is_midi());
-        unsafe { Reaper::get().low().MIDI_Sort(self.get().as_ptr()) }
+    pub fn sort_midi(&mut self) -> ReaperResult<()> {
+        assert!(self.is_midi()?);
+        unsafe { Reaper::get().low().MIDI_Sort(self.get()?.as_ptr()) }
+        Ok(())
     }
 
-    pub fn source_mut(&mut self) -> Option<Source<Mutable>> {
+    pub fn source_mut(&mut self) -> ReaperResult<Option<Source>> {
         let ptr = unsafe {
             Reaper::get()
                 .low()
-                .GetMediaItemTake_Source(self.get().as_ptr())
+                .GetMediaItemTake_Source(self.get()?.as_ptr())
         };
         match PcmSource::new(ptr) {
-            None => None,
-            Some(ptr) => Some(Source::new(self, ptr)),
+            None => Ok(None),
+            Some(ptr) => Ok(Some(Source::new(self, ptr))),
         }
     }
 
-    pub fn set_source<T: ProbablyMutable>(
-        &mut self,
-        source: Source<T>,
-    ) -> ReaperResult<()> {
+    pub fn set_source(&mut self, source: Source) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().SetMediaItemTake_Source(
-                self.get().as_ptr(),
-                source.get().as_ptr(),
+                self.get()?.as_ptr(),
+                source.get()?.as_ptr(),
             )
         };
         match result {
@@ -484,7 +477,7 @@ impl<'a> Take<'a, Mutable> {
         let raw = midi.as_mut_ptr() as *mut c_char;
         let result = unsafe {
             Reaper::get().low().MIDI_SetAllEvts(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 raw,
                 midi.len() as i32,
             )
@@ -507,7 +500,7 @@ impl<'a> Take<'a, Mutable> {
         let buf = as_c_string(&string).into_raw();
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 as_c_str(category.with_null()).as_ptr(),
                 buf,
                 true,
@@ -537,7 +530,7 @@ impl<'a> Take<'a, Mutable> {
         let category = category.into();
         let result = unsafe {
             Reaper::get().low().SetMediaItemTakeInfo_Value(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 as_c_string(&category).as_ptr(),
                 value,
             )
@@ -602,13 +595,13 @@ impl<'a> Take<'a, Mutable> {
             .expect("can not set pitch mode")
     }
 
-    /// if None → default.
-    pub fn set_color(&mut self, color: Option<Color>) {
+    /// if None -> default.
+    pub fn set_color(&mut self, color: Option<Color>) -> ReaperResult<()> {
         let color = match color {
             None => 0,
             Some(color) => color.to_native() | 0x1000000,
         };
-        self.set_info_value("I_CUSTOMCOLOR", color as f64).unwrap()
+        self.set_info_value("I_CUSTOMCOLOR", color as f64)
     }
 }
 
