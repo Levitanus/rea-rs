@@ -8,9 +8,7 @@ use log::debug;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::{
-    ffi::{CStr, CString},
-    fmt::Debug,
-    ptr::null,
+    ffi::{CStr, CString}, fmt::Debug, marker::PhantomData, ptr::null,
 };
 
 const BUF_SIZE: usize = 4096;
@@ -79,7 +77,7 @@ pub struct ExtState<
 > {
     section: String,
     key: String,
-    value: Option<T>,
+    value: PhantomData<T>,
     persist: bool,
     object: &'a O,
     buf_size: usize,
@@ -99,39 +97,22 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
         persist: bool,
         object: &'a O,
         buf_size: impl Into<Option<usize>>,
-    ) -> Self {
+    ) -> Result<Self, ReaRsError> {
         let value = value.into();
-        let buf_size = if let Some(s) = buf_size.into() {
-            s
-        } else {
-            BUF_SIZE
-        };
-        let mut obj = Self {
-            section: section.into(),
-            key: key.into(),
-            value,
-            persist,
-            object: object,
-            buf_size,
-        };
-        match &obj.value {
+        let mut obj: ExtState<'a, T, O> = Self::existing(section, key, persist, object, buf_size);
+        match value {
             None => {
-                if persist {
-                    match obj.get() {
-                        Err(_) | Ok(None) => (),
-                        Ok(Some(val)) => obj.value = Some(val),
-                    }
-                } else {
+                if !persist {
                     obj.delete()
                 }
             }
             Some(val) => {
                 if persist && obj.get().unwrap_or(None).is_none() || !persist {
-                    obj.set(val.clone())
+                    obj.set(val.clone())?
                 }
             }
         }
-        obj
+        Ok(obj)
     }
 
     /// Load value from ExtState without making ExtState object.
@@ -149,7 +130,7 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
         let obj = Self {
             section: section.into(),
             key: key.into(),
-            value: None,
+            value: PhantomData,
             persist: false,
             object: object,
             buf_size,
@@ -176,7 +157,7 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
         ExtState {
             section: section.into(),
             key: key.into(),
-            value: None,
+            value: PhantomData,
             persist,
             object,
             buf_size,
@@ -207,11 +188,6 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
             Some(value) => value,
         };
         let value = value_obj.to_string_lossy();
-        // let value = value_obj.as_bytes();
-        // let value: T = rmp_serde::decode::from_slice(value)
-        //     .expect("This value was not serialized by ExtState");
-        // let value: T = serde_pickle::from_slice(value, Default::default())
-        //     .expect("This value was not serialized by ExtState");
         debug!("got value: {:#?}", value);
         let value: T = match serde_json::from_str(&*value) {
             Ok(v) => v,
@@ -227,16 +203,9 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
     }
 
     /// Set the value to ext state.
-    pub fn set(&mut self, value: T) {
+    pub fn set(&mut self, value: T) -> Result<(), ReaRsError>{
         let (section_str, key_str) = (self.section(), self.key());
         let (section, key) = (as_c_str(&section_str), as_c_str(&key_str));
-        // let mut value = serde_pickle::to_vec(&value, Default::default())
-        //     .expect("can not serialize value");
-        // let mut value = rmp_serde::encode::to_vec(&value)
-        //     .expect("can not serialize value");
-        // value.push(0);
-        // let value = CString::from_vec_with_nul(value)
-        //     .expect("can not serialize to string");
         let value =
             serde_json::to_string(&value).expect("Can not serialize value!");
         debug!("set value: {:#?}", value);
@@ -254,7 +223,7 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
 }
 
 pub trait HasExtState {
-    fn set_ext_value(&self, section: &CStr, key: &CStr, value: *mut i8);
+    fn set_ext_value(&self, section: &CStr, key: &CStr, value: *mut i8) -> Result<(), ReaRsError>;
     fn get_ext_value(
         &self,
         section: &CStr,
@@ -588,7 +557,7 @@ impl<'a> HasExtState for Take<'a, Mutable> {
         let buf = make_c_string_buf(buf_size).into_raw();
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
-                self.get().as_ptr(),
+                self.get().expect("REAPER pointer is invalid").as_ptr(),
                 as_c_str(category.with_null()).as_ptr(),
                 buf,
                 false,
@@ -604,7 +573,7 @@ impl<'a> HasExtState for Take<'a, Mutable> {
         let mut category = section_key_to_one_category(section, key);
         unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
-                self.get().as_ptr(),
+                self.get().expect("REAPER pointer is invalid").as_ptr(),
                 as_c_str(category.with_null()).as_ptr(),
                 CString::new("").unwrap().into_raw(),
                 true,
