@@ -41,7 +41,7 @@ static mut EGUI_WINDOW: Option<DockableEguiWindow> = None;
 static EGUI_WINDOW_DOCK_REQUEST: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(u32::MAX);
 
-fn open_egui_baseview_window_action(_flag: i32) -> TestStepResult {
+fn open_egui_baseview_window_action(_: &mut ActionHook) -> TestStepResult {
     unsafe {
         let win = EGUI_WINDOW.get_or_insert_with(|| {
             DockableEguiWindow::new(
@@ -123,6 +123,7 @@ fn test_main(context: PluginContext) -> TestStepResult {
     Reaper::get_mut().register_action(
         "open_egui_baseview_test_window",
         "Open egui-baseview test window (dockable)",
+        ActionKind::NotToggleable,
         open_egui_baseview_window_action,
         None,
     )?;
