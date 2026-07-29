@@ -542,13 +542,11 @@ impl Take {
         }
     }
 
-    pub fn set_name(&mut self, name: impl Into<String>) {
+    pub fn set_name(&mut self, name: impl Into<String>) -> ReaperResult<()> {
         self.set_info_string("P_NAME", name)
-            .expect("Can not set name")
     }
-    pub fn set_guid(&mut self, guid: GUID) {
+    pub fn set_guid(&mut self, guid: GUID) -> ReaperResult<()> {
         self.set_info_string("GUID", guid.to_string())
-            .expect("Can not set guid")
     }
     fn set_info_value(
         &mut self,
@@ -578,19 +576,16 @@ impl Take {
         self.set_info_value("D_STARTOFFS", offset.as_secs_f64())
     }
 
-    pub fn set_volume(&mut self, volume: Volume) {
+    pub fn set_volume(&mut self, volume: Volume) -> ReaperResult<()> {
         self.set_info_value("D_VOL", volume.into())
-            .expect("Can not set volume")
     }
 
-    pub fn set_pan(&mut self, pan: Pan) {
+    pub fn set_pan(&mut self, pan: Pan) -> ReaperResult<()> {
         self.set_info_value("D_PAN", pan.into())
-            .expect("Can not set pan")
     }
 
-    pub fn set_pan_law(&mut self, pan_law: PanLaw) {
+    pub fn set_pan_law(&mut self, pan_law: PanLaw) -> ReaperResult<()> {
         self.set_info_value("D_PANLAW", pan_law.into())
-            .expect("can't set pan law")
     }
 
     pub fn set_play_rate(&mut self, play_rate: PlayRate) -> ReaperResult<()> {
@@ -604,23 +599,26 @@ impl Take {
     }
 
     /// preserve pitch when changing playback rate
-    pub fn set_preserve_pitch(&mut self, preserve: bool) {
+    pub fn set_preserve_pitch(&mut self, preserve: bool) -> ReaperResult<()> {
         self.set_info_value("B_PPITCH", preserve as i32 as f64)
-            .expect("can not set preserve pitch")
     }
 
-    pub fn set_channel_mode(&mut self, mode: TakeChannelMode) {
+    pub fn set_channel_mode(
+        &mut self,
+        mode: TakeChannelMode,
+    ) -> ReaperResult<()> {
         self.set_info_value("I_CHANMODE", mode.int_value() as f64)
-            .expect("can not set channel mode")
     }
 
-    pub fn set_pitch_mode(&mut self, mode: Option<TakePitchMode>) {
+    pub fn set_pitch_mode(
+        &mut self,
+        mode: Option<TakePitchMode>,
+    ) -> ReaperResult<()> {
         let value = match mode {
             None => -1,
             Some(mode) => mode.as_raw(),
         };
         self.set_info_value("I_PITCHMODE", value as f64)
-            .expect("can not set pitch mode")
     }
 
     /// if None -> default.
