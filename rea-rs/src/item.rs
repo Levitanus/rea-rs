@@ -53,9 +53,15 @@ impl Item {
         }
     }
 
-    pub fn new(project: impl Into<Option<&Project>>, ptr: MediaItem) -> Self {
-        let project = project.into();
-        Self::from_raw_project_ptr(project.map(|pr| pr.get_pointer()), ptr)
+    pub fn new<'a>(
+        project: impl Into<Option<&'a Project>>,
+        ptr: MediaItem,
+    ) -> ReaperResult<Self> {
+        let project_ptr = match project.into() {
+            Some(p) => Some(p.get()?),
+            None => None,
+        };
+        Ok(Self::from_raw_project_ptr(project_ptr, ptr))
     }
 
     pub fn track(&self) -> ReaperResult<Track> {
@@ -64,16 +70,22 @@ impl Item {
         };
         match MediaTrack::new(ptr) {
             None => panic!("Got null ptr! Maybe track is deleted?"),
-            Some(ptr) => Ok(Track::new(self.project(), ptr)),
+            Some(ptr) => Track::new(&self.project(), ptr),
         }
     }
 
     pub fn get_take(&self, index: usize) -> ReaperResult<Option<Take>> {
         let ptr = self.get_take_ptr(index)?;
-        Ok(ptr.map(|ptr| Take::new(ptr, self)))
+        match ptr {
+            Some(ptr) => Ok(Some(Take::new(ptr, self)?)),
+            None => Ok(None),
+        }
     }
 
-    fn get_take_ptr(&self, index: usize) -> ReaperResult<Option<MediaItemTake>> {
+    fn get_take_ptr(
+        &self,
+        index: usize,
+    ) -> ReaperResult<Option<MediaItemTake>> {
         let ptr = unsafe {
             Reaper::get()
                 .low()
@@ -84,10 +96,9 @@ impl Item {
 
     pub fn active_take(&self) -> ReaperResult<Take> {
         let ptr = self
-            .active_take_ptr()
-            ?
+            .active_take_ptr()?
             .ok_or(ReaRsError::NullPtr("active take"))?;
-        Ok(Take::new(ptr, self))
+        Take::new(ptr, self)
     }
 
     fn active_take_ptr(&self) -> ReaperResult<Option<MediaItemTake>> {
@@ -104,7 +115,10 @@ impl Item {
         })
     }
 
-    fn get_info_value(&self, category: impl Into<String>) -> ReaperResult<f64> {
+    fn get_info_value(
+        &self,
+        category: impl Into<String>,
+    ) -> ReaperResult<f64> {
         let mut category = category.into();
         Ok(unsafe {
             Reaper::get().low().GetMediaItemInfo_Value(
@@ -135,10 +149,10 @@ impl Item {
     ///
     /// This function will not override the same parameters on other items
     pub fn solo_override(&self) -> ReaperResult<ItemSoloOverride> {
-        Ok(
-            ItemSoloOverride::from_int(self.get_info_value("C_MUTE_SOLO")? as i32)
-                .expect("can not convert value to item solo override"),
+        Ok(ItemSoloOverride::from_int(
+            self.get_info_value("C_MUTE_SOLO")? as i32
         )
+        .expect("can not convert value to item solo override"))
     }
     pub fn is_looped(&self) -> ReaperResult<bool> {
         Ok(self.get_info_value("B_LOOPSRC")? != 0.0)
@@ -162,7 +176,9 @@ impl Item {
         Ok(Volume::from(self.get_info_value("D_VOL")?))
     }
     pub fn snap_offset(&self) -> ReaperResult<Duration> {
-        Ok(Duration::from_secs_f64(self.get_info_value("D_SNAPOFFSET")?))
+        Ok(Duration::from_secs_f64(
+            self.get_info_value("D_SNAPOFFSET")?,
+        ))
     }
     pub fn fade_in(&self) -> ReaperResult<ItemFade> {
         let length =
@@ -181,7 +197,8 @@ impl Item {
         })
     }
     pub fn fade_out(&self) -> ReaperResult<ItemFade> {
-        let auto_fade_length = self.get_info_value("D_FADEOUTLEN_AUTO")? != 0.0;
+        let auto_fade_length =
+            self.get_info_value("D_FADEOUTLEN_AUTO")? != 0.0;
         let length = if auto_fade_length {
             Duration::from_secs_f64(self.get_info_value("D_FADEOUTLEN_AUTO")?)
         } else {
@@ -236,7 +253,8 @@ impl Item {
         Ok(unsafe {
             Reaper::get()
                 .low()
-                .GetMediaItemNumTakes(self.get()?.as_ptr()) as usize
+                .GetMediaItemNumTakes(self.get()?.as_ptr())
+                as usize
         })
     }
 
@@ -276,36 +294,43 @@ impl Item {
         self.get_info_string("P_NOTES", size as usize)
     }
     pub fn guid(&self) -> ReaperResult<GUID> {
-        let guid_str = self
-            .get_info_string("GUID", 50)?;
-        Ok(
-            GUID::from_string(guid_str)
-                .expect("Can not convert GUID string to GUID"),
-        )
+        let guid_str = self.get_info_string("GUID", 50)?;
+        Ok(GUID::from_string(guid_str)
+            .expect("Can not convert GUID string to GUID"))
     }
 
     pub fn add_take(&mut self) -> ReaperResult<Take> {
-        let ptr =
-            unsafe { Reaper::get().low().AddTakeToMediaItem(self.get()?.as_ptr()) };
+        let ptr = unsafe {
+            Reaper::get().low().AddTakeToMediaItem(self.get()?.as_ptr())
+        };
         match MediaItemTake::new(ptr) {
             None => panic!("can not make Take"),
-            Some(ptr) => Ok(Take::new(ptr, self)),
+            Some(ptr) => Take::new(ptr, self),
         }
     }
 
-    pub fn get_take_mut(&mut self, index: usize) -> ReaperResult<Option<Take>> {
+    pub fn get_take_mut(
+        &mut self,
+        index: usize,
+    ) -> ReaperResult<Option<Take>> {
         let ptr = self.get_take_ptr(index)?;
-        Ok(ptr.map(|ptr| Take::new(ptr, self)))
+        match ptr {
+            Some(ptr) => Ok(Some(Take::new(ptr, self)?)),
+            None => Ok(None),
+        }
     }
 
     pub fn active_take_mut(&mut self) -> ReaperResult<Take> {
         let ptr = self
             .active_take_ptr()?
             .ok_or(ReaRsError::NullPtr("active take"))?;
-        Ok(Take::new(ptr, self))
+        Take::new(ptr, self)
     }
 
-    pub fn set_position(&mut self, position: impl Into<Position>) -> ReaperResult<()> {
+    pub fn set_position(
+        &mut self,
+        position: impl Into<Position>,
+    ) -> ReaperResult<()> {
         unsafe {
             Reaper::get().low().SetMediaItemPosition(
                 self.get()?.as_ptr(),
@@ -325,7 +350,10 @@ impl Item {
         }
         Ok(())
     }
-    pub fn set_end_position(&mut self, end_position: impl Into<Position>) -> ReaperResult<()> {
+    pub fn set_end_position(
+        &mut self,
+        end_position: impl Into<Position>,
+    ) -> ReaperResult<()> {
         let length: Duration = (end_position.into() - self.position()?).into();
         unsafe {
             Reaper::get().low().SetMediaItemLength(
@@ -360,7 +388,10 @@ impl Item {
         self.set_selected(true)
     }
 
-    pub fn split(self, position: impl Into<Position>) -> ReaperResult<ItemSplit> {
+    pub fn split(
+        self,
+        position: impl Into<Position>,
+    ) -> ReaperResult<ItemSplit> {
         let position: f64 = position.into().into();
         let ptr = unsafe {
             Reaper::get()
@@ -392,9 +423,8 @@ impl Item {
     }
 
     pub fn move_to_track(&self, track_index: usize) -> ReaperResult<()> {
-        let track = Track::from_index(&self.project(), track_index).ok_or(
-            ReaRsError::InvalidObject("No track with given index!"),
-        )?;
+        let track = Track::from_index(&self.project(), track_index)?
+            .ok_or(ReaRsError::InvalidObject("No track with given index!"))?;
         let track_ptr = track.get()?.as_ptr();
         let result = unsafe {
             Reaper::get()

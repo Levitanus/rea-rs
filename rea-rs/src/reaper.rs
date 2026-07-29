@@ -1,6 +1,7 @@
 use log::debug;
 use rea_rs_low::{
-    create_cpp_to_rust_control_surface, raw::{self, gaccel_register_t},
+    create_cpp_to_rust_control_surface,
+    raw::{self, gaccel_register_t},
     register_plugin_destroy_hook, IReaperControlSurface, PluginContext, Swell,
 };
 

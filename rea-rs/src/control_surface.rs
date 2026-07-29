@@ -12,7 +12,7 @@ use int_enum::IntEnum;
 use rea_rs_low::{raw, IReaperControlSurface};
 use serde_derive::{Deserialize, Serialize};
 
-use crate::{ptr_wrappers::MediaTrack, Mutable, ReaRsError, Reaper, Track};
+use crate::{ptr_wrappers::MediaTrack, ReaRsError, Reaper, Track};
 
 pub trait ControlSurface: Debug {
     /// simple unique string with only A-Z, 0-9, no spaces or other chars
@@ -37,42 +37,30 @@ pub trait ControlSurface: Debug {
     }
     fn set_surface_volume(
         &self,
-        _track: &mut Track<Mutable>,
+        _track: &mut Track,
         _volume: f64,
     ) -> Result<()> {
         Ok(())
     }
-    fn set_surface_pan(
-        &self,
-        _track: &mut Track<Mutable>,
-        _pan: f64,
-    ) -> Result<()> {
+    fn set_surface_pan(&self, _track: &mut Track, _pan: f64) -> Result<()> {
         Ok(())
     }
-    fn set_surface_mute(
-        &self,
-        _track: &mut Track<Mutable>,
-        _mute: bool,
-    ) -> Result<()> {
+    fn set_surface_mute(&self, _track: &mut Track, _mute: bool) -> Result<()> {
         Ok(())
     }
     fn set_surface_selected(
         &self,
-        _track: &mut Track<Mutable>,
+        _track: &mut Track,
         _selected: bool,
     ) -> Result<()> {
         Ok(())
     }
-    fn set_surface_solo(
-        &self,
-        _track: &mut Track<Mutable>,
-        _solo: bool,
-    ) -> Result<()> {
+    fn set_surface_solo(&self, _track: &mut Track, _solo: bool) -> Result<()> {
         Ok(())
     }
     fn set_surface_recarm(
         &self,
-        _track: &mut Track<Mutable>,
+        _track: &mut Track,
         _recarm: bool,
     ) -> Result<()> {
         Ok(())
@@ -90,7 +78,7 @@ pub trait ControlSurface: Debug {
     }
     fn set_track_title(
         &self,
-        _track: &mut Track<Mutable>,
+        _track: &mut Track,
         _title: String,
     ) -> Result<()> {
         Ok(())
@@ -98,7 +86,7 @@ pub trait ControlSurface: Debug {
 
     fn get_touch_state(
         &self,
-        _track: &mut Track<Mutable>,
+        _track: &mut Track,
         _is_pan: i32,
     ) -> Result<bool> {
         Ok(false)
@@ -112,7 +100,7 @@ pub trait ControlSurface: Debug {
         Ok(())
     }
 
-    fn on_track_selection(&self, _track: &mut Track<Mutable>) -> Result<()> {
+    fn on_track_selection(&self, _track: &mut Track) -> Result<()> {
         Ok(())
     }
 
@@ -140,38 +128,38 @@ pub trait ControlSurface: Debug {
 }
 
 #[derive(Debug)]
-pub enum CSurfExtended<'a> {
+pub enum CSurfExtended {
     /// clear all surface state and reset (harder reset than
     /// SetTrackListChange)
     Reset,
     /// parm2=(int*)recmonitor
-    SetInputMonitor(Track<'a, Mutable>, i32),
+    SetInputMonitor(Track, i32),
     SetMetronome(bool),
     SetAutoRecArm(bool),
     SetRecMode(CSurfRecMode),
     SetSendVolume {
-        track: Track<'a, Mutable>,
+        track: Track,
         send_idx: usize,
         volume: f64,
     },
     SetSendPan {
-        track: Track<'a, Mutable>,
+        track: Track,
         send_idx: usize,
         pan: f64,
     },
     SetFxEnabled {
-        track: Track<'a, Mutable>,
+        track: Track,
         fx_idx: usize,
         enabled: bool,
     },
     SetFxParam {
-        track: Track<'a, Mutable>,
+        track: Track,
         fx_idx: usize,
         param_idx: usize,
         val: f64,
     },
     SetFxParamRecfx {
-        track: Track<'a, Mutable>,
+        track: Track,
         fx_idx: usize,
         param_idx: usize,
         val: f64,
@@ -182,47 +170,47 @@ pub enum CSurfExtended<'a> {
     },
     /// If all are None ‒ clear touched FX
     SetLastTouchedFx {
-        track: Option<Track<'a, Mutable>>,
+        track: Option<Track>,
         item_idx: Option<usize>,
         fx_idx: Option<usize>,
     },
     /// If all are None ‒ clear focused FX
     SetFocusedFx {
-        track: Option<Track<'a, Mutable>>,
+        track: Option<Track>,
         item_idx: Option<usize>,
         fx_idx: Option<usize>,
     },
-    SetLastTouchedTrack(Track<'a, Mutable>),
+    SetLastTouchedTrack(Track),
     /// Leftmost visible track in mixer
-    SetMixerScroll(Track<'a, Mutable>),
+    SetMixerScroll(Track),
     /// if a csurf supports CSURF_EXT_SETPAN_EX, it should ignore
     /// CSurf_SetSurfacePan.
     SetpanEx {
-        track: Track<'a, Mutable>,
+        track: Track,
         pan: CSurfPan,
     },
     SetRecvVolume {
-        track: Track<'a, Mutable>,
+        track: Track,
         recv_idx: usize,
         volume: f64,
     },
     SetRecvPan {
-        track: Track<'a, Mutable>,
+        track: Track,
         recv_idx: usize,
         pan: f64,
     },
     SetFxOpen {
-        track: Track<'a, Mutable>,
+        track: Track,
         fx_idx: usize,
         opened: bool,
     },
     SetFxChange {
-        track: Track<'a, Mutable>,
+        track: Track,
         is_rec_fx: bool,
     },
     SetProjectMarkerChange,
     TrackFxPresetChanged {
-        track: Track<'a, Mutable>,
+        track: Track,
         fx_idx: usize,
     },
     /// returns nonzero if GetTouchState can take isPan=2 for width, etc
@@ -258,7 +246,12 @@ macro_rules! track_from_mut {
     ($mut_ptr:ident, $project:ident) => {{
         let track_ptr =
             MediaTrack::new($mut_ptr as _).expect("null pointer to track");
-        Track::<Mutable>::new(&$project, track_ptr)
+        match Track::new(&$project, track_ptr) {
+            Ok(track) => track,
+            Err(e) => {
+                panic!("Failed to create track: {:?}", e);
+            }
+        }
     }};
 }
 
@@ -344,7 +337,13 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             self.error(ReaRsError::NullPtr("track").into());
             return;
         };
-        let mut track = Track::<Mutable>::new(&project, pointer);
+        let mut track = match Track::new(&project, pointer) {
+            Ok(track) => track,
+            Err(e) => {
+                self.error(e.into());
+                return;
+            }
+        };
         self.check_for_error(
             self.child.borrow().set_surface_volume(&mut track, volume),
         )
@@ -360,7 +359,13 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             self.error(ReaRsError::NullPtr("track").into());
             return;
         };
-        let mut track = Track::<Mutable>::new(&project, pointer);
+        let mut track = match Track::new(&project, pointer) {
+            Ok(track) => track,
+            Err(e) => {
+                self.error(e.into());
+                return;
+            }
+        };
         self.check_for_error(
             self.child.borrow().set_surface_pan(&mut track, pan),
         )
@@ -376,7 +381,13 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             self.error(ReaRsError::NullPtr("track").into());
             return;
         };
-        let mut track = Track::<Mutable>::new(&project, pointer);
+        let mut track = match Track::new(&project, pointer) {
+            Ok(track) => track,
+            Err(e) => {
+                self.error(e.into());
+                return;
+            }
+        };
         self.check_for_error(
             self.child.borrow().set_surface_mute(&mut track, mute),
         )
@@ -392,7 +403,13 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             self.error(ReaRsError::NullPtr("track").into());
             return;
         };
-        let mut track = Track::<Mutable>::new(&project, pointer);
+        let mut track = match Track::new(&project, pointer) {
+            Ok(track) => track,
+            Err(e) => {
+                self.error(e.into());
+                return;
+            }
+        };
         self.check_for_error(
             self.child
                 .borrow()
@@ -410,7 +427,13 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             self.error(ReaRsError::NullPtr("track").into());
             return;
         };
-        let mut track = Track::<Mutable>::new(&project, pointer);
+        let mut track = match Track::new(&project, pointer) {
+            Ok(track) => track,
+            Err(e) => {
+                self.error(e.into());
+                return;
+            }
+        };
         self.check_for_error(
             self.child.borrow().set_surface_solo(&mut track, solo),
         )
@@ -426,7 +449,13 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             self.error(ReaRsError::NullPtr("track").into());
             return;
         };
-        let mut track = Track::<Mutable>::new(&project, pointer);
+        let mut track = match Track::new(&project, pointer) {
+            Ok(track) => track,
+            Err(e) => {
+                self.error(e.into());
+                return;
+            }
+        };
         self.check_for_error(
             self.child.borrow().set_surface_recarm(&mut track, recarm),
         )
@@ -452,7 +481,13 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             self.error(ReaRsError::NullPtr("track").into());
             return;
         };
-        let mut track = Track::<Mutable>::new(&project, pointer);
+        let mut track = match Track::new(&project, pointer) {
+            Ok(track) => track,
+            Err(e) => {
+                self.error(e.into());
+                return;
+            }
+        };
         let title = unsafe { CStr::from_ptr(title) };
         let title = match title.to_str() {
             Err(e) => return self.error(e.into()),
@@ -473,7 +508,13 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             self.error(ReaRsError::NullPtr("track").into());
             return false;
         };
-        let mut track = Track::<Mutable>::new(&project, pointer);
+        let mut track = match Track::new(&project, pointer) {
+            Ok(track) => track,
+            Err(e) => {
+                self.error(e.into());
+                return false;
+            }
+        };
         match self.child.borrow().get_touch_state(&mut track, is_pan) {
             Err(e) => {
                 self.error(e);
@@ -497,7 +538,13 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             self.error(ReaRsError::NullPtr("track").into());
             return;
         };
-        let mut track = Track::<Mutable>::new(&project, pointer);
+        let mut track = match Track::new(&project, pointer) {
+            Ok(track) => track,
+            Err(e) => {
+                self.error(e.into());
+                return;
+            }
+        };
         self.check_for_error(
             self.child.borrow().on_track_selection(&mut track),
         )
@@ -727,7 +774,7 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                     track: track_from_mut!(parm1, project),
                     is_rec_fx: (flags & 1) != 0,
                 }
-            },
+            }
             raw::CSURF_EXT_SETPROJECTMARKERCHANGE => {
                 CSurfExtended::SetProjectMarkerChange
             }

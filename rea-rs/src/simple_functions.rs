@@ -548,8 +548,8 @@ impl Reaper {
     /// use rea_rs::{Reaper, ProjectContext, WithReaperPtr};
     /// let rpr = Reaper::get();
     /// let pr = rpr.current_project();
-    /// let track = pr.get_track(0).ok_or("No track")?;
-    /// let track_is_valid = rpr.validate_ptr_2(&pr, track.get_pointer());
+    /// let track = pr.get_track(0)?.ok_or("No track")?;
+    /// let track_is_valid = rpr.validate_ptr_2(&pr, track.get()?);
     /// assert!(track_is_valid);
     /// # Ok::<_, Box<dyn std::error::Error>>(())
     /// ```

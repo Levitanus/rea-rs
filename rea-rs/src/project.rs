@@ -3,8 +3,8 @@ use crate::{
     ptr_wrappers::{MediaItem, MediaTrack, ReaProject},
     utils::{as_c_str, as_c_string, as_string, string_from_buf, WithNull},
     Color, CommandId, Item, MarkerRegionInfo, MarkerRegionIterator, PlayRate,
-    Position, ProjectContext, ReaRsError, Reaper, TimeRange, TimeRangeKind,
-    TimeSignature, Track, UndoFlags,
+    Position, ProjectContext, ReaRsError, Reaper, ReaperResult, TimeRange,
+    TimeRangeKind, TimeSignature, Track, UndoFlags,
 };
 use c_str_macro::c_str;
 use int_enum::IntEnum;
@@ -120,6 +120,7 @@ impl<'a> Project {
         }
     }
 
+    /// Focus project for performing the closure
     pub fn with_current_project(
         &self,
         mut f: impl FnMut() -> anyhow::Result<()>,
@@ -130,9 +131,9 @@ impl<'a> Project {
         if ret {
             return f();
         }
-        self.make_current_project();
+        let _ = self.make_current_project();
         f()?;
-        current.make_current_project();
+        let _ = current.make_current_project();
         Ok(())
     }
 
@@ -154,19 +155,21 @@ impl<'a> Project {
         Ok(())
     }
 
-    pub fn get_last_touched_track(&self) -> Option<Track> {
+    pub fn get_last_touched_track(&self) -> ReaperResult<Option<Track>> {
         let ptr = Reaper::get().low().GetLastTouchedTrack();
         match MediaTrack::new(ptr) {
-            None => None,
-            Some(ptr) => Some(Track::new(self, ptr)),
+            None => Ok(None),
+            Some(ptr) => Ok(Some(Track::new(self, ptr)?)),
         }
     }
 
-    pub fn get_last_touched_track_mut(&mut self) -> Option<Track> {
+    pub fn get_last_touched_track_mut(
+        &mut self,
+    ) -> ReaperResult<Option<Track>> {
         let ptr = Reaper::get().low().GetLastTouchedTrack();
         match MediaTrack::new(ptr) {
-            None => None,
-            Some(ptr) => Some(Track::new(self, ptr)),
+            None => Ok(None),
+            Some(ptr) => Ok(Some(Track::new(self, ptr)?)),
         }
     }
 
@@ -278,15 +281,17 @@ impl<'a> Project {
     }
 
     /// Close the project.
-    pub fn close(self) {
+    pub fn close(self) -> ReaperResult<()> {
         let rpr = Reaper::get();
         let current = rpr.current_project();
-        if current.get_pointer() == self.get_pointer() {
+        if current.get()? == self.get()? {
             rpr.perform_action(CommandId::new(40860), 0, None);
+            Ok(())
         } else {
-            self.make_current_project();
+            let _ = self.make_current_project();
             rpr.perform_action(CommandId::new(40860), 0, None);
-            current.make_current_project();
+            let _ = current.make_current_project();
+            Ok(())
         }
     }
 
@@ -475,7 +480,7 @@ impl<'a> Project {
     /// 4.0
     /// );
     /// ```
-    pub fn iter_markers_and_regions(&self) -> MarkerRegionIterator {
+    pub fn iter_markers_and_regions(&self) -> MarkerRegionIterator<'_> {
         MarkerRegionIterator::new(self)
     }
 
@@ -561,113 +566,88 @@ impl<'a> Project {
                 }
             }
         };
-        self.with_current_project(|| {
+        let _ = self.with_current_project(|| {
             Reaper::get().low().InsertTrackAtIndex(index as i32, true);
             Ok(())
-        })
-        .unwrap();
-        let mut track =
-            self.get_track_mut(index).expect("should have valid track");
+        });
+        let mut track = self
+            .get_track(index)?
+            .ok_or(ReaRsError::Str("Can not add track at given index"))?;
         let name: String = name.into();
         if !name.is_empty() {
-            track.set_name(name).expect("Can not set track name.")
+            track.set_name(name)?
         }
         Ok(track)
     }
 
-    pub fn get_track(&self, index: usize) -> Option<Track> {
-        let ptr = self.get_track_ptr(index)?;
-        let track = Track::new(self, ptr);
-        Some(track)
-    }
-    pub fn get_track_mut(&mut self, index: usize) -> Option<Track> {
-        let ptr = self.get_track_ptr(index)?;
-        let track = Track::new(self, ptr);
-        Some(track)
-    }
-    pub(crate) fn get_track_ptr(&self, index: usize) -> Option<MediaTrack> {
-        let project_ptr = match self.get() {
-            Ok(project) => project.as_ptr(),
-            Err(_) => return None,
-        };
-        unsafe {
-            let ptr = Reaper::get().low().GetTrack(project_ptr, index as i32);
-            match MediaTrack::new(ptr) {
-                None => None,
-                Some(ptr) => Some(ptr),
-            }
-        }
-    }
-
-    pub fn get_selected_track(&self, index: usize) -> Option<Track> {
-        let ptr = self.get_selected_track_ptr(index)?;
-        let track = Track::new(self, ptr);
-        Some(track)
-    }
-    pub fn get_selected_track_mut(&mut self, index: usize) -> Option<Track> {
-        let ptr = self.get_selected_track_ptr(index)?;
-        let track = Track::new(self, ptr);
-        Some(track)
-    }
-    fn get_selected_track_ptr(&self, index: usize) -> Option<MediaTrack> {
-        let project_ptr = match self.get() {
-            Ok(project) => project.as_ptr(),
-            Err(_) => return None,
-        };
+    pub fn get_track(&self, index: usize) -> ReaperResult<Option<Track>> {
         unsafe {
             let ptr = MediaTrack::new(
                 Reaper::get()
                     .low()
-                    .GetSelectedTrack(project_ptr, index as i32),
+                    .GetTrack(self.get()?.as_ptr(), index as i32),
             );
             match ptr {
-                None => None,
-                Some(ptr) => Some(ptr),
+                None => Ok(None),
+                Some(ptr) => Ok(Some(Track::new(self, ptr)?)),
             }
         }
     }
 
-    pub fn get_master_track(&self) -> Track {
-        Track::new(self, self.get_master_track_ptr())
-    }
-    pub fn get_master_track_mut(&mut self) -> Track {
-        Track::new(self, self.get_master_track_ptr())
-    }
-    fn get_master_track_ptr(&self) -> MediaTrack {
-        let project_ptr = self.get().expect("should get project ptr").as_ptr();
+    pub fn get_selected_track(
+        &self,
+        index: usize,
+    ) -> ReaperResult<Option<Track>> {
         unsafe {
-            NonNull::new(Reaper::get().low().GetMasterTrack(project_ptr))
-                .expect("should get master track")
+            let ptr = MediaTrack::new(
+                Reaper::get()
+                    .low()
+                    .GetSelectedTrack(self.get()?.as_ptr(), index as i32),
+            );
+            match ptr {
+                None => Ok(None),
+                Some(ptr) => Ok(Some(Track::new(self, ptr)?)),
+            }
         }
     }
 
-    pub fn iter_tracks(&self) -> TracksIterator {
+    pub fn get_master_track(&self) -> ReaperResult<Track> {
+        let ptr = unsafe {
+            NonNull::new(
+                Reaper::get().low().GetMasterTrack(self.get()?.as_ptr()),
+            )
+            .ok_or(ReaRsError::NullPtr("Null Master Track"))?
+        };
+        Track::new(self, ptr)
+    }
+
+    pub fn iter_tracks(&self) -> TracksIterator<'_> {
         TracksIterator::new(self)
     }
-    pub fn iter_tracks_mut(
-        &mut self,
-        mut f: impl FnMut(Track) -> anyhow::Result<()>,
-    ) -> anyhow::Result<()> {
-        for track in TracksIterator::new(self) {
-            let track = Track::new(self, track.get()?);
-            f(track)?
-        }
-        Ok(())
-    }
+    // pub fn iter_tracks_mut(
+    //     &mut self,
+    //     mut f: impl FnMut(Track) -> anyhow::Result<()>,
+    // ) -> anyhow::Result<()> {
+    //     for track in TracksIterator::new(self) {
+    //         let track = Track::new(self, track.get()?);
+    //         f(track)?
+    //     }
+    //     Ok(())
+    // }
 
-    pub fn iter_selected_tracks(&self) -> SelectedTracksIterator {
+    pub fn iter_selected_tracks(&self) -> SelectedTracksIterator<'_> {
         SelectedTracksIterator::new(self)
     }
-    pub fn iter_selected_tracks_mut(
-        &mut self,
-        mut f: impl FnMut(Track) -> anyhow::Result<()>,
-    ) -> anyhow::Result<()> {
-        for track in SelectedTracksIterator::new(self) {
-            let track = Track::new(self, track.get()?);
-            f(track)?
-        }
-        Ok(())
-    }
+    // pub fn iter_selected_tracks_mut(
+    //     &mut self,
+    //     mut f: impl FnMut(Track) -> anyhow::Result<()>,
+    // ) -> anyhow::Result<()> {
+    //     for track in SelectedTracksIterator::new(self) {
+    //         let track = Track::new(self, track.get()?);
+    //         f(track)?
+    //     }
+    //     Ok(())
+    // }
 
     pub fn iter_items(&'a self) -> ItemsIterator<'a> {
         ItemsIterator::new(self)
@@ -677,51 +657,37 @@ impl<'a> Project {
         SelectedItemsIterator::new(self)
     }
 
-    pub fn get_item(&self, index: usize) -> Option<Item> {
-        let item = Item::new(self, self.get_item_ptr(index)?);
-        Some(item)
-    }
-    pub fn get_item_mut(&mut self, index: usize) -> Option<Item> {
-        let item = Item::new(self, self.get_item_ptr(index)?);
-        Some(item)
-    }
-    fn get_item_ptr(&self, index: usize) -> Option<MediaItem> {
-        let project_ptr = match self.get() {
-            Ok(project) => project.as_ptr(),
-            Err(_) => return None,
-        };
-        let ptr = unsafe {
-            Reaper::get().low().GetMediaItem(project_ptr, index as i32)
-        };
-        match MediaItem::new(ptr) {
-            None => None,
-            x => x,
-        }
-    }
-
-    pub fn get_selected_item(&self, index: usize) -> Option<Item> {
-        match self.selected_item_ptr(index) {
-            Some(ptr) => Some(Item::new(self, ptr)),
-            None => None,
-        }
-    }
-    pub fn get_selected_item_mut(&mut self, index: usize) -> Option<Item> {
-        match self.selected_item_ptr(index) {
-            Some(ptr) => Some(Item::new(self, ptr)),
-            None => None,
-        }
-    }
-    fn selected_item_ptr(&self, index: usize) -> Option<MediaItem> {
-        let project_ptr = match self.get() {
-            Ok(project) => project.as_ptr(),
-            Err(_) => return None,
-        };
+    pub fn get_item(&self, index: usize) -> ReaperResult<Option<Item>> {
+        let project_ptr = self.get()?;
         let ptr = unsafe {
             Reaper::get()
                 .low()
-                .GetSelectedMediaItem(project_ptr, index as i32)
+                .GetMediaItem(project_ptr.as_ptr(), index as i32)
         };
-        MediaItem::new(ptr)
+        match MediaItem::new(ptr) {
+            None => Ok(None),
+            Some(x) => {
+                Ok(Some(Item::from_raw_project_ptr(Some(project_ptr), x)))
+            }
+        }
+    }
+
+    pub fn get_selected_item(
+        &self,
+        index: usize,
+    ) -> ReaperResult<Option<Item>> {
+        let project_ptr = self.get()?;
+        let ptr = unsafe {
+            Reaper::get()
+                .low()
+                .GetSelectedMediaItem(project_ptr.as_ptr(), index as i32)
+        };
+        match MediaItem::new(ptr) {
+            None => Ok(None),
+            Some(x) => {
+                Ok(Some(Item::from_raw_project_ptr(Some(project_ptr), x)))
+            }
+        }
     }
 
     /// Glue items (action shortcut).
@@ -1550,9 +1516,13 @@ impl<'a> TracksIterator<'a> {
 impl<'a> Iterator for TracksIterator<'a> {
     type Item = Track;
     fn next(&mut self) -> Option<Self::Item> {
-        let track = self.project.get_track(self.index);
-        self.index += 1;
-        track
+        match self.project.get_track(self.index) {
+            Ok(track) => {
+                self.index += 1;
+                track
+            }
+            Err(_) => return None,
+        }
     }
 }
 impl<'a> DoubleEndedIterator for TracksIterator<'a> {
@@ -1561,12 +1531,16 @@ impl<'a> DoubleEndedIterator for TracksIterator<'a> {
         if self.index == 0 {
             self.index = count;
         }
-        let track = self.project.get_track(self.index - 1);
-        self.index -= 1;
-        if self.index == 0 {
-            self.index = count + 2;
+        match self.project.get_track(self.index - 1) {
+            Ok(track) => {
+                self.index -= 1;
+                if self.index == 0 {
+                    self.index = count + 2;
+                }
+                track
+            }
+            Err(_) => return None,
         }
-        return track;
     }
 }
 
@@ -1582,7 +1556,7 @@ impl<'a> SelectedTracksIterator<'a> {
 impl<'a> Iterator for SelectedTracksIterator<'a> {
     type Item = Track;
     fn next(&mut self) -> Option<Self::Item> {
-        let track = self.project.get_selected_track(self.index);
+        let track = self.project.get_selected_track(self.index).ok()?;
         self.index += 1;
         track
     }
@@ -1600,7 +1574,7 @@ impl<'a> ItemsIterator<'a> {
 impl<'a> Iterator for ItemsIterator<'a> {
     type Item = Item;
     fn next(&mut self) -> Option<Self::Item> {
-        let item = self.project.get_item(self.index);
+        let item = self.project.get_item(self.index).ok()?;
         self.index += 1;
         item
     }
@@ -1618,7 +1592,7 @@ impl<'a> SelectedItemsIterator<'a> {
 impl<'a> Iterator for SelectedItemsIterator<'a> {
     type Item = Item;
     fn next(&mut self) -> Option<Self::Item> {
-        let item = self.project.get_selected_item(self.index);
+        let item = self.project.get_selected_item(self.index).ok()?;
         self.index += 1;
         item
     }

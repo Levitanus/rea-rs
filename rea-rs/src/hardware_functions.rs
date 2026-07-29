@@ -99,7 +99,9 @@ impl Reaper {
             }
 
             match string_from_buf(&buf) {
-                Ok(name) => return HardwareSocket::new(index as u32, name).into(),
+                Ok(name) => {
+                    return HardwareSocket::new(index as u32, name).into()
+                }
                 Err(err) => {
                     if size == 1024 {
                         error!(
@@ -136,7 +138,9 @@ impl Reaper {
             }
 
             match string_from_buf(&buf) {
-                Ok(name) => return HardwareSocket::new(index as u32, name).into(),
+                Ok(name) => {
+                    return HardwareSocket::new(index as u32, name).into()
+                }
                 Err(err) => {
                     if size == 1024 {
                         error!(

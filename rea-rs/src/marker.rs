@@ -5,8 +5,7 @@ use serde_derive::{Deserialize, Serialize};
 use crate::{
     ptr_wrappers::MediaTrack,
     utils::{as_c_str, as_string, WithNull},
-    Color, Immutable, Position, ProbablyMutable, Project, Reaper, Track,
-    WithReaperPtr,
+    Color, Position, Project, Reaper, ReaperResult, Track, WithReaperPtr,
 };
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -29,8 +28,11 @@ impl MarkerRegionInfo {
         let mut parameter_name = parameter_name.into();
         let low = Reaper::get().low();
         unsafe {
-            let marker =
-                low.GetRegionOrMarker(project.context().to_raw(), self.enum_index as i32, null());
+            let marker = low.GetRegionOrMarker(
+                project.context().to_raw(),
+                self.enum_index as i32,
+                null(),
+            );
             if marker.is_null() {
                 log::warn!(
                     "failed to get ProjectMarker for enum_index={} in project",
@@ -55,8 +57,11 @@ impl MarkerRegionInfo {
         let mut parameter_name = parameter_name.into();
         let low = Reaper::get().low();
         unsafe {
-            let marker =
-                low.GetRegionOrMarker(project.context().to_raw(), self.enum_index as i32, null());
+            let marker = low.GetRegionOrMarker(
+                project.context().to_raw(),
+                self.enum_index as i32,
+                null(),
+            );
             if marker.is_null() {
                 log::warn!(
                     "failed to get ProjectMarker for enum_index={} in project",
@@ -126,17 +131,15 @@ impl MarkerRegionInfo {
         }
     }
 
-    pub fn add_rendered_track<T: ProbablyMutable>(
+    pub fn add_rendered_track(
         &self,
         project: &Project,
-        track: &Track<T>,
+        track: &Track,
         channels: impl Into<Option<u32>>,
-    ) {
+    ) -> ReaperResult<()> {
         if !self.is_region {
-            log::warn!(
-                "render matrix is available only for regions"
-            );
-            return;
+            log::warn!("render matrix is available only for regions");
+            return Ok(());
         }
         let flag = match channels.into() {
             None => 1,
@@ -157,31 +160,31 @@ impl MarkerRegionInfo {
             Reaper::get().low().SetRegionRenderMatrix(
                 project.context().to_raw(),
                 self.user_index as i32,
-                track.get().as_ptr(),
+                track.get()?.as_ptr(),
                 flag,
             );
         }
+        Ok(())
     }
 
-    pub fn remove_rendered_track<T: ProbablyMutable>(
+    pub fn remove_rendered_track(
         &self,
         project: &Project,
-        track: &Track<T>,
-    ) {
+        track: &Track,
+    ) -> ReaperResult<()> {
         if !self.is_region {
-            log::warn!(
-                "render matrix is available only for regions"
-            );
-            return;
+            log::warn!("render matrix is available only for regions");
+            return Ok(());
         }
         unsafe {
             Reaper::get().low().SetRegionRenderMatrix(
                 project.context().to_raw(),
                 self.user_index as i32,
-                track.get().as_ptr(),
+                track.get()?.as_ptr(),
                 -1,
             );
         }
+        Ok(())
     }
 }
 
@@ -193,7 +196,7 @@ pub struct RenderedTracksIterator<'a> {
 }
 
 impl<'a> Iterator for RenderedTracksIterator<'a> {
-    type Item = Track<'a, Immutable>;
+    type Item = Track;
 
     fn next(&mut self) -> Option<Self::Item> {
         if !self.is_region {
@@ -208,7 +211,7 @@ impl<'a> Iterator for RenderedTracksIterator<'a> {
             );
             self.index += 1;
             let ptr = MediaTrack::new(ptr)?;
-            Some(Track::new(self.project, ptr))
+            Track::new(self.project, ptr).ok()
         }
     }
 }

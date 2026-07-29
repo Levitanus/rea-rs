@@ -22,7 +22,7 @@ pub struct Measure {
 }
 
 impl Measure {
-    pub fn from_index(index: u32, project: &Project) -> Self {
+    pub fn from_index(index: u32, project: &Project) -> ReaperResult<Self> {
         let rpr = Reaper::get().low();
         let (
             mut qn_start,
@@ -48,7 +48,7 @@ impl Measure {
                 tempo.as_mut_ptr(),
             )
         };
-        unsafe {
+        let res = unsafe {
             Self {
                 index,
                 start: Position::from(result),
@@ -59,9 +59,13 @@ impl Measure {
                 ),
                 tempo: tempo.assume_init(),
             }
-        }
+        };
+        Ok(res)
     }
-    pub fn from_position(position: Position, project: &Project) -> Self {
+    pub fn from_position(
+        position: Position,
+        project: &Project,
+    ) -> ReaperResult<Self> {
         let low = Reaper::get().low();
         let (mut start, mut end) =
             (MaybeUninit::zeroed(), MaybeUninit::zeroed());
@@ -76,23 +80,23 @@ impl Measure {
         };
         Self::from_index(index as u32, project)
     }
-    pub fn ppq_start(&self, take: &Take, ppq: u32) -> u32 {
+    pub fn ppq_start(&self, take: &Take, ppq: u32) -> ReaperResult<u32> {
         let low = Reaper::get().low();
         let pos = unsafe {
             low.MIDI_GetPPQPos_StartOfMeasure(take.get()?.as_ptr(), ppq as f64)
         };
-        pos as u32
+        Ok(pos as u32)
     }
-    pub fn ppq_end(&self, take: &Take, ppq: u32) -> u32 {
+    pub fn ppq_end(&self, take: &Take, ppq: u32) -> ReaperResult<u32> {
         let low = Reaper::get().low();
         let pos = unsafe {
             low.MIDI_GetPPQPos_EndOfMeasure(take.get()?.as_ptr(), ppq as f64)
         };
-        pos as u32
+        Ok(pos as u32)
     }
     pub fn from_ppq(&self, take: &Take, ppq: u32) -> Result<Self, ReaRsError> {
         let pos = Position::from_ppq(ppq, take)?;
-        Ok(Self::from_position(pos, &take.project()))
+        Self::from_position(pos, &take.project())
     }
 }
 
@@ -296,7 +300,7 @@ impl Position {
 
     pub fn from_ppq(
         ppq: impl Into<u32>,
-        take: Take,
+        take: &Take,
     ) -> Result<Self, ReaRsError> {
         let val = unsafe {
             Reaper::get().low().MIDI_GetProjTimeFromPPQPos(
@@ -686,22 +690,6 @@ impl TimeSignature {
         (self.numerator, self.denominator)
     }
 }
-
-// /// Generic mutability marker, that allows to
-// /// mutate only one Reaper object at time.
-// ///
-// /// Used as generic parameter (usually as marker),
-// /// that resolved to [Mutable] or [Immutable].
-// pub trait ProbablyMutable {}
-// /// Guarantees, that only this object and its
-// /// child (and sub_child) can be mutated.
-// #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-// pub struct Mutable;
-// impl ProbablyMutable for Mutable {}
-// /// Guarantees, that object is immutable.
-// #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-// pub struct Immutable;
-// impl ProbablyMutable for Immutable {}
 
 pub trait KnowsProject {
     fn project(&self) -> Project;

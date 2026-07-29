@@ -1,28 +1,21 @@
-use std::marker::PhantomData;
-
 use crate::{
-    ptr_wrappers, KnowsProject, Mutable, Position, ProbablyMutable,
-    ReaRsError, Reaper, SampleAmount, WithReaperPtr,
+    ptr_wrappers, KnowsProject, Position, ReaRsError, Reaper, SampleAmount,
+    WithReaperPtr,
 };
 
 #[derive(Debug, PartialEq)]
-pub struct AudioAccessor<'a, T: KnowsProject, P: ProbablyMutable> {
+pub struct AudioAccessor<'a, T: KnowsProject> {
     ptr: ptr_wrappers::AudioAccessor,
     parent: &'a T,
     should_check: bool,
-    phantom: PhantomData<P>,
 }
-impl<'a, T: KnowsProject, P: ProbablyMutable> WithReaperPtr
-    for AudioAccessor<'a, T, P>
-{
+impl<'a, T: KnowsProject> WithReaperPtr for AudioAccessor<'a, T> {
     type Ptr = ptr_wrappers::AudioAccessor;
     fn get_pointer(&self) -> Self::Ptr {
         self.ptr
     }
-    fn get(&self) -> Self::Ptr {
-        self.require_valid_2(self.parent.project())
-            .expect("Object no longer is valid.");
-        self.ptr
+    fn get(&self) -> Result<Self::Ptr, ReaRsError> {
+        self.require_valid_2(&self.parent.project())
     }
     fn make_unchecked(&mut self) {
         self.should_check = false
@@ -34,37 +27,36 @@ impl<'a, T: KnowsProject, P: ProbablyMutable> WithReaperPtr
         self.should_check
     }
 }
-impl<'a, T: KnowsProject, P: ProbablyMutable> AudioAccessor<'a, T, P> {
+impl<'a, T: KnowsProject> AudioAccessor<'a, T> {
     pub fn new(parent: &'a T, ptr: ptr_wrappers::AudioAccessor) -> Self {
         Self {
             ptr,
             parent,
             should_check: true,
-            phantom: PhantomData,
         }
     }
-    pub fn has_state_changed(&self) -> bool {
-        unsafe {
+    pub fn has_state_changed(&self) -> Result<bool, ReaRsError> {
+        Ok(unsafe {
             Reaper::get()
                 .low()
-                .AudioAccessorStateChanged(self.get().as_ptr())
-        }
+                .AudioAccessorStateChanged(self.get()?.as_ptr())
+        })
     }
-    pub fn start(&self) -> Position {
-        unsafe {
+    pub fn start(&self) -> Result<Position, ReaRsError> {
+        Ok(unsafe {
             Reaper::get()
                 .low()
-                .GetAudioAccessorStartTime(self.get().as_ptr())
+                .GetAudioAccessorStartTime(self.get()?.as_ptr())
                 .into()
-        }
+        })
     }
-    pub fn end(&self) -> Position {
-        unsafe {
+    pub fn end(&self) -> Result<Position, ReaRsError> {
+        Ok(unsafe {
             Reaper::get()
                 .low()
-                .GetAudioAccessorEndTime(self.get().as_ptr())
+                .GetAudioAccessorEndTime(self.get()?.as_ptr())
                 .into()
-        }
+        })
     }
 
     /// Get buffer of samples with given absolute project position in samples.
@@ -93,13 +85,13 @@ impl<'a, T: KnowsProject, P: ProbablyMutable> AudioAccessor<'a, T, P> {
         samples_per_channel: u32,
         n_channels: u8,
         samplerate: u32,
-    ) -> anyhow::Result<Option<Vec<f64>>> {
+    ) -> Result<Option<Vec<f64>>, ReaRsError> {
         let mut sample_buffer =
             vec![0.0; (samples_per_channel * n_channels as u32) as usize];
-        let start = start.as_time(samplerate) + self.start().as_duration();
+        let start = start.as_time(samplerate) + self.start()?.as_duration();
         let result = unsafe {
             Reaper::get().low().GetAudioAccessorSamples(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 samplerate as i32,
                 n_channels as i32,
                 start.as_secs_f64(),
@@ -117,34 +109,40 @@ impl<'a, T: KnowsProject, P: ProbablyMutable> AudioAccessor<'a, T, P> {
         }
     }
 }
-impl<'a, T: KnowsProject> AudioAccessor<'a, T, Mutable> {
+impl<'a, T: KnowsProject> AudioAccessor<'a, T> {
     /// Validates the current state of the audio accessor
     ///
     /// -- must ONLY call this from the main thread.
     ///
     /// Returns true if the state changed.
-    pub fn validate(&mut self) -> bool {
-        unsafe {
+    pub fn validate(&mut self) -> Result<bool, ReaRsError> {
+        Ok(unsafe {
             Reaper::get()
                 .low()
-                .AudioAccessorValidateState(self.get().as_ptr())
-        }
+                .AudioAccessorValidateState(self.get()?.as_ptr())
+        })
     }
 
     /// Force the accessor to reload its state from the underlying track or
     /// media item take.
-    pub fn update(&mut self) {
-        unsafe { Reaper::get().low().AudioAccessorUpdate(self.get().as_ptr()) }
-    }
-}
-impl<'a, T: KnowsProject, P: ProbablyMutable> Drop
-    for AudioAccessor<'a, T, P>
-{
-    fn drop(&mut self) {
+    pub fn update(&mut self) -> Result<(), ReaRsError> {
         unsafe {
             Reaper::get()
                 .low()
-                .DestroyAudioAccessor(self.get().as_ptr())
+                .AudioAccessorUpdate(self.get()?.as_ptr())
         }
+        Ok(())
+    }
+}
+impl<'a, T: KnowsProject> Drop for AudioAccessor<'a, T> {
+    fn drop(&mut self) {
+        let ptr = match self.get() {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("{}", e);
+                return;
+            }
+        };
+        unsafe { Reaper::get().low().DestroyAudioAccessor(ptr.as_ptr()) }
     }
 }

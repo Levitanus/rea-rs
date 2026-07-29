@@ -1,15 +1,26 @@
 use crate::{
     ptr_wrappers::{MediaTrack, TrackEnvelope},
     utils::{as_c_str, WithNull},
-    AutomationMode, Envelope, Immutable, KnowsProject, Mutable, Pan, PanLaw,
-    ProbablyMutable, ReaRsError, Reaper, Track, Volume, WithReaperPtr, GUID,
+    AutomationMode, Envelope, KnowsProject, Pan, PanLaw, ReaRsError, Reaper,
+    ReaperResult, Track, Volume, WithReaperPtr, GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
 use std::ptr::null_mut;
 
 #[repr(i32)]
-#[derive(Debug, Copy, Clone, IntEnum, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    IntEnum,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+)]
 pub enum SendType {
     Receive = -1,
     Send = 0,
@@ -37,12 +48,12 @@ pub trait SendIntType {
 ///
 /// Use this struct to construct new sends from one Track to another.
 #[derive(Debug, PartialEq)]
-pub struct TrackSend<'a, T: ProbablyMutable> {
-    track: &'a Track<'a, T>,
+pub struct TrackSend<'a> {
+    track: &'a Track,
     index: usize,
 }
-impl<'a, T: ProbablyMutable> TrackSend<'a, T> {}
-impl<'a> TrackSend<'a, Mutable> {
+impl<'a> TrackSend<'a> {}
+impl<'a> TrackSend<'a> {
     /// The only way to make TrackSend from one track to another.
     ///
     /// It should guarantee, that no track, no project itself are
@@ -53,26 +64,30 @@ impl<'a> TrackSend<'a, Mutable> {
     /// almost can not affect other objects state — It uses a hack to
     /// mutate `<Immutable>` tracks. Keep this in mind.
     pub fn create_new(
-        source: &Track<Immutable>,
-        destination: &Track<Immutable>,
-    ) -> Self {
+        source: &Track,
+        destination: &Track,
+    ) -> ReaperResult<Self> {
         if source.project() != destination.project() {
-            panic!("Tracks are from different projects")
+            return Err(ReaRsError::InvalidObject(
+                "Tracks are from different projects",
+            ));
         };
         let index = unsafe {
             Reaper::get().low().CreateTrackSend(
-                source.get().as_ptr(),
-                destination.get().as_ptr(),
+                source.get()?.as_ptr(),
+                destination.get()?.as_ptr(),
             )
         };
-        let source: &Track<'a, Mutable> =
-            unsafe { std::mem::transmute(source) };
-        TrackSend::new(&source, index as usize)
-            .expect("No send at the given index after creation")
+        let source: &Track = unsafe { std::mem::transmute(source) };
+        TrackSend::new(source, index as usize).ok_or(
+            ReaRsError::InvalidObject(
+                "No send at the given index after creation",
+            ),
+        )
     }
 }
-impl<'a, T: ProbablyMutable> GenericSend<'a, T> for TrackSend<'a, T> {
-    fn new(track: &'a Track<T>, index: usize) -> Option<Self> {
+impl<'a> GenericSend<'a> for TrackSend<'a> {
+    fn new(track: &'a Track, index: usize) -> Option<Self> {
         let obj = Self { track, index };
         if let Err(_) = obj.validate() {
             return None;
@@ -80,7 +95,7 @@ impl<'a, T: ProbablyMutable> GenericSend<'a, T> for TrackSend<'a, T> {
         Some(obj)
     }
     /// Track that sends outside
-    fn parent_track(&self) -> &Track<T> {
+    fn parent_track(&self) -> &Track {
         self.track
     }
 
@@ -88,22 +103,22 @@ impl<'a, T: ProbablyMutable> GenericSend<'a, T> for TrackSend<'a, T> {
         self.index
     }
 }
-impl<'a, T: ProbablyMutable> SendIntType for TrackSend<'a, T> {
+impl<'a> SendIntType for TrackSend<'a> {
     fn as_int_static() -> i32 {
         0
     }
 }
-impl<'a> GenericSendMut<'a> for TrackSend<'a, Mutable> {}
+impl<'a> GenericSendMut<'a> for TrackSend<'a> {}
 
 /// Send, that is child of destination track.
 #[derive(Debug, PartialEq)]
-pub struct TrackReceive<'a, T: ProbablyMutable> {
-    track: &'a Track<'a, T>,
+pub struct TrackReceive<'a> {
+    track: &'a Track,
     index: usize,
 }
-impl<'a, T: ProbablyMutable> TrackReceive<'a, T> {}
-impl<'a, T: ProbablyMutable> GenericSend<'a, T> for TrackReceive<'a, T> {
-    fn new(track: &'a Track<T>, index: usize) -> Option<Self> {
+impl<'a> TrackReceive<'a> {}
+impl<'a> GenericSend<'a> for TrackReceive<'a> {
+    fn new(track: &'a Track, index: usize) -> Option<Self> {
         let obj = Self { track, index };
         if let Err(_) = obj.validate() {
             return None;
@@ -111,7 +126,7 @@ impl<'a, T: ProbablyMutable> GenericSend<'a, T> for TrackReceive<'a, T> {
         Some(obj)
     }
     /// Track, that receives.
-    fn parent_track(&self) -> &Track<T> {
+    fn parent_track(&self) -> &Track {
         self.track
     }
 
@@ -119,31 +134,31 @@ impl<'a, T: ProbablyMutable> GenericSend<'a, T> for TrackReceive<'a, T> {
         self.index
     }
 }
-impl<'a, T: ProbablyMutable> SendIntType for TrackReceive<'a, T> {
+impl<'a> SendIntType for TrackReceive<'a> {
     fn as_int_static() -> i32 {
         -1
     }
 }
-impl<'a> GenericSendMut<'a> for TrackReceive<'a, Mutable> {}
+impl<'a> GenericSendMut<'a> for TrackReceive<'a> {}
 
 /// Send from Track to hardware outputs.
 ///
 /// Supports send to rea_route: see [SendDestChannels]
 #[derive(Debug, PartialEq)]
-pub struct HardwareSend<'a, T: ProbablyMutable> {
-    track: &'a Track<'a, T>,
+pub struct HardwareSend<'a> {
+    track: &'a Track,
     index: usize,
 }
-impl<'a, T: ProbablyMutable> HardwareSend<'a, T> {}
-impl<'a, T: ProbablyMutable> GenericSend<'a, T> for HardwareSend<'a, T> {
-    fn new(track: &'a Track<T>, index: usize) -> Option<Self> {
+impl<'a> HardwareSend<'a> {}
+impl<'a> GenericSend<'a> for HardwareSend<'a> {
+    fn new(track: &'a Track, index: usize) -> Option<Self> {
         let obj = Self { track, index };
         if let Err(_) = obj.validate() {
             return None;
         }
         Some(obj)
     }
-    fn parent_track(&self) -> &Track<T> {
+    fn parent_track(&self) -> &Track {
         self.track
     }
 
@@ -151,25 +166,23 @@ impl<'a, T: ProbablyMutable> GenericSend<'a, T> for HardwareSend<'a, T> {
         self.index
     }
 }
-impl<'a, T: ProbablyMutable> SendIntType for HardwareSend<'a, T> {
+impl<'a> SendIntType for HardwareSend<'a> {
     fn as_int_static() -> i32 {
         1
     }
 }
-impl<'a> GenericSendMut<'a> for HardwareSend<'a, Mutable> {}
+impl<'a> GenericSendMut<'a> for HardwareSend<'a> {}
 
-pub trait GenericSend<'a, T: ProbablyMutable + 'a>:
-    SendIntType + Sized
-{
-    fn parent_track(&self) -> &Track<T>;
+pub trait GenericSend<'a>: SendIntType + Sized {
+    fn parent_track(&self) -> &Track;
     fn index(&self) -> usize;
-    fn new(track: &'a Track<T>, index: usize) -> Option<Self>;
+    fn new(track: &'a Track, index: usize) -> Option<Self>;
     fn validate(&self) -> anyhow::Result<()> {
         let valid = match self.as_int() {
-            ..0 => self.parent_track().n_receives() > self.index(),
+            ..0 => self.parent_track().n_receives()? > self.index(),
 
-            0 => self.parent_track().n_sends() > self.index(),
-            0.. => self.parent_track().n_hardware_sends() > self.index(),
+            0 => self.parent_track().n_sends()? > self.index(),
+            0.. => self.parent_track().n_hardware_sends()? > self.index(),
         };
         match valid {
             false => {
@@ -182,73 +195,79 @@ pub trait GenericSend<'a, T: ProbablyMutable + 'a>:
 
     /// Core method to retrieve send properties.
     /// With probability of 99% you shouldn't use it.
-    fn get_info_value(&self, param: impl Into<String>) -> f64 {
-        let track_ptr = self.parent_track().get().as_ptr();
-        unsafe {
+    fn get_info_value(&self, param: impl Into<String>) -> ReaperResult<f64> {
+        let track_ptr = self.parent_track().get()?.as_ptr();
+        Ok(unsafe {
             Reaper::get().low().GetTrackSendInfo_Value(
                 track_ptr,
                 self.as_int(),
                 self.index() as i32,
                 as_c_str(param.into().with_null()).as_ptr(),
             )
-        }
+        })
     }
 
-    fn is_mute(&self) -> bool {
-        self.get_info_value("B_MUTE") as i32 != 0
+    fn is_mute(&self) -> ReaperResult<bool> {
+        Ok(self.get_info_value("B_MUTE")? as i32 != 0)
     }
     /// Phase flipped if true.
-    fn phase_flipped(&self) -> bool {
-        self.get_info_value("B_PHASE") as i32 != 0
+    fn phase_flipped(&self) -> ReaperResult<bool> {
+        Ok(self.get_info_value("B_PHASE")? as i32 != 0)
     }
     /// Note, that mono parameter is not equal to [SendDestChannels]
     /// and [SendSourceChannels] is_mono parameters.
-    fn is_mono(&self) -> bool {
-        self.get_info_value("B_MONO") as i32 != 0
+    fn is_mono(&self) -> ReaperResult<bool> {
+        Ok(self.get_info_value("B_MONO")? as i32 != 0)
     }
-    fn volume(&self) -> Volume {
-        Volume::from(self.get_info_value("D_VOL"))
+    fn volume(&self) -> ReaperResult<Volume> {
+        Ok(Volume::from(self.get_info_value("D_VOL")?))
     }
-    fn pan(&self) -> Pan {
-        Pan::from(self.get_info_value("D_PAN"))
+    fn pan(&self) -> ReaperResult<Pan> {
+        Ok(Pan::from(self.get_info_value("D_PAN")?))
     }
-    fn pan_law(&self) -> PanLaw {
-        PanLaw::from(self.get_info_value("D_PANLAW"))
+    fn pan_law(&self) -> ReaperResult<PanLaw> {
+        Ok(PanLaw::from(self.get_info_value("D_PANLAW")?))
     }
-    fn send_mode(&self) -> SendMode {
-        SendMode::from(self.get_info_value("I_SENDMODE"))
+    fn send_mode(&self) -> ReaperResult<SendMode> {
+        Ok(SendMode::from(self.get_info_value("I_SENDMODE")?))
     }
-    fn automation_mode(&self) -> AutomationMode {
-        AutomationMode::from_int(self.get_info_value("I_AUTOMODE") as i32)
-            .expect("Can not convert result to Automation mode.")
+    fn automation_mode(&self) -> ReaperResult<AutomationMode> {
+        AutomationMode::from_int(self.get_info_value("I_AUTOMODE")? as i32)
+            .map_err(|_| {
+                ReaRsError::UnexpectedAPI(
+                    "Can not convert result to Automation mode.".to_string(),
+                )
+            })
     }
     /// If `None` returned — the audio is off.
-    fn source_channels(&self) -> Option<SendSourceChannels> {
-        let value = self.get_info_value("I_SRCCHAN");
+    fn source_channels(&self) -> ReaperResult<Option<SendSourceChannels>> {
+        let value = self.get_info_value("I_SRCCHAN")?;
         if value < 0.0 {
-            return None;
+            return Ok(None);
         }
-        SendSourceChannels::from(value).into()
+        Ok(SendSourceChannels::from(value).into())
     }
     /// Returns `None` if source_channels are `None`.
-    fn dest_channels(&self) -> Option<SendDestChannels> {
-        self.source_channels()?;
-        SendDestChannels::from(self.get_info_value("I_DSTCHAN")).into()
+    fn dest_channels(&self) -> ReaperResult<Option<SendDestChannels>> {
+        if self.source_channels()?.is_none() {
+            return Ok(None);
+        }
+        Ok(SendDestChannels::from(self.get_info_value("I_DSTCHAN")?).into())
     }
     /// If `None` is returned — MIDI is off.
-    fn midi_properties(&self) -> Option<SendMIDIProps> {
-        let value = self.get_info_value("I_MIDIFLAGS");
+    fn midi_properties(&self) -> ReaperResult<Option<SendMIDIProps>> {
+        let value = self.get_info_value("I_MIDIFLAGS")?;
         let flags = value as u32;
         if flags == 0b1111111100000000011111 {
-            return None;
+            return Ok(None);
         }
-        SendMIDIProps::from(value).into()
+        Ok(SendMIDIProps::from(value).into())
     }
 
-    fn dest_track(&'a self) -> Option<Track<Immutable>> {
+    fn dest_track(&'a self) -> ReaperResult<Option<Track>> {
         let result = unsafe {
             Reaper::get().low().GetSetTrackSendInfo(
-                self.parent_track().get().as_ptr(),
+                self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
                 as_c_str(&String::from("P_DESTTRACK\0")).as_ptr(),
@@ -257,17 +276,16 @@ pub trait GenericSend<'a, T: ProbablyMutable + 'a>:
         };
         let ptr = MediaTrack::new(result);
         match ptr {
-            None => None,
+            None => Ok(None),
             Some(ptr) => {
-                Track::<Immutable>::new(self.parent_track().project(), ptr)
-                    .into()
+                Ok(Some(Track::new(&self.parent_track().project(), ptr)?))
             }
         }
     }
-    fn source_track(&'a self) -> Option<Track<Immutable>> {
+    fn source_track(&'a self) -> ReaperResult<Option<Track>> {
         let result = unsafe {
             Reaper::get().low().GetSetTrackSendInfo(
-                self.parent_track().get().as_ptr(),
+                self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
                 as_c_str(&String::from("P_SRCTRACK\0")).as_ptr(),
@@ -276,10 +294,9 @@ pub trait GenericSend<'a, T: ProbablyMutable + 'a>:
         };
         let ptr = MediaTrack::new(result);
         match ptr {
-            None => None,
+            None => Ok(None),
             Some(ptr) => {
-                Track::<Immutable>::new(self.parent_track().project(), ptr)
-                    .into()
+                Ok(Some(Track::new(&self.parent_track().project(), ptr)?))
             }
         }
     }
@@ -289,10 +306,10 @@ pub trait GenericSend<'a, T: ProbablyMutable + 'a>:
     fn get_envelope(
         &'a self,
         selector: impl Into<EnvelopeSelector>,
-    ) -> Option<Envelope<Track<T>, T>> {
+    ) -> ReaperResult<Option<Envelope<'a, Track>>> {
         let result = unsafe {
             Reaper::get().low().GetSetTrackSendInfo(
-                self.parent_track().get().as_ptr(),
+                self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
                 as_c_str(&String::from(
@@ -304,12 +321,12 @@ pub trait GenericSend<'a, T: ProbablyMutable + 'a>:
         };
         let ptr = TrackEnvelope::new(result);
         match ptr {
-            None => None,
-            Some(ptr) => Envelope::new(ptr, self.parent_track()).into(),
+            None => Ok(None),
+            Some(ptr) => Ok(Some(Envelope::new(ptr, self.parent_track()))),
         }
     }
 }
-pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
+pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a> {
     /// Remove send from track. This also drops the value.
     ///
     /// # Note
@@ -321,7 +338,7 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
     {
         let result = unsafe {
             match Reaper::get().low().RemoveTrackSend(
-                self.parent_track().get().as_ptr(),
+                self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
             ) {
@@ -346,7 +363,7 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
         let mut param = param.into();
         let result = unsafe {
             Reaper::get().low().SetTrackSendInfo_Value(
-                self.parent_track().get().as_ptr(),
+                self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
                 as_c_str(&param.with_null()).as_ptr(),
@@ -423,7 +440,7 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a, Mutable> {
         channels: SendDestChannels,
     ) -> anyhow::Result<()> {
         {
-            self.source_channels().ok_or(ReaRsError::InvalidObject(
+            self.source_channels()?.ok_or(ReaRsError::InvalidObject(
                 "source channels are None. set them at first.",
             ))?;
         }

@@ -9,15 +9,14 @@ use rea_rs::project_info::{
 use rea_rs::{
     ActionHook, ActionKind, AutomationMode, Color, CommandId, EnvelopeChunk,
     EnvelopePoint, EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo,
-    ExtState, GenericSend, GenericSendMut, HardwareSocket, Immutable,
-    ItemFade, MarkerRegionInfo, MessageBoxValue, Mutable, Pan, PanLaw, Pitch,
-    PlayRate, PluginContext, Position, Project, RazorEdit, ReaRsError, Reaper,
-    RecInput, RecMode, RecMonitoring, RecOutMode, SampleAmount,
-    SendDestChannels, SendMIDIProps, SendMode, SendSourceChannels, SoloMode,
-    SourceOffset, TakeChannelMode, TakePitchMode, TimeMode, Track,
-    TrackFolderState, TrackGroupParam, TrackPan, TrackPerformanceFlags,
-    TrackPlayOffset, TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX,
-    GUID,
+    ExtState, GenericSend, GenericSendMut, HardwareSocket, ItemFade,
+    MarkerRegionInfo, MessageBoxValue, Pan, PanLaw, Pitch, PlayRate,
+    PluginContext, Position, Project, RazorEdit, ReaRsError, Reaper, RecInput,
+    RecMode, RecMonitoring, RecOutMode, SampleAmount, SendDestChannels,
+    SendMIDIProps, SendMode, SendSourceChannels, SoloMode, SourceOffset,
+    TakeChannelMode, TakePitchMode, TimeMode, Track, TrackFolderState,
+    TrackGroupParam, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
+    TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX, GUID,
 };
 use rea_rs_macros::reaper_extension_plugin;
 use rea_rs_test::{TestStep, TestStepResult};
@@ -118,7 +117,7 @@ fn action() -> TestStep {
             None,
         )?;
         debug!("Try perform action with id: {:?}", action.command_id);
-        rpr.perform_action(action.command_id, 0, None);
+        let _ = rpr.perform_action(action.command_id, 0, None);
         debug!("Try receive...");
         receive.try_recv().expect("expect receive from action call");
         assert!(receive.try_recv().is_err());
@@ -154,7 +153,7 @@ fn projects() -> TestStep {
         let new = rpr.add_project_tab(false);
         assert!(current.is_current_project());
         assert!(!new.is_current_project());
-        new.make_current_project();
+        new.make_current_project()?;
         assert!(new.is_current_project());
         assert!(!current.is_current_project());
         assert_ne!(current, new);
@@ -173,10 +172,10 @@ fn projects() -> TestStep {
         assert_ne!(pr1, pr2);
         //
         pr2.with_valid_ptr(|pr| {
-            debug!("{}", pr.name());
+            debug!("{}", pr.name()?);
             Ok(())
         })?;
-        pr1.close();
+        pr1.close()?;
         // assert!(pr1.require_valid().is_err()); // will not compile.
 
         let mut pr = rpr.current_project();
@@ -190,18 +189,18 @@ fn projects() -> TestStep {
             "my_directory"
         );
 
-        assert_eq!(pr.is_stopped(), true);
-        assert_eq!(pr.is_playing(), false);
-        pr.play();
-        assert_eq!(pr.is_stopped(), false);
-        assert_eq!(pr.is_playing(), true);
-        pr.pause();
-        assert_eq!(pr.is_stopped(), false);
-        assert_eq!(pr.is_playing(), false);
-        assert_eq!(pr.is_paused(), true);
-        pr.stop();
-        assert_eq!(pr.is_stopped(), true);
-        assert_eq!(pr.is_playing(), false);
+        assert_eq!(pr.is_stopped()?, true);
+        assert_eq!(pr.is_playing()?, false);
+        pr.play()?;
+        assert_eq!(pr.is_stopped()?, false);
+        assert_eq!(pr.is_playing()?, true);
+        pr.pause()?;
+        assert_eq!(pr.is_stopped()?, false);
+        assert_eq!(pr.is_playing()?, false);
+        assert_eq!(pr.is_paused()?, true);
+        pr.stop()?;
+        assert_eq!(pr.is_stopped()?, true);
+        assert_eq!(pr.is_playing()?, false);
 
         debug!("Test group index");
         pr.set_track_group_name(0, "first group")?;
@@ -361,7 +360,10 @@ fn misc() -> TestStep {
         )?;
         let pr = rpr.current_project();
         rpr.perform_action(CommandId::new(40001), 0, Some(&pr));
-        assert_eq!(pr.next_undo().expect("should have undo"), "Add new track");
+        assert_eq!(
+            pr.next_undo()?.expect("should have undo"),
+            "Add new track"
+        );
 
         debug!("Let's print audio hardware:");
         debug!(
@@ -430,99 +432,105 @@ fn ext_state() -> TestStep {
         info!("ExtState keep persistence between test sessions.");
         debug!("test on integer and in reaper");
         let rpr = Reaper::get();
-        let mut state =
-            ExtState::new("test section", "first", Some(10), false, rpr, None);
+        let mut state = ExtState::new(
+            "test section",
+            "first",
+            Some(10),
+            false,
+            rpr,
+            None,
+        )?;
         assert_eq!(state.get()?.expect("can not get value"), 10);
-        state.set(56);
+        state.set(56)?;
         assert_eq!(state.get()?.expect("can not get value"), 56);
-        state.delete();
+        state.delete()?;
         assert!(state.get()?.is_none());
-        state.set(56);
+        state.set(56)?;
 
         debug!("test on struct and in reaper");
         let mut state: ExtState<SampleAmount, Reaper> =
-            ExtState::new("test section", "second", None, false, rpr, None);
+            ExtState::new("test section", "second", None, false, rpr, None)?;
         assert_eq!(state.get()?, None);
-        state.set(SampleAmount::new(35896));
+        state.set(SampleAmount::new(35896))?;
         assert_eq!(state.get()?.expect("can not get value").get(), 35896);
-        state.delete();
+        state.delete()?;
         assert!(state.get()?.is_none());
-        state.set(SampleAmount::new(35896));
+        state.set(SampleAmount::new(35896))?;
 
         debug!("test on struct and in project");
         let mut pr = rpr.current_project();
         let mut state: ExtState<SampleAmount, Project> =
-            ExtState::new("test section", "third", None, true, &pr, None);
-        state.delete();
+            ExtState::new("test section", "third", None, true, &pr, None)?;
+        state.delete()?;
         assert!(state.get()?.is_none());
-        state.set(SampleAmount::new(3344));
+        state.set(SampleAmount::new(3344))?;
 
         assert_eq!(state.get()?.expect("can not get value").get(), 3344);
-        state.delete();
+        state.delete()?;
         assert!(state.get()?.is_none());
 
         debug!("test on int and track");
-        let tr = pr.get_track_mut(0).unwrap();
+        let tr = pr.get_track(0)?.unwrap();
         let mut state =
-            ExtState::new("test section", "first", 45, false, &tr, None);
+            ExtState::new("test section", "first", 45, false, &tr, None)?;
         assert_eq!(state.get()?.expect("can not get value"), 45);
-        state.set(15);
+        state.set(15)?;
         assert_eq!(state.get()?.expect("can not get value"), 15);
-        state.delete();
+        state.delete()?;
         assert_eq!(state.get()?, None);
 
         debug!("test on int and send");
-        pr.add_track(1, "second");
-        let source = pr.get_track(0).unwrap();
-        let destination = pr.get_track(1).unwrap();
-        let send = TrackSend::create_new(&source, &destination);
+        pr.add_track(1, "second")?;
+        let source = pr.get_track(0)?.unwrap();
+        let destination = pr.get_track(1)?.unwrap();
+        let send = TrackSend::create_new(&source, &destination)?;
         let mut state =
-            ExtState::new("test section", "first", 45, false, &send, None);
+            ExtState::new("test section", "first", 45, false, &send, None)?;
         assert_eq!(state.get()?.expect("can not get value"), 45);
-        state.set(15);
+        state.set(15)?;
         assert_eq!(state.get()?.expect("can not get value"), 15);
-        state.delete();
+        state.delete()?;
         assert_eq!(state.get()?, None);
 
         debug!("test on int and envelope");
-        pr.add_track(1, "second");
-        let mut tr = pr.get_track_mut(0).unwrap();
+        pr.add_track(1, "second")?;
+        let tr = pr.get_track(0)?.unwrap();
         let env = tr
             .get_envelope_by_chunk(EnvelopeSelector::Chunk(
                 EnvelopeChunk::VolumePreFx,
-            ))
+            ))?
             .expect("expect envelope");
         let mut state =
-            ExtState::new("test section", "first", 45, false, &env, None);
+            ExtState::new("test section", "first", 45, false, &env, None)?;
         assert_eq!(state.get()?.expect("can not get value"), 45);
-        state.set(15);
+        state.set(15)?;
         assert_eq!(state.get()?.expect("can not get value"), 15);
-        state.delete();
+        state.delete()?;
         assert_eq!(state.get()?, None);
 
         debug!("test on int and item");
-        pr.add_track(1, "second");
-        let mut tr = pr.get_track_mut(0).unwrap();
-        let item = tr.add_item(0.0, Duration::from_secs(3));
+        pr.add_track(1, "second")?;
+        let mut tr = pr.get_track(0)?.unwrap();
+        let item = tr.add_item(0.0, Duration::from_secs(3))?;
         let mut state =
-            ExtState::new("test section", "first", 45, false, &item, None);
+            ExtState::new("test section", "first", 45, false, &item, None)?;
         assert_eq!(state.get()?.expect("can not get value"), 45);
-        state.set(15);
+        state.set(15)?;
         assert_eq!(state.get()?.expect("can not get value"), 15);
-        state.delete();
+        state.delete()?;
         assert_eq!(state.get()?, None);
 
         debug!("test on int and take");
-        pr.add_track(1, "second");
-        let mut tr = pr.get_track_mut(0).unwrap();
-        let mut item = tr.add_item(0.0, Duration::from_secs(3));
-        let take = item.add_take();
+        pr.add_track(1, "second")?;
+        let mut tr = pr.get_track(0)?.unwrap();
+        let mut item = tr.add_item(0.0, Duration::from_secs(3))?;
+        let take = item.add_take()?;
         let mut state =
-            ExtState::new("test section", "first", 45, false, &take, None);
+            ExtState::new("test section", "first", 45, false, &take, None)?;
         assert_eq!(state.get()?.expect("can not get value"), 45);
-        state.set(15);
+        state.set(15)?;
         assert_eq!(state.get()?.expect("can not get value"), 15);
-        state.delete();
+        state.delete()?;
         assert_eq!(state.get()?, None);
 
         Ok(())
@@ -593,167 +601,166 @@ fn tracks() -> TestStep {
         let rpr = Reaper::get();
         let mut pr = rpr.current_project();
         debug!("add track 'first'");
-        pr.add_track(0, "first");
-        assert!(Track::<Mutable>::from_name(&pr, "first").is_some());
-        let tr1 = pr.get_track(0).unwrap();
-        assert_eq!(tr1.name(), "first");
+        pr.add_track(0, "first")?;
+        assert!(Track::from_name(&pr, "first")?.is_some());
+        let tr1 = pr.get_track(0)?.unwrap();
+        assert_eq!(tr1.name()?, "first");
 
         debug!("add track 'second'");
-        let tr2 = pr.add_track(1, "second").index();
-        let tr2 = pr.get_track(tr2).unwrap();
-        assert_eq!(tr2.name(), "second");
-        assert_eq!(tr2.index(), 1);
-        let tr2 = tr2.get();
-        let tr2 = Track::<Mutable>::new(&mut pr, tr2);
-        assert_eq!(tr2.index(), 1);
+        let tr2 = pr.add_track(1, "second")?.index()?;
+        let tr2 = pr.get_track(tr2)?.unwrap();
+        assert_eq!(tr2.name()?, "second");
+        assert_eq!(tr2.index()?, 1);
+        let tr2 = tr2.get()?;
+        let tr2 = Track::new(&pr, tr2)?;
+        assert_eq!(tr2.index()?, 1);
 
         debug!("add track 'third'");
-        let mut tr3 = pr.add_track(2, "third");
-        assert_eq!(tr3.name(), "third");
+        let mut tr3 = pr.add_track(2, "third")?;
+        assert_eq!(tr3.name()?, "third");
         tr3.set_name("third new name")?;
 
         debug!("iter tracks mut");
-        pr.iter_tracks_mut(|mut tr| {
-            if tr.name() != "second" {
-                return Ok(());
+        for mut tr in pr.iter_tracks() {
+            if tr.name()? != "second" {
+                continue;
             }
             debug!("set track {:?} name to 'new second'", tr);
             tr.set_name("new second")?;
-            Ok(())
-        })?;
+        }
 
         debug!("try to find track with new name");
-        assert_eq!(pr.get_track(1).ok_or("no track!")?.name(), "new second");
+        assert_eq!(pr.get_track(1)?.ok_or("no track!")?.name()?, "new second");
 
         debug!("from guid");
-        let guid = pr.get_track(1).ok_or("no track!")?.guid();
-        let tr = Track::<Immutable>::from_guid(&pr, guid).expect("no track!");
-        assert_eq!(tr.index(), 1);
+        let guid = pr.get_track(1)?.ok_or("no track!")?.guid()?;
+        let tr = Track::from_guid(&pr, guid)?.ok_or("no track!")?;
+        assert_eq!(tr.index()?, 1);
 
         let pos = Position::from_quarters(4.0, &pr);
 
         debug!("audio accessor");
-        let mut tr = pr.get_track_mut(0).expect("Here should be track.");
+        let mut tr = pr.get_track(0)?.expect("Here should be track.");
         let aac = tr.add_audio_accessor()?;
-        assert_eq!(aac.end(), 0.0.into());
+        assert_eq!(aac.end()?, Position::from(0.0));
         drop(aac);
 
         debug!("FX");
         let fx = tr
-            .add_fx("ReaEQ", None, false, false)
-            .expect("Can not add FX");
-        assert!(fx.is_enabled());
+            .add_fx("ReaEQ", None, false, false)?
+            .ok_or("Can not add FX")?;
+        assert!(fx.is_enabled()?);
         drop(fx);
 
         debug!("Item");
-        let item = tr.add_item(pos, Duration::from_secs(2));
-        assert!(!item.is_selected());
+        let item = tr.add_item(pos, Duration::from_secs(2))?;
+        assert!(!item.is_selected()?);
         let item =
-            tr.add_midi_item(Position::from(2.0), Duration::from_secs(2));
-        assert!(!item.is_selected());
+            tr.add_midi_item(Position::from(2.0), Duration::from_secs(2))?;
+        assert!(!item.is_selected()?);
 
         debug!("Sends");
-        let mut send = tr.add_hardware_send();
-        assert_eq!(send.is_mute(), false);
+        let mut send = tr.add_hardware_send()?;
+        assert_eq!(send.is_mute()?, false);
         send.set_mute(true)?;
-        assert_eq!(send.is_mute(), true);
-        tr.delete();
+        assert_eq!(send.is_mute()?, true);
+        tr.delete()?;
 
-        let tr1 = pr.get_track(0).unwrap();
-        let tr2 = pr.get_track(1).unwrap();
-        let send = TrackSend::create_new(&tr1, &tr2);
-        assert_eq!(tr1, send.source_track().expect("should return track."));
-        assert_eq!(tr2, send.dest_track().expect("should return track."));
-        let mut tr2 = pr.get_track_mut(1).unwrap();
-        assert_eq!(tr2.index(), 1);
+        let tr1 = pr.get_track(0)?.unwrap();
+        let tr2 = pr.get_track(1)?.unwrap();
+        let send = TrackSend::create_new(&tr1, &tr2)?;
+        assert_eq!(tr1, send.source_track()?.expect("should return track."));
+        assert_eq!(tr2, send.dest_track()?.expect("should return track."));
+        let mut tr2 = pr.get_track(1)?.unwrap();
+        assert_eq!(tr2.index()?, 1);
 
-        assert_eq!(tr2.muted(), false);
+        assert_eq!(tr2.muted()?, false);
         tr2.set_muted(true)?;
-        assert_eq!(tr2.muted(), true);
+        assert_eq!(tr2.muted()?, true);
 
-        assert_eq!(tr2.phase_flipped(), false);
+        assert_eq!(tr2.phase_flipped()?, false);
         tr2.set_phase_flipped(true)?;
-        assert_eq!(tr2.phase_flipped(), true);
+        assert_eq!(tr2.phase_flipped()?, true);
 
-        assert_eq!(tr2.is_currently_monitored(), false);
+        assert_eq!(tr2.is_currently_monitored()?, false);
 
         debug!("test solo");
-        assert_eq!(tr2.solo(), SoloMode::NotSoloed);
+        assert_eq!(tr2.solo()?, SoloMode::NotSoloed);
         tr2.set_solo(SoloMode::Soloed)?;
-        assert_eq!(tr2.solo(), SoloMode::Soloed);
+        assert_eq!(tr2.solo()?, SoloMode::Soloed);
         tr2.set_solo(SoloMode::SoloedInPlace)?;
-        assert_eq!(tr2.solo(), SoloMode::SoloedInPlace);
+        assert_eq!(tr2.solo()?, SoloMode::SoloedInPlace);
         tr2.set_solo(SoloMode::NotSoloed)?;
 
         log::warn!("Can't test solo defeat.");
 
-        assert!(!tr2.fx_bypassed());
+        assert!(!tr2.fx_bypassed()?);
         tr2.set_fx_bypassed(true)?;
-        assert!(tr2.fx_bypassed());
+        assert!(tr2.fx_bypassed()?);
 
-        assert!(!tr2.rec_armed());
+        assert!(!tr2.rec_armed()?);
         tr2.set_rec_armed(true)?;
-        assert!(tr2.rec_armed());
+        assert!(tr2.rec_armed()?);
         tr2.set_rec_armed(false)?;
 
-        assert_eq!(tr2.rec_input(), RecInput::Mono(0, false));
+        assert_eq!(tr2.rec_input()?, RecInput::Mono(0, false));
         tr2.set_rec_input(RecInput::Stereo(2, true))?;
-        assert_eq!(tr2.rec_input(), RecInput::Stereo(2, true));
+        assert_eq!(tr2.rec_input()?, RecInput::Stereo(2, true));
 
-        assert_eq!(tr2.rec_mode(), RecMode::Input);
+        assert_eq!(tr2.rec_mode()?, RecMode::Input);
         tr2.set_rec_mode(RecMode::MidiOverdub)?;
-        assert_eq!(tr2.rec_mode(), RecMode::MidiOverdub);
+        assert_eq!(tr2.rec_mode()?, RecMode::MidiOverdub);
         // assert_eq!(tr2.rec_input(), RecordInput::MIDI(0, None)); Not equal!
 
-        assert_eq!(tr2.rec_out_mode(), RecOutMode::PostFader.into());
+        assert_eq!(tr2.rec_out_mode()?, Some(RecOutMode::PostFader));
         log::warn!("Something is wrong with RecOutMode");
         tr2.set_rec_out_mode(RecOutMode::PostFX)?;
-        assert_eq!(tr2.rec_out_mode(), RecOutMode::PostFX.into());
+        assert_eq!(tr2.rec_out_mode()?, Some(RecOutMode::PostFX));
 
-        assert_eq!(tr2.rec_monitoring(), RecMonitoring::new(1, false));
+        assert_eq!(tr2.rec_monitoring()?, RecMonitoring::new(1, false));
         tr2.set_rec_monitoring(RecMonitoring::new(2, true))?;
-        assert_eq!(tr2.rec_monitoring(), RecMonitoring::new(2, true));
+        assert_eq!(tr2.rec_monitoring()?, RecMonitoring::new(2, true));
 
         debug!("Auto Rec Arm");
         debug!("set selected to false");
         tr2.set_selected(false)?;
         debug!("set auto rec arm to true");
         tr2.set_auto_rec_arm(true)?;
-        assert!(tr2.auto_rec_arm());
-        assert!(!tr2.rec_armed());
+        assert!(tr2.auto_rec_arm()?);
+        assert!(!tr2.rec_armed()?);
 
         debug!("VUMode");
-        assert_eq!(tr2.vu_mode(), VUMode::MultichannelPeaks);
+        assert_eq!(tr2.vu_mode()?, VUMode::MultichannelPeaks);
         tr2.set_vu_mode(VUMode::LUFS_M)?;
-        assert_eq!(tr2.vu_mode(), VUMode::LUFS_M);
+        assert_eq!(tr2.vu_mode()?, VUMode::LUFS_M);
 
         debug!("n channels");
-        assert_eq!(tr2.n_channels(), 2);
+        assert_eq!(tr2.n_channels()?, 2);
         tr2.set_n_channels(6)?;
-        assert_eq!(tr2.n_channels(), 6);
+        assert_eq!(tr2.n_channels()?, 6);
         tr2.set_n_channels(3)?;
         debug!("n channels will be even");
-        assert_eq!(tr2.n_channels(), 4);
+        assert_eq!(tr2.n_channels()?, 4);
 
         debug!("set selected to true");
-        assert!(!tr2.selected());
+        assert!(!tr2.selected()?);
         tr2.set_selected(true)?;
-        assert!(tr2.selected());
+        assert!(tr2.selected()?);
 
         debug!("let's see track dimensions: {:?}", tr2.dimensions());
 
         debug!("folder");
-        let mut tr1 = pr.get_track_mut(0).unwrap();
-        assert_eq!(tr1.folder_state(), TrackFolderState::Normal);
+        let mut tr1 = pr.get_track(0)?.unwrap();
+        assert_eq!(tr1.folder_state()?, TrackFolderState::Normal);
         tr1.set_folder_state(TrackFolderState::IsFolder(1))?;
-        assert_eq!(tr1.folder_state(), TrackFolderState::IsFolder(1));
+        assert_eq!(tr1.folder_state()?, TrackFolderState::IsFolder(1));
         tr1.set_folder_state(TrackFolderState::IsFolder(2))?;
-        assert_eq!(tr1.folder_state(), TrackFolderState::IsFolder(2));
+        assert_eq!(tr1.folder_state()?, TrackFolderState::IsFolder(2));
         tr1.set_folder_state(TrackFolderState::IsFolder(0))?;
-        assert_eq!(tr1.folder_state(), TrackFolderState::IsFolder(0));
+        assert_eq!(tr1.folder_state()?, TrackFolderState::IsFolder(0));
 
-        let mut tr2 = pr.get_track_mut(1).unwrap();
-        assert_eq!(tr2.folder_state(), TrackFolderState::Normal);
+        let mut tr2 = pr.get_track(1)?.unwrap();
+        assert_eq!(tr2.folder_state()?, TrackFolderState::Normal);
 
         debug!(
             "Midi hardware was tested in a live.\
@@ -761,84 +768,84 @@ fn tracks() -> TestStep {
         );
 
         debug!("perf flags");
-        assert_eq!(tr2.performance_flags(), TrackPerformanceFlags::empty());
+        assert_eq!(tr2.performance_flags()?, TrackPerformanceFlags::empty());
         tr2.set_performance_flags(TrackPerformanceFlags::NO_BUFFERING)?;
         assert_eq!(
-            tr2.performance_flags(),
+            tr2.performance_flags()?,
             TrackPerformanceFlags::NO_BUFFERING
         );
         tr2.set_performance_flags(TrackPerformanceFlags::NO_ANTICIPATIVE_FX)?;
         assert_eq!(
-            tr2.performance_flags(),
+            tr2.performance_flags()?,
             TrackPerformanceFlags::NO_ANTICIPATIVE_FX
         );
 
         debug!("hight override");
-        assert!(tr2.height_override().is_none());
+        assert!(tr2.height_override()?.is_none());
         tr2.set_height_override(200)?;
-        assert_eq!(tr2.height_override(), Some(200));
+        assert_eq!(tr2.height_override()?, Some(200));
         tr2.set_height_lock(true)?;
-        assert!(tr2.height_lock().expect("should be true"));
+        assert!(tr2.height_lock()?.expect("should be true"));
         tr2.set_height_override(None)?;
-        assert!(tr2.height_override().is_none());
-        assert!(tr2.height_lock().is_none());
+        assert!(tr2.height_override()?.is_none());
+        assert!(tr2.height_lock()?.is_none());
 
         debug!("volume");
-        assert_eq!(tr2.volume(), Volume::from_db(0.0));
+        assert_eq!(tr2.volume()?, Volume::from_db(0.0));
         tr2.set_volume(Volume::from(0.5))?;
-        assert_eq!(tr2.volume().as_db().trunc(), -6.0);
+        assert_eq!(tr2.volume()?.as_db().trunc(), -6.0);
 
         debug!("pan");
-        assert_eq!(tr2.pan(), TrackPan::BalanceLegacy(0.0.into()));
+        assert_eq!(tr2.pan()?, TrackPan::BalanceLegacy(0.0.into()));
         let pan = TrackPan::Stereo(Pan::from(-0.5), Pan::from(-0.2));
         tr2.set_pan(pan)?;
-        assert_eq!(tr2.pan(), pan);
+        assert_eq!(tr2.pan()?, pan);
         let pan = TrackPan::Dual(Pan::from(1.0), Pan::from(-0.4));
         tr2.set_pan(pan)?;
-        assert_eq!(tr2.pan(), pan);
+        assert_eq!(tr2.pan()?, pan);
 
         debug!("pan law");
-        assert_eq!(tr2.pan_law(), PanLaw::Default);
+        assert_eq!(tr2.pan_law()?, PanLaw::Default);
         tr2.set_pan_law(PanLaw::Minus6dBCompensated)?;
-        assert_eq!(tr2.pan_law(), PanLaw::Minus6dBCompensated);
+        assert_eq!(tr2.pan_law()?, PanLaw::Minus6dBCompensated);
 
-        assert!(tr2.visible_in_mcp());
-        assert!(tr2.visible_in_tcp());
+        assert!(tr2.visible_in_mcp()?);
+        assert!(tr2.visible_in_tcp()?);
         tr2.set_visible_in_mcp(false)?;
         tr2.set_visible_in_tcp(false)?;
-        assert!(!tr2.visible_in_mcp());
-        assert!(!tr2.visible_in_tcp());
+        assert!(!tr2.visible_in_mcp()?);
+        assert!(!tr2.visible_in_tcp()?);
         tr2.set_visible_in_mcp(true)?;
         tr2.set_visible_in_tcp(true)?;
-        assert!(tr2.visible_in_mcp());
-        assert!(tr2.visible_in_tcp());
+        assert!(tr2.visible_in_mcp()?);
+        assert!(tr2.visible_in_tcp()?);
 
         debug!("parent send");
-        assert_eq!(tr2.parent_send(), Some(0));
+        assert_eq!(tr2.parent_send()?, Some(0));
         let psend = 2;
         tr2.set_parent_send(psend)?;
-        assert_eq!(tr2.parent_send(), psend.into());
+        assert_eq!(tr2.parent_send()?, psend.into());
         let psend = 0;
         tr2.set_parent_send(psend)?;
-        assert_eq!(tr2.parent_send(), psend.into());
+        assert_eq!(tr2.parent_send()?, psend.into());
         tr2.set_parent_send(None)?;
-        assert!(tr2.parent_send().is_none());
+        assert!(tr2.parent_send()?.is_none());
 
         debug!("free positioning");
-        assert_eq!(tr2.free_item_positioning(), false);
+        assert_eq!(tr2.free_item_positioning()?, false);
         tr2.set_free_item_positioning(true, true)?;
-        assert_eq!(tr2.free_item_positioning(), true);
+        assert_eq!(tr2.free_item_positioning()?, true);
         tr2.set_free_item_positioning(false, true)?;
-        assert_eq!(tr2.free_item_positioning(), false);
+        assert_eq!(tr2.free_item_positioning()?, false);
 
         debug!("beat attach mode");
-        assert_eq!(tr2.time_base(), TimeMode::Default);
+        assert_eq!(tr2.time_base()?, TimeMode::Default);
         tr2.set_time_base(TimeMode::BeatsFull)?;
-        assert_eq!(tr2.time_base(), TimeMode::BeatsFull);
+        assert_eq!(tr2.time_base()?, TimeMode::BeatsFull);
         tr2.set_time_base(TimeMode::BeatsOnlyPosition)?;
-        assert_eq!(tr2.time_base(), TimeMode::BeatsOnlyPosition);
+        assert_eq!(tr2.time_base()?, TimeMode::BeatsOnlyPosition);
         tr2.set_time_base(TimeMode::Time)?;
-        assert_eq!(tr2.time_base(), TimeMode::Time);
+        assert_eq!(tr2.time_base()?, TimeMode::Time);
 
         debug!(
             "Let's see scales: {:?}",
@@ -850,20 +857,20 @@ fn tracks() -> TestStep {
             )
         );
         tr2.set_mcp_fx_send_region_scale(0.7)?;
-        assert_float_eq!(tr2.mcp_fx_send_region_scale(), 0.7, r2nd <= 0.01);
+        assert_float_eq!(tr2.mcp_fx_send_region_scale()?, 0.7, r2nd <= 0.01);
 
         debug!("play offset");
-        assert_eq!(tr2.play_offset(), None);
+        assert_eq!(tr2.play_offset()?, None);
         tr2.set_play_offset(Some(TrackPlayOffset::Samples(-300)))?;
-        assert_eq!(tr2.play_offset(), Some(TrackPlayOffset::Samples(-300)));
+        assert_eq!(tr2.play_offset()?, Some(TrackPlayOffset::Samples(-300)));
         tr2.set_play_offset(Some(TrackPlayOffset::Seconds(-0.4)))?;
-        assert_eq!(tr2.play_offset(), Some(TrackPlayOffset::Seconds(-0.4)));
+        assert_eq!(tr2.play_offset()?, Some(TrackPlayOffset::Seconds(-0.4)));
 
-        let mut tr = tr2.get_parent_track().expect("Should be folder track");
-        assert_eq!(tr.index(), 0);
+        let mut tr = tr2.get_parent_track()?.expect("Should be folder track");
+        assert_eq!(tr.index()?, 0);
 
         let (mut low_u32, mut high_u32) =
-            tr.group_membership(TrackGroupParam::MuteLead);
+            tr.group_membership(TrackGroupParam::MuteLead)?;
         let (low, high) = (
             low_u32.view_bits_mut::<Lsb0>(),
             high_u32.view_bits_mut::<Lsb0>(),
@@ -877,9 +884,9 @@ fn tracks() -> TestStep {
             high.load(),
             None,
             None,
-        );
+        )?;
         let (low_u32, high_u32) =
-            tr.group_membership(TrackGroupParam::MuteLead);
+            tr.group_membership(TrackGroupParam::MuteLead)?;
         debug!("{:#b}, {:#b}", low_u32, high_u32);
         assert!(low_u32 & 0b1000 > 0);
         assert!(low_u32 & 0b100000 > 0);
@@ -909,37 +916,37 @@ fn tracks() -> TestStep {
         rpr.update_arrange();
         rpr.update_timeline();
         debug!("get razor edit");
-        assert_eq!(tr.razor_edits(), edits_bkp);
+        assert_eq!(tr.razor_edits()?, edits_bkp);
 
         debug!("icon");
-        assert_eq!(tr.icon(), None);
+        assert_eq!(tr.icon()?, None);
         let path = PathBuf::from("track_icon.png").canonicalize()?;
         debug!("path {:?}", path);
         tr.set_icon(path.clone())?;
-        assert_eq!(tr.icon(), Some(path));
+        assert_eq!(tr.icon()?, Some(path));
 
         debug!("layouts");
-        assert_eq!(tr.mcp_layout(), None);
+        assert_eq!(tr.mcp_layout()?, None);
         tr.set_mcp_layout("B")?;
-        assert_eq!(tr.mcp_layout().unwrap(), "B");
+        assert_eq!(tr.mcp_layout()?.unwrap(), "B");
 
-        assert_eq!(tr.tcp_layout(), None);
+        assert_eq!(tr.tcp_layout()?, None);
         tr.set_tcp_layout("B")?;
-        assert_eq!(tr.tcp_layout().unwrap(), "B");
+        assert_eq!(tr.tcp_layout()?.unwrap(), "B");
 
         debug!("GUID");
         let old_guid = tr.guid();
         debug!("old_guid: {:?}", old_guid);
         let new_guid = GUID::new();
-        tr.set_guid(new_guid);
-        assert_eq!(tr.guid(), new_guid);
+        tr.set_guid(new_guid)?;
+        assert_eq!(tr.guid()?, new_guid);
 
         debug!("get item");
-        tr.add_item(0.0, Duration::from_secs_f64(3.2));
-        let item = tr.get_item(0).expect("Can not get item");
-        assert_eq!(item.position(), Position::from(0.0));
-        assert_eq!(item.length(), Duration::from_secs_f64(3.2));
-        assert_eq!(tr.n_items(), 1);
+        tr.add_item(0.0, Duration::from_secs_f64(3.2))?;
+        let item = tr.get_item(0)?.expect("Can not get item");
+        assert_eq!(item.position()?, Position::from(0.0));
+        assert_eq!(item.length()?, Duration::from_secs_f64(3.2));
+        assert_eq!(tr.n_items()?, 1);
 
         debug!("note names");
 
@@ -948,32 +955,32 @@ fn tracks() -> TestStep {
         tr.set_note_name(2, 129, "My favorite CC!")?;
 
         debug!("Get note names");
-        assert_eq!(tr.note_name(0, 60).unwrap(), "C3");
-        assert_eq!(tr.note_name(5, 60).unwrap(), "C3 ch5");
-        assert_eq!(tr.note_name(2, 129).unwrap(), "My favorite CC!");
-        assert_eq!(tr.note_name(1, 60), None);
-        assert_eq!(tr.note_name(0, 129), None);
-        assert_eq!(tr.note_name(0, 128), None);
+        assert_eq!(tr.note_name(0, 60)?.unwrap(), "C3");
+        assert_eq!(tr.note_name(5, 60)?.unwrap(), "C3 ch5");
+        assert_eq!(tr.note_name(2, 129)?.unwrap(), "My favorite CC!");
+        assert_eq!(tr.note_name(1, 60)?, None);
+        assert_eq!(tr.note_name(0, 129)?, None);
+        assert_eq!(tr.note_name(0, 128)?, None);
 
         debug!("chunk");
         let chunk = tr.chunk()?;
-        let mut tr = pr.add_track(1, "test chunk");
+        let mut tr = pr.add_track(1, "test chunk")?;
         tr.set_chunk(chunk, true)?;
-        assert_eq!(tr.note_name(0, 60).unwrap(), "C3");
-        assert_eq!(tr.n_items(), 1);
+        assert_eq!(tr.note_name(0, 60)?.unwrap(), "C3");
+        assert_eq!(tr.n_items()?, 1);
 
         debug!("midi hash");
-        assert!(tr.midi_hash(false).is_none());
+        assert!(tr.midi_hash(false)?.is_none());
 
         debug!("peak");
-        assert_eq!(tr.peak(0), Volume::from(0.0));
+        assert_eq!(tr.peak(0)?, Volume::from(0.0));
 
         debug!("envelope by chunk");
         let env = tr.get_envelope_by_chunk(EnvelopeSelector::Chunk(
             EnvelopeChunk::Mute,
-        ));
+        ))?;
         assert!(env.is_some());
-        let name = env.unwrap().name();
+        let name = env.unwrap().name()?;
         debug!("envelope by name: {}", name);
         warn!("Somehow, can't get envelope by name. Probably, needed to be armed");
 
@@ -986,93 +993,93 @@ fn sends() -> TestStep {
         let rpr = Reaper::get();
         // rpr.perform_action(40886, 0, None);
         let mut pr = rpr.current_project();
-        for idx in pr.n_tracks()..1 {
-            let tr = pr.get_track_mut(idx - 1);
+        for idx in (1..pr.n_tracks()?).rev() {
+            let tr = pr.get_track(idx)?;
             match tr {
                 None => continue,
-                Some(tr) => tr.delete(),
+                Some(tr) => tr.delete()?,
             };
         }
-        pr.add_track(0, "first");
-        pr.add_track(1, "second");
-        let tr1 = pr.get_track(0).unwrap();
-        let tr2 = pr.get_track(1).unwrap();
-        let mut send = TrackSend::create_new(&tr1, &tr2);
-        assert_eq!(tr1, send.source_track().expect("should return track."));
-        assert_eq!(tr2, send.dest_track().expect("should return track."));
+        pr.add_track(0, "first")?;
+        pr.add_track(1, "second")?;
+        let tr1 = pr.get_track(0)?.unwrap();
+        let tr2 = pr.get_track(1)?.unwrap();
+        let mut send = TrackSend::create_new(&tr1, &tr2)?;
+        assert_eq!(tr1, send.source_track()?.expect("should return track."));
+        assert_eq!(tr2, send.dest_track()?.expect("should return track."));
 
-        assert_eq!(send.automation_mode(), AutomationMode::None);
+        assert_eq!(send.automation_mode()?, AutomationMode::None);
         send.set_automation_mode(AutomationMode::Touch)?;
-        assert_eq!(send.automation_mode(), AutomationMode::Touch);
+        assert_eq!(send.automation_mode()?, AutomationMode::Touch);
 
-        assert_eq!(send.is_mute(), false);
+        assert_eq!(send.is_mute()?, false);
         send.set_mute(true)?;
-        assert_eq!(send.is_mute(), true);
+        assert_eq!(send.is_mute()?, true);
         send.set_mute(false)?;
 
-        assert_eq!(send.is_mono(), false);
+        assert_eq!(send.is_mono()?, false);
         send.set_mono(true)?;
-        assert_eq!(send.is_mono(), true);
+        assert_eq!(send.is_mono()?, true);
         send.set_mono(false)?;
 
-        assert_eq!(send.phase_flipped(), false);
+        assert_eq!(send.phase_flipped()?, false);
         send.set_phase(true)?;
-        assert_eq!(send.phase_flipped(), true);
+        assert_eq!(send.phase_flipped()?, true);
 
-        assert_eq!(send.volume(), Volume::from(1.0));
+        assert_eq!(send.volume()?, Volume::from(1.0));
         send.set_volume(Volume::from_db(-20.0))?;
-        assert_eq!(0.1, send.volume().get());
+        assert_eq!(0.1, send.volume()?.get());
 
-        assert_eq!(send.pan(), Pan::from(0.0));
+        assert_eq!(send.pan()?, Pan::from(0.0));
         send.set_pan(-0.5)?;
-        assert_eq!(send.pan().get(), -0.5);
+        assert_eq!(send.pan()?.get(), -0.5);
 
-        assert_eq!(send.pan_law(), PanLaw::Default);
+        assert_eq!(send.pan_law()?, PanLaw::Default);
         send.set_pan_law(PanLaw::Minus6dBCompensated)?;
-        assert_eq!(send.pan_law(), PanLaw::Minus6dBCompensated);
+        assert_eq!(send.pan_law()?, PanLaw::Minus6dBCompensated);
 
-        assert_eq!(send.send_mode(), SendMode::PostFader);
+        assert_eq!(send.send_mode()?, SendMode::PostFader);
         send.set_send_mode(SendMode::PostFx)?;
-        assert_eq!(send.send_mode(), SendMode::PostFx);
+        assert_eq!(send.send_mode()?, SendMode::PostFx);
         send.set_send_mode(SendMode::PreFx)?;
-        assert_eq!(send.send_mode(), SendMode::PreFx);
+        assert_eq!(send.send_mode()?, SendMode::PreFx);
 
         let ch = SendSourceChannels::new(2, true);
         assert_eq!(
-            send.source_channels(),
+            send.source_channels()?,
             SendSourceChannels::new(0, false).into()
         );
         send.set_source_channels(ch.into())?;
-        assert_eq!(send.source_channels(), ch.into());
+        assert_eq!(send.source_channels()?, ch.into());
         send.set_source_channels(None)?;
-        assert_eq!(send.source_channels(), None);
+        assert_eq!(send.source_channels()?, None);
         send.set_source_channels(ch.into())?;
 
         assert_eq!(
-            send.dest_channels(),
+            send.dest_channels()?,
             SendDestChannels::new(0, false, false).into()
         );
         send.set_dest_channels(ch.into())?;
-        assert_eq!(send.dest_channels(), SendDestChannels::from(ch).into());
+        assert_eq!(send.dest_channels()?, SendDestChannels::from(ch).into());
 
         let properties = SendMIDIProps::new(2, 5, 16, 16);
         assert_eq!(
-            send.midi_properties(),
+            send.midi_properties()?,
             SendMIDIProps::new(0, 0, 0, 0).into()
         );
         send.set_midi_properties(properties)?;
-        assert_eq!(send.midi_properties(), properties.into());
+        assert_eq!(send.midi_properties()?, properties.into());
         send.set_midi_properties(None)?;
-        assert_eq!(send.midi_properties(), None);
+        assert_eq!(send.midi_properties()?, None);
 
-        send.get_envelope(EnvelopeChunk::Pan);
-        assert_eq!(tr1.n_sends(), 1);
-        assert_eq!(tr2.n_receives(), 1);
+        let _ = send.get_envelope(EnvelopeChunk::Pan)?;
+        assert_eq!(tr1.n_sends()?, 1);
+        assert_eq!(tr2.n_receives()?, 1);
 
         send.delete()?;
 
-        assert_eq!(tr1.n_sends(), 0);
-        assert_eq!(tr2.n_receives(), 0);
+        assert_eq!(tr1.n_sends()?, 0);
+        assert_eq!(tr2.n_receives()?, 0);
 
         Ok(())
     })
@@ -1083,25 +1090,25 @@ fn envelopes() -> TestStep {
         let rpr = Reaper::get();
         // rpr.perform_action(40886, 0, None);
         let mut pr = rpr.current_project();
-        for idx in pr.n_tracks()..1 {
+        for idx in (1..pr.n_tracks()?).rev() {
             if idx == 0 {
                 break;
             }
-            let tr = pr.get_track_mut(idx - 1);
+            let tr = pr.get_track(idx)?;
             match tr {
                 None => continue,
-                Some(tr) => tr.delete(),
+                Some(tr) => tr.delete()?,
             };
         }
-        let mut tr = pr.add_track(0, "first");
+        let tr = pr.add_track(0, "first")?;
 
         let mut env = tr
             .get_envelope_by_chunk(EnvelopeSelector::Chunk(
                 EnvelopeChunk::Volume,
-            ))
+            ))?
             .expect("no envelope");
-        assert_eq!(env.name(), "Volume");
-        let guid = env.guid();
+        assert_eq!(env.name()?, "Volume");
+        let guid = env.guid()?;
         debug!("guid is: {:?}", guid);
         // let mut env = tr
         //     .get_envelope_by_chunk(EnvelopeSelector::Guid(guid))
@@ -1120,7 +1127,7 @@ fn envelopes() -> TestStep {
                 false,
             )?;
         }
-        env.sort_points();
+        env.sort_points()?;
         assert_float_eq!(
             env.get_point(0).expect("no point").value,
             0.1,
@@ -1166,7 +1173,7 @@ fn envelopes() -> TestStep {
         point.shape = EnvelopePointShape::Linear;
         point.value = 0.4;
         env.set_point(1, Some(1.4.into()), point, true)?;
-        assert_eq!(env.n_points(), 4);
+        assert_eq!(env.n_points()?, 4);
 
         assert_float_eq!(
             env.get_point_by_time(1.2).unwrap().value,
@@ -1179,7 +1186,7 @@ fn envelopes() -> TestStep {
             r2nd <= 0.01
         );
 
-        let result = env.evaluate(1.31.into(), 44100, 512);
+        let result = env.evaluate(1.31.into(), 44100, 512)?;
         assert_float_eq!(result.value, 0.3, r2nd <= 0.05);
         assert_float_eq!(result.first_derivative, 0.01, r2nd <= 0.5);
         assert_float_eq!(result.second_derivative, 0.0, r2nd <= 0.5);
@@ -1200,7 +1207,7 @@ fn envelopes() -> TestStep {
             r2nd <= 0.01
         );
 
-        let result = env.evaluate(1.31.into(), 44100, 512);
+        let result = env.evaluate(1.31.into(), 44100, 512)?;
         assert_float_eq!(result.value, 0.2, r2nd <= 0.05);
         assert_float_eq!(result.first_derivative, 0.0, r2nd <= 0.5);
         assert_float_eq!(result.second_derivative, 0.0, r2nd <= 0.5);
@@ -1212,100 +1219,86 @@ fn envelopes() -> TestStep {
         assert_eq!(result.valid_for, 0);
 
         debug!("send info");
-        assert!(env.send_info().is_none());
+        assert!(env.send_info()?.is_none());
 
         let mut pr = rpr.current_project();
-        pr.add_track(1, "second");
-        let tr1 = pr.get_track(0).unwrap();
-        let tr2 = pr.get_track(1).unwrap();
-        let send = TrackSend::create_new(&tr1, &tr2);
+        pr.add_track(1, "second")?;
+        let tr1 = pr.get_track(0)?.unwrap();
+        let tr2 = pr.get_track(1)?.unwrap();
+        let send = TrackSend::create_new(&tr1, &tr2)?;
         let env = send
-            .get_envelope(EnvelopeSelector::Chunk(EnvelopeChunk::VolumePreFx))
+            .get_envelope(EnvelopeSelector::Chunk(EnvelopeChunk::VolumePreFx))?
             .unwrap();
-        assert_eq!(env.send_info().unwrap(), EnvelopeSendInfo::TrackSend(0));
+        assert_eq!(env.send_info()?.unwrap(), EnvelopeSendInfo::TrackSend(0));
 
-        assert_eq!(env.tcp_y_offset(), 0);
-        assert_eq!(env.tcp_height(), 0);
+        assert_eq!(env.tcp_y_offset()?, 0);
+        assert_eq!(env.tcp_height()?, 0);
 
         debug!("automation item");
         let mut env = tr
             .get_envelope_by_chunk(EnvelopeSelector::Chunk(
                 EnvelopeChunk::Volume,
-            ))
+            ))?
             .expect("no envelope");
         let mut itm = env.add_automation_item(
             0,
             0.0.into(),
             Duration::from_secs_f64(1.6),
-        );
-        assert_eq!(itm.n_points(true), 5);
+        )?;
+        assert_eq!(itm.n_points(true)?, 5);
+        assert_float_eq!(itm.get_point(true, 0)?.value, 0.2, r2nd <= 0.5);
         assert_float_eq!(
-            itm.get_point(true, 0).unwrap().value,
-            0.2,
-            r2nd <= 0.5
-        );
-        assert_float_eq!(
-            itm.get_point_by_time(true, Position::from(1.5))
-                .unwrap()
-                .value,
+            itm.get_point_by_time(true, Position::from(1.5))?.value,
             1.2,
             r2nd <= 0.5
         );
-        itm.set_position(1.0.into());
-        assert_eq!(itm.position(), Position::from(1.0));
+        itm.set_position(1.0.into())?;
+        assert_eq!(itm.position()?, Position::from(1.0));
         assert_float_eq!(
-            itm.get_point_by_time(true, Position::from(1.6))
-                .unwrap()
-                .value,
+            itm.get_point_by_time(true, Position::from(1.6))?.value,
             0.2,
             r2nd <= 0.5
         );
-        itm.set_play_rate(2.0);
-        assert_eq!(itm.play_rate(), 2.0);
+        itm.set_play_rate(2.0)?;
+        assert_eq!(itm.play_rate()?, 2.0);
         assert_float_eq!(
-            itm.get_point_by_time(true, Position::from(1.77))
-                .unwrap()
-                .value,
+            itm.get_point_by_time(true, Position::from(1.77))?.value,
             1.2,
             r2nd <= 0.5
         );
 
-        itm.set_base_line(0.5);
-        assert_float_eq!(itm.base_line(), 0.5, abs <= 0.1);
+        itm.set_base_line(0.5)?;
+        assert_float_eq!(itm.base_line()?, 0.5, abs <= 0.1);
         warn!("base line seems to work from API. But it is not set in interface,\
             and didn't affected to points.");
-        itm.set_amplitude(0.5);
-        assert_float_eq!(itm.base_line(), 0.5, abs <= 0.1);
+        itm.set_amplitude(0.5)?;
+        assert_float_eq!(itm.base_line()?, 0.5, abs <= 0.1);
         assert_float_eq!(
-            itm.get_point_by_time(true, Position::from(1.77))
-                .unwrap()
-                .value,
+            itm.get_point_by_time(true, Position::from(1.77))?.value,
             0.7,
             r2nd <= 0.5
         );
-        itm.set_play_rate(1.0);
-        itm.set_start_offset(Duration::from_secs_f64(0.5));
-        assert_float_eq!(itm.start_offset().as_secs_f64(), 0.5, abs <= 0.001);
+        itm.set_play_rate(1.0)?;
+        itm.set_start_offset(Duration::from_secs_f64(0.5))?;
+        assert_float_eq!(itm.start_offset()?.as_secs_f64(), 0.5, abs <= 0.001);
         assert_float_eq!(
-            itm.get_point_by_time(true, Position::from(2.0))
-                .unwrap()
-                .value,
+            itm.get_point_by_time(true, Position::from(2.0))?.value,
             0.7,
             r2nd <= 0.5
         );
-        assert!(itm.is_looped());
-        itm.set_looped(false);
-        assert!(!itm.is_looped());
-        assert!(itm.is_selected());
-        itm.set_selected(false);
-        assert!(!itm.is_selected());
+        assert!(itm.is_looped()?);
+        itm.set_looped(false)?;
+        assert!(!itm.is_looped()?);
+        assert!(itm.is_selected()?);
+        itm.set_selected(false)?;
+        assert!(!itm.is_selected()?);
 
         let env = tr
             .get_envelope_by_chunk(EnvelopeSelector::Chunk(
                 EnvelopeChunk::Volume,
-            ))
+            ))?
             .expect("no envelope");
-        assert_eq!(env.n_points(), 2);
+        assert_eq!(env.n_points()?, 2);
 
         Ok(())
     })
@@ -1315,78 +1308,81 @@ fn items() -> TestStep {
         let rpr = Reaper::get();
         // rpr.perform_action(40886, 0, None);
         let mut pr = rpr.current_project();
-        for idx in pr.n_tracks()..1 {
+        for idx in (1..pr.n_tracks()?).rev() {
             if idx == 0 {
                 break;
             }
-            let tr = pr.get_track_mut(idx - 1);
+            let tr = pr.get_track(idx)?;
             match tr {
                 None => continue,
-                Some(tr) => tr.delete(),
+                Some(tr) => tr.delete()?,
             };
         }
-        pr.add_track(0, "second");
-        let mut tr = pr.add_track(0, "first");
-        let mut item = tr.add_item(0.5, Duration::from_secs(3));
-        item.add_take();
-        assert_eq!(item.get_take(0).unwrap().get(), item.active_take().get());
+        pr.add_track(0, "second")?;
+        let mut tr = pr.add_track(0, "first")?;
+        let mut item = tr.add_item(0.5, Duration::from_secs(3))?;
+        item.add_take()?;
+        assert_eq!(
+            item.get_take(0)?.unwrap().get()?,
+            item.active_take()?.get()?
+        );
 
-        assert!(!item.is_selected());
-        item.set_selected(true);
-        assert!(item.is_selected());
+        assert!(!item.is_selected()?);
+        item.set_selected(true)?;
+        assert!(item.is_selected()?);
 
-        assert_eq!(item.position(), Position::from(0.5));
-        item.set_position(Position::from(2.0));
-        assert_eq!(item.position(), Position::from(2.0));
+        assert_eq!(item.position()?, Position::from(0.5));
+        item.set_position(Position::from(2.0))?;
+        assert_eq!(item.position()?, Position::from(2.0));
 
-        assert_eq!(item.length(), Duration::from_secs(3));
-        item.set_length(Duration::from_secs(1));
-        assert_eq!(item.length(), Duration::from_secs(1));
-        assert_eq!(item.end_position(), Position::from(3.0));
-        item.set_end_position(Position::from(4.0));
-        assert_eq!(item.length(), Duration::from_secs(2));
+        assert_eq!(item.length()?, Duration::from_secs(3));
+        item.set_length(Duration::from_secs(1))?;
+        assert_eq!(item.length()?, Duration::from_secs(1));
+        assert_eq!(item.end_position()?, Position::from(3.0));
+        item.set_end_position(Position::from(4.0))?;
+        assert_eq!(item.length()?, Duration::from_secs(2));
 
-        assert!(!item.is_muted());
-        item.set_muted(true);
-        assert!(item.is_muted());
-        item.set_muted(false);
+        assert!(!item.is_muted()?);
+        item.set_muted(true)?;
+        assert!(item.is_muted()?);
+        item.set_muted(false)?;
 
-        assert!(!item.mute_actual());
-        item.set_mute_actual(true);
-        assert!(item.mute_actual());
-        item.set_mute_actual(false);
+        assert!(!item.mute_actual()?);
+        item.set_mute_actual(true)?;
+        assert!(item.mute_actual()?);
+        item.set_mute_actual(false)?;
 
-        assert!(item.is_looped());
-        item.set_looped(false);
-        assert!(!item.is_looped());
+        assert!(item.is_looped()?);
+        item.set_looped(false)?;
+        assert!(!item.is_looped()?);
 
-        assert!(!item.all_takes_play());
-        item.set_all_takes_play(true);
-        assert!(item.all_takes_play());
+        assert!(!item.all_takes_play()?);
+        item.set_all_takes_play(true)?;
+        assert!(item.all_takes_play()?);
 
-        assert_eq!(item.time_base(), TimeMode::Default);
-        assert!(!item.auto_stretch());
-        item.set_time_base(TimeMode::BeatsFull);
-        assert_eq!(item.time_base(), TimeMode::BeatsFull);
-        assert!(!item.auto_stretch());
-        item.set_auto_stretch(true);
-        assert!(item.auto_stretch());
+        assert_eq!(item.time_base()?, TimeMode::Default);
+        assert!(!item.auto_stretch()?);
+        item.set_time_base(TimeMode::BeatsFull)?;
+        assert_eq!(item.time_base()?, TimeMode::BeatsFull);
+        assert!(!item.auto_stretch()?);
+        item.set_auto_stretch(true)?;
+        assert!(item.auto_stretch()?);
 
-        assert!(!item.locked());
-        item.set_locked(true);
-        assert!(item.locked());
-        item.set_locked(false);
-        assert!(!item.locked());
+        assert!(!item.locked()?);
+        item.set_locked(true)?;
+        assert!(item.locked()?);
+        item.set_locked(false)?;
+        assert!(!item.locked()?);
 
-        assert_eq!(item.volume(), Volume::from(1.0));
-        item.set_volume(Volume::from(0.5));
-        assert_eq!(item.volume(), Volume::from(0.5));
+        assert_eq!(item.volume()?, Volume::from(1.0));
+        item.set_volume(Volume::from(0.5))?;
+        assert_eq!(item.volume()?, Volume::from(0.5));
 
-        assert_eq!(item.snap_offset().as_millis(), 0);
+        assert_eq!(item.snap_offset()?.as_millis(), 0);
         item.set_snap_offset(Duration::from_secs_f64(0.5))?;
-        assert_float_eq!(item.snap_offset().as_secs_f64(), 0.5, r2nd <= 0.5);
+        assert_float_eq!(item.snap_offset()?.as_secs_f64(), 0.5, r2nd <= 0.5);
 
-        assert_eq!(item.fade_in().length.as_millis(), 10);
+        assert_eq!(item.fade_in()?.length.as_millis(), 10);
         let mut fade_in = ItemFade::new(
             Duration::from_millis(500),
             0.0,
@@ -1394,30 +1390,30 @@ fn items() -> TestStep {
             false,
         );
         item.set_fade_in(fade_in)?;
-        assert_eq!(item.fade_in(), fade_in);
+        assert_eq!(item.fade_in()?, fade_in);
         fade_in.curve = 1.0;
         fade_in.shape = rea_rs::ItemFadeShape::FastEnd;
         item.set_fade_out(fade_in)?;
-        assert_eq!(item.fade_out(), fade_in);
+        assert_eq!(item.fade_out()?, fade_in);
         warn!(
             "Here could be more precise fade test, \
             included two items, where curve will matter."
         );
 
-        assert_eq!(item.group_id(), 0);
+        assert_eq!(item.group_id()?, 0);
         item.set_group_id(1)?;
-        assert_eq!(item.group_id(), 1);
+        assert_eq!(item.group_id()?, 1);
 
-        assert_eq!(item.y_pos_relative(), 0);
-        debug!("Let's print item height in pixels: {}", item.height());
-        assert_eq!(item.y_pos_free_mode(), 0.0);
+        assert_eq!(item.y_pos_relative()?, 0);
+        debug!("Let's print item height in pixels: {:?}", item.height()?);
+        assert_eq!(item.y_pos_free_mode()?, 0.0);
         item.set_y_pos_free_mode(0.4)?;
         tr.set_free_item_positioning(true, true)?;
-        let mut item = tr.get_item(0).unwrap();
-        assert_float_eq!(item.y_pos_free_mode(), 0.4, r2nd <= 0.5);
-        assert_float_eq!(item.height_free_mode(), 0.6, r2nd <= 0.5);
-        item.set_height_free_mode(0.2);
-        assert_float_eq!(item.height_free_mode(), 0.2, r2nd <= 0.5);
+        let mut item = tr.get_item(0)?.unwrap();
+        assert_float_eq!(item.y_pos_free_mode()?, 0.4, r2nd <= 0.5);
+        assert_float_eq!(item.height_free_mode()?, 0.6, r2nd <= 0.5);
+        item.set_height_free_mode(0.2)?;
+        assert_float_eq!(item.height_free_mode()?, 0.2, r2nd <= 0.5);
 
         assert_eq!(item.notes(50)?, "");
         item.set_notes("My text for my item!")?;
@@ -1425,24 +1421,24 @@ fn items() -> TestStep {
 
         let guid = GUID::new();
         item.set_guid(guid)?;
-        assert_eq!(item.guid(), guid);
+        assert_eq!(item.guid()?, guid);
 
-        assert!(item.color().is_none());
-        item.set_color(Some(Color::new(0, 0, 0)));
-        assert_eq!(item.color(), Some(Color::new(0, 0, 0)));
-        item.set_color(None);
-        assert!(item.color().is_none());
+        assert!(item.color()?.is_none());
+        item.set_color(Some(Color::new(0, 0, 0)))?;
+        assert_eq!(item.color()?, Some(Color::new(0, 0, 0)));
+        item.set_color(None)?;
+        assert!(item.color()?.is_none());
         let color = Color::new(255, 60, 100);
-        item.set_color(Some(color));
-        assert_eq!(item.color(), Some(color));
+        item.set_color(Some(color))?;
+        assert_eq!(item.color()?, Some(color));
 
         item.move_to_track(1)?;
         let (left, right) = item.split(3.0)?.get();
-        assert_eq!(left.end_position(), Position::from(3.0));
-        assert_eq!(right.position(), Position::from(3.0));
-        assert_eq!(left.track().n_items(), 2);
-        left.delete();
-        assert_eq!(right.track().n_items(), 1);
+        assert_eq!(left.end_position()?, Position::from(3.0));
+        assert_eq!(right.position()?, Position::from(3.0));
+        assert_eq!(left.track()?.n_items()?, 2);
+        left.delete()?;
+        assert_eq!(right.track()?.n_items()?, 1);
 
         Ok(())
     })
@@ -1452,90 +1448,90 @@ fn takes() -> TestStep {
         let rpr = Reaper::get();
         // rpr.perform_action(40886, 0, None);
         let mut pr = rpr.current_project();
-        for idx in pr.n_tracks()..1 {
+        for idx in (1..pr.n_tracks()?).rev() {
             if idx == 0 {
                 break;
             }
-            let tr = pr.get_track_mut(idx - 1);
+            let tr = pr.get_track(idx)?;
             match tr {
                 None => continue,
-                Some(tr) => tr.delete(),
+                Some(tr) => tr.delete()?,
             };
         }
-        pr.add_track(0, "second");
-        let mut tr = pr.add_track(0, "first");
-        let mut item = tr.add_item(0.5, Duration::from_secs(3));
-        let mut take = item.add_take();
+        pr.add_track(0, "second")?;
+        let mut tr = pr.add_track(0, "first")?;
+        let mut item = tr.add_item(0.5, Duration::from_secs(3))?;
+        let mut take = item.add_take()?;
 
-        assert_eq!(take.name(), "");
+        assert_eq!(take.name()?, "");
         take.set_name("my funny name");
-        assert_eq!(take.name(), "my funny name");
+        assert_eq!(take.name()?, "my funny name");
 
         let guid = GUID::new();
         take.set_guid(guid);
-        assert_eq!(take.guid(), guid);
+        assert_eq!(take.guid()?, guid);
 
-        assert_eq!(take.start_offset(), SourceOffset::from_secs_f64(0.0));
+        assert_eq!(take.start_offset()?, SourceOffset::from_secs_f64(0.0));
         take.set_start_offset(SourceOffset::from_secs_f64(2.0))?;
-        assert_eq!(take.start_offset(), SourceOffset::from_secs_f64(2.0));
+        assert_eq!(take.start_offset()?, SourceOffset::from_secs_f64(2.0));
 
-        assert_eq!(take.volume(), Volume::from_db(0.0));
+        assert_eq!(take.volume()?, Volume::from_db(0.0));
         take.set_volume(Volume::from_db(25.0));
-        assert_eq!(take.volume(), Volume::from_db(25.0));
+        assert_eq!(take.volume()?, Volume::from_db(25.0));
 
-        assert_eq!(take.pan(), Pan::from(0.0));
+        assert_eq!(take.pan()?, Pan::from(0.0));
         take.set_pan(Pan::from(1.0));
-        assert_eq!(take.pan(), Pan::from(1.0));
+        assert_eq!(take.pan()?, Pan::from(1.0));
 
-        assert_eq!(take.pan_law(), PanLaw::Default);
+        assert_eq!(take.pan_law()?, PanLaw::Default);
         take.set_pan_law(PanLaw::Minus3dBCompensated);
-        assert_eq!(take.pan_law(), PanLaw::Minus3dBCompensated);
+        assert_eq!(take.pan_law()?, PanLaw::Minus3dBCompensated);
 
-        assert_eq!(take.play_rate(), PlayRate::from(1.0));
+        assert_eq!(take.play_rate()?, PlayRate::from(1.0));
         take.set_play_rate(PlayRate::from(3.0))?;
-        assert_eq!(take.play_rate(), PlayRate::from(3.0));
+        assert_eq!(take.play_rate()?, PlayRate::from(3.0));
 
-        assert_eq!(take.pitch(), Pitch::from(0.0));
+        assert_eq!(take.pitch()?, Pitch::from(0.0));
         take.set_pitch(Pitch::from(3.0))?;
-        assert_eq!(take.pitch(), Pitch::from(3.0));
+        assert_eq!(take.pitch()?, Pitch::from(3.0));
 
-        assert!(take.preserve_pitch());
+        assert!(take.preserve_pitch()?);
         take.set_preserve_pitch(false);
-        assert!(!take.preserve_pitch());
+        assert!(!take.preserve_pitch()?);
 
-        assert_eq!(take.y_pos(), 0);
-        info!("Let's look at take height: {}", take.height());
+        assert_eq!(take.y_pos()?, 0);
+        info!("Let's look at take height: {:?}", take.height()?);
 
-        assert_eq!(take.channel_mode(), TakeChannelMode::Normal);
+        assert_eq!(take.channel_mode()?, TakeChannelMode::Normal);
         take.set_channel_mode(TakeChannelMode::Right);
-        assert_eq!(take.channel_mode(), TakeChannelMode::Right);
+        assert_eq!(take.channel_mode()?, TakeChannelMode::Right);
 
-        assert_eq!(take.pitch_mode(), None);
+        assert_eq!(take.pitch_mode()?, None);
         take.set_pitch_mode(Some(TakePitchMode::new(2, 1)));
-        assert_eq!(take.pitch_mode(), Some(TakePitchMode::new(2, 1)));
+        assert_eq!(take.pitch_mode()?, Some(TakePitchMode::new(2, 1)));
 
-        assert_eq!(take.n_stretch_markers(), 0);
-        assert_eq!(take.iter_stretch_markers().count(), 0);
+        assert_eq!(take.n_stretch_markers()?, 0);
+        assert_eq!(take.iter_stretch_markers()?.count(), 0);
 
         let marker_index =
             take.set_stretch_marker(None, Position::from(0.1), None)?;
         assert_eq!(marker_index, 0);
-        assert_eq!(take.n_stretch_markers(), 1);
-        assert_eq!(take.iter_stretch_markers().count(), 1);
+        assert_eq!(take.n_stretch_markers()?, 1);
+        assert_eq!(take.iter_stretch_markers()?.count(), 1);
 
-        let marker = take.stretch_marker(marker_index).unwrap();
+        let marker = take.stretch_marker(marker_index)?.unwrap();
         let marker_pos: f64 = marker.position.into();
         assert_float_eq!(marker_pos, 0.1, abs <= 0.000001);
 
         take.set_stretch_marker_slope(marker_index, 0.25)?;
         assert_float_eq!(
-            take.stretch_marker(marker_index).unwrap().slope,
+            take.stretch_marker(marker_index)?.unwrap().slope,
             0.25,
             abs <= 0.000001
         );
 
-        assert!(take.delete_stretch_marker(marker_index));
-        assert_eq!(take.n_stretch_markers(), 0);
+        assert!(take.delete_stretch_marker(marker_index)?);
+        assert_eq!(take.n_stretch_markers()?, 0);
 
         Ok(())
     })

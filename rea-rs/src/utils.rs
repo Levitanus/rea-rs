@@ -71,12 +71,9 @@ pub fn string_from_buf(buf: &[i8]) -> Result<String, ReaRsError> {
         ));
     }
 
-    let nul_pos = buf
-        .iter()
-        .position(|ch| *ch == 0)
-        .ok_or(ReaRsError::InvalidObject(
-            "Can not get value string terminator",
-        ))?;
+    let nul_pos = buf.iter().position(|ch| *ch == 0).ok_or(
+        ReaRsError::InvalidObject("Can not get value string terminator"),
+    )?;
     if nul_pos == buf.len() - 1 {
         return Err(ReaRsError::UnsuccessfulOperation(
             "Buffer is too small for value",
@@ -84,7 +81,9 @@ pub fn string_from_buf(buf: &[i8]) -> Result<String, ReaRsError> {
     }
 
     String::from_utf8(buf[..nul_pos].iter().map(|ch| *ch as u8).collect())
-        .map_err(|_| ReaRsError::InvalidObject("Can not decode value as UTF-8"))
+        .map_err(|_| {
+            ReaRsError::InvalidObject("Can not decode value as UTF-8")
+        })
 }
 
 /// Make empty CString pointer of the given size.
@@ -130,7 +129,7 @@ pub trait WithReaperPtr {
     /// Get underlying ReaperPointer.
     fn get_pointer(&self) -> Self::Ptr;
     /// Get underlying ReaperPointer with validity check.
-    fn get(&self) -> Result<Self::Ptr, ReaRsError>{
+    fn get(&self) -> Result<Self::Ptr, ReaRsError> {
         self.require_valid()
     }
     /// Turn validity checks off.
@@ -148,9 +147,9 @@ pub trait WithReaperPtr {
     /// [`WithReaperPtr::make_unchecked`].
     fn require_valid(&self) -> Result<Self::Ptr, ReaRsError> {
         if !self.should_check() {
-            return Ok(self.get_pointer());
+            return Ok(self.get()?);
         }
-        let ptr = self.get_pointer();
+        let ptr = self.get()?;
         match Reaper::get().validate_ptr(ptr.clone()) {
             true => Ok(ptr),
             false => Err(ReaRsError::NullPtr("reaper object").into()),
@@ -163,11 +162,14 @@ pub trait WithReaperPtr {
     ///
     /// Will not check if turned off by
     /// [`WithReaperPtr::make_unchecked`].
-    fn require_valid_2(&self, project: &Project) -> Result<Self::Ptr, ReaRsError> {
+    fn require_valid_2(
+        &self,
+        project: &Project,
+    ) -> Result<Self::Ptr, ReaRsError> {
         if !self.should_check() {
-            return Ok(self.get_pointer());
+            return Ok(self.get()?);
         }
-        let ptr = self.get_pointer();
+        let ptr = self.get()?;
         match Reaper::get().validate_ptr_2(project, ptr.clone()) {
             true => Ok(ptr),
             false => Err(ReaRsError::NullPtr("reaper object").into()),

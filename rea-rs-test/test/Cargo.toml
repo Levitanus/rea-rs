@@ -2,15 +2,15 @@
 edition = "2021"
 name = "reaper-test-extension-plugin"
 publish = false
-version = "0.1.0"
+version = "0.2.0"
 
 [dependencies]
 env_logger = "0.10"
 log = "0.4"
-rea-rs = {version = "=0.1.40", path = "../../rea-rs"}
-rea-rs-low = {version = "=0.1.40", path = "../../low"}
-rea-rs-macros = {version = "=0.1.40", path = "../../macros"}
-rea-rs-test = {version = "=0.1.40", path = "../"}
+rea-rs = {version = "=0.2.0", path = "../../rea-rs"}
+rea-rs-low = {version = "=0.2.0", path = "../../low"}
+rea-rs-macros = {version = "=0.2.0", path = "../../macros"}
+rea-rs-test = {version = "=0.2.0", path = "../"}
 
 [lib]
 crate-type = ["cdylib"]

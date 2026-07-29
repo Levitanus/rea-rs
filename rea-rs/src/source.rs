@@ -1,7 +1,8 @@
 use crate::{
-    ptr_wrappers::PcmSource, utils::string_from_buf, KnowsProject, Mutable,
-    Position, ProbablyMutable, Project, ProjectContext, Reaper, Take, Volume,
-    WithReaperPtr,
+    ptr_wrappers::{MediaItem, MediaItemTake, PcmSource, ReaProject},
+    utils::{as_c_str, string_from_buf, WithNull},
+    KnowsProject, Position, Project, ProjectContext, ReaRsError, Reaper,
+    ReaperResult, Take, Volume, WithReaperPtr,
 };
 use chrono::TimeDelta;
 use int_enum::IntEnum;
@@ -15,19 +16,24 @@ use std::{
 };
 
 #[derive(Debug, PartialEq)]
-pub struct Source<'a, T: ProbablyMutable> {
-    take: &'a Take<'a, T>,
+pub struct Source {
+    take: MediaItemTake,
+    project_ptr: Option<ReaProject>,
+    item_ptr: Option<MediaItem>,
     ptr: PcmSource,
     should_check: bool,
 }
-impl<'a, T: ProbablyMutable> WithReaperPtr for Source<'a, T> {
+impl WithReaperPtr for Source {
     type Ptr = PcmSource;
     fn get_pointer(&self) -> Self::Ptr {
         self.ptr
     }
-    fn get(&self) -> Self::Ptr {
-        self.require_valid_2(self.take.project()).unwrap();
-        self.get_pointer()
+    fn get(&self) -> Result<Self::Ptr, ReaRsError> {
+        let project = match self.project_ptr {
+            Some(ptr) => Project::new(ProjectContext::Proj(ptr)),
+            None => Project::new(ProjectContext::CurrentProject),
+        };
+        self.require_valid_2(&project)
     }
     fn make_unchecked(&mut self) {
         self.should_check = false;
@@ -39,32 +45,32 @@ impl<'a, T: ProbablyMutable> WithReaperPtr for Source<'a, T> {
         self.should_check
     }
 }
-impl<'a, T: ProbablyMutable> Source<'a, T> {
-    pub fn new(take: &'a Take<'a, T>, ptr: PcmSource) -> Self {
-        Self {
-            take,
+impl Source {
+    pub fn new(take: &Take, ptr: PcmSource) -> ReaperResult<Self> {
+        Ok(Self {
+            take: take.get()?,
+            project_ptr: Some(take.project().get()?),
+            item_ptr: Some(take.item()?.get()?),
             ptr,
             should_check: true,
-        }
+        })
     }
 
-    pub fn take(&self) -> &Take<'a, T> {
+    pub fn take(&self) -> MediaItemTake {
         self.take
     }
 
-    pub fn filename(&self) -> PathBuf {
+    pub fn filename(&self) -> ReaperResult<PathBuf> {
         let size = 500;
         let mut buf = vec![0_i8; size];
         unsafe {
             Reaper::get().low().GetMediaSourceFileName(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 buf.as_mut_ptr(),
                 size as i32,
             )
         };
-        PathBuf::from(
-            string_from_buf(&buf).expect("Can not retrieve file name"),
-        )
+        Ok(PathBuf::from(string_from_buf(&buf)?))
     }
 
     /// Get source media length.
@@ -73,79 +79,100 @@ impl<'a, T: ProbablyMutable> Source<'a, T> {
     ///
     /// Reaper can return length as quarter notes. Since, there is no very good
     /// way to determine length in qn as duration, it can fail sometimes.
-    pub fn length(&self) -> Duration {
+    pub fn length(&self) -> ReaperResult<Duration> {
         let mut is_qn = MaybeUninit::zeroed();
         let result = unsafe {
             Reaper::get()
                 .low()
-                .GetMediaSourceLength(self.get().as_ptr(), is_qn.as_mut_ptr())
+                .GetMediaSourceLength(self.get()?.as_ptr(), is_qn.as_mut_ptr())
         };
         match unsafe { is_qn.assume_init() } {
             true => {
-                let item_start = self.take().item().position();
-                let offset = self.take().start_offset();
-                let start: Position = SourceOffset::from(
-                    TimeDelta::from_std(item_start.as_duration()).unwrap()
-                        - offset.get(),
-                )
-                .into();
-                let start_in_qn = start.as_quarters(self.take().project());
+                let mut item_ptr = self.item_ptr;
+                if item_ptr.is_none() {
+                    item_ptr = MediaItem::new(unsafe {
+                        Reaper::get()
+                            .low()
+                            .GetMediaItemTake_Item(self.take().as_ptr())
+                    });
+                }
+                let item_ptr =
+                    item_ptr.ok_or(ReaRsError::NullPtr("take item"))?;
+                let mut item_pos_key = String::from("D_POSITION");
+                let item_start = unsafe {
+                    Reaper::get().low().GetMediaItemInfo_Value(
+                        item_ptr.as_ptr(),
+                        as_c_str(item_pos_key.with_null()).as_ptr(),
+                    )
+                };
+                let mut offset_key = String::from("D_STARTOFFS");
+                let start_offset = unsafe {
+                    Reaper::get().low().GetMediaItemTakeInfo_Value(
+                        self.take().as_ptr(),
+                        as_c_str(offset_key.with_null()).as_ptr(),
+                    )
+                };
+                let project = match self.project_ptr {
+                    Some(ptr) => Project::new(ProjectContext::Proj(ptr)),
+                    None => Project::new(ProjectContext::CurrentProject),
+                };
+                let start = Position::from(item_start - start_offset);
+                let start_in_qn = start.as_quarters(&project);
                 let end_in_qn = start_in_qn + result;
-                let end =
-                    Position::from_quarters(end_in_qn, self.take().project());
+                let end = Position::from_quarters(end_in_qn, &project);
                 let length = end - start;
-                length.as_duration()
+                Ok(length.as_duration())
             }
-            false => Duration::from_secs_f64(result),
+            false => Ok(Duration::from_secs_f64(result)),
         }
     }
 
-    pub fn n_channels(&self) -> usize {
-        unsafe {
+    pub fn n_channels(&self) -> ReaperResult<usize> {
+        Ok(unsafe {
             Reaper::get()
                 .low()
-                .GetMediaSourceNumChannels(self.get().as_ptr())
+                .GetMediaSourceNumChannels(self.get()?.as_ptr())
                 as usize
-        }
+        })
     }
 
-    pub fn sample_rate(&self) -> usize {
-        unsafe {
+    pub fn sample_rate(&self) -> ReaperResult<usize> {
+        Ok(unsafe {
             Reaper::get()
                 .low()
-                .GetMediaSourceSampleRate(self.get().as_ptr())
+                .GetMediaSourceSampleRate(self.get()?.as_ptr())
                 as usize
-        }
+        })
     }
 
     /// Source type ("WAV, "MIDI", etc.).
-    pub fn type_string(&self) -> String {
+    pub fn type_string(&self) -> ReaperResult<String> {
         let size = 20;
         let mut buf = vec![0_i8; size];
         unsafe {
             Reaper::get().low().GetMediaSourceType(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 buf.as_mut_ptr(),
                 size as i32,
             )
         };
-        string_from_buf(&buf).expect("Can not convert type to string")
+        Ok(string_from_buf(&buf)?)
     }
 
-    pub fn sub_project(&self) -> Option<Project> {
+    pub fn sub_project(&self) -> ReaperResult<Option<Project>> {
         let ptr = unsafe {
             Reaper::get()
                 .low()
-                .GetSubProjectFromSource(self.get().as_ptr())
+                .GetSubProjectFromSource(self.get()?.as_ptr())
         };
         match NonNull::new(ptr) {
-            None => None,
-            Some(ptr) => Project::new(ProjectContext::Proj(ptr)).into(),
+            None => Ok(None),
+            Some(ptr) => Ok(Some(Project::new(ProjectContext::Proj(ptr)))),
         }
     }
 
     /// If a section/reverse block, retrieves offset/len/reverse.
-    pub fn section_info(&self) -> Option<SourceSectionInfo> {
+    pub fn section_info(&self) -> ReaperResult<Option<SourceSectionInfo>> {
         let (mut ofst, mut len, mut rev) = (
             MaybeUninit::zeroed(),
             MaybeUninit::zeroed(),
@@ -153,19 +180,19 @@ impl<'a, T: ProbablyMutable> Source<'a, T> {
         );
         let result = unsafe {
             Reaper::get().low().PCM_Source_GetSectionInfo(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 ofst.as_mut_ptr(),
                 len.as_mut_ptr(),
                 rev.as_mut_ptr(),
             )
         };
         match result {
-            false => None,
-            true => Some(SourceSectionInfo {
+            false => Ok(None),
+            true => Ok(Some(SourceSectionInfo {
                 offset: Duration::from_secs_f64(unsafe { ofst.assume_init() }),
                 length: Duration::from_secs_f64(unsafe { len.assume_init() }),
                 reversed: unsafe { rev.assume_init() },
-            }),
+            })),
         }
     }
 
@@ -175,22 +202,23 @@ impl<'a, T: ProbablyMutable> Source<'a, T> {
         target: Volume,
         start: SourceOffset,
         end: SourceOffset,
-    ) -> Volume {
+    ) -> ReaperResult<Volume> {
         let result = unsafe {
             Reaper::get().low().CalculateNormalization(
-                self.get().as_ptr(),
+                self.get()?.as_ptr(),
                 units.int_value(),
                 target.get(),
                 start.as_secs_f64(),
                 end.as_secs_f64(),
             )
         };
-        Volume::from(result)
+        Ok(Volume::from(result))
     }
 }
-impl<'a> Source<'a, Mutable> {
-    pub fn delete(&mut self) {
-        unsafe { Reaper::get().low().PCM_Source_Destroy(self.get().as_ptr()) }
+impl Source {
+    pub fn delete(&mut self) -> ReaperResult<()> {
+        unsafe { Reaper::get().low().PCM_Source_Destroy(self.get()?.as_ptr()) }
+        Ok(())
     }
 }
 
