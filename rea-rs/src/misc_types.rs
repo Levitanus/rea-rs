@@ -1,5 +1,5 @@
 use crate::{
-    utils::{as_c_str, as_string_mut, make_c_string_buf, WithNull},
+    utils::{string_from_buf, WithNull},
     Direction, Project, ReaRsError, Reaper, ReaperResult, Take, WithReaperPtr,
 };
 use int_enum::IntEnum;
@@ -7,6 +7,7 @@ use log::debug;
 use rea_rs_low::raw;
 use serde_derive::{Deserialize, Serialize};
 use std::{
+    ffi::CString,
     mem::MaybeUninit,
     ops::{Add, Sub},
     time::Duration,
@@ -715,9 +716,13 @@ impl Into<String> for GUID {
 }
 impl ToString for GUID {
     fn to_string(&self) -> String {
-        let buf = make_c_string_buf(50).into_raw();
-        unsafe { Reaper::get().low().guidToString(&self.raw, buf) };
-        as_string_mut(buf).expect("Can not convert guid to string")
+        let mut buf = vec![0_i8; 64];
+        unsafe {
+            Reaper::get()
+                .low()
+                .guidToString(&self.raw, buf.as_mut_ptr())
+        };
+        string_from_buf(&buf).unwrap_or(String::default())
     }
 }
 
@@ -729,11 +734,11 @@ const ZERO_GUID: raw::GUID = raw::GUID {
 };
 
 impl GUID {
-    pub fn from_string(mut value: String) -> ReaperResult<Self> {
+    pub fn from_string(value: String) -> ReaperResult<Self> {
         let mut g = MaybeUninit::zeroed();
         unsafe {
             Reaper::get().low().stringToGuid(
-                as_c_str(value.with_null()).as_ptr(),
+                CString::new(value.with_null())?.as_ptr(),
                 g.as_mut_ptr(),
             );
             let g = g.assume_init();

@@ -3,7 +3,7 @@ use std::mem::MaybeUninit;
 use log::{debug, error};
 
 use crate::{
-    utils::{as_string, string_from_buf},
+    utils::{string_from_const_i8, string_from_buf},
     HardwareSocket, Reaper, SampleAmount,
 };
 
@@ -156,7 +156,7 @@ impl Reaper {
 
     pub fn get_audio_input(&self, index: usize) -> Option<HardwareSocket> {
         let result = self.low().GetInputChannelName(index as i32);
-        match as_string(result) {
+        match string_from_const_i8(result) {
             Err(_) => None,
             Ok(name) => {
                 if &name == "" {
@@ -169,7 +169,7 @@ impl Reaper {
 
     pub fn get_audio_output(&self, index: usize) -> Option<HardwareSocket> {
         let result = self.low().GetOutputChannelName(index as i32);
-        match as_string(result) {
+        match string_from_const_i8(result) {
             Err(_) => None,
             Ok(name) => {
                 if &name == "" {

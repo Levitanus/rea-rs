@@ -1,16 +1,13 @@
 use crate::{reaper_pointer::ReaperPointer, Project, ReaRsError, Reaper};
-use std::{
-    ffi::{c_char, CStr, CString},
-    str::Utf8Error,
-};
+use std::ffi::CStr;
 
 /// Returns self as a null-terminated String. Implemented only for [String].
 pub trait WithNull: Clone {
     /// If not `\0` at the end, it will be added.
-    fn with_null(&mut self) -> &String;
+    fn with_null(self) -> String;
 }
 impl WithNull for String {
-    fn with_null(&mut self) -> &String {
+    fn with_null(mut self) -> String {
         if !self.ends_with("\0") {
             self.push('\0');
         }
@@ -18,48 +15,12 @@ impl WithNull for String {
     }
 }
 
-/// Convert string to CString pointer for using with low-level.
-pub fn as_mut_i8<'a>(value: impl Into<&'a str>) -> *mut i8 {
-    let value: &str = value.into();
-    let vec: Vec<u8> = value.chars().map(|val| val as u8).collect();
-    let string: CString = unsafe { CString::from_vec_unchecked(vec) };
-    string.into_raw()
-}
-
-/// Convert string to CStr pointer for using with low-level.
-pub fn as_c_char<'a>(value: impl Into<&'a str>) -> *const c_char {
-    let value = String::from(value.into());
-    let value = value + "\0";
-    let value = value.as_str();
-    let value = CStr::from_bytes_with_nul(value.as_bytes()).unwrap();
-    value.as_ptr()
-}
-
-/// Has hot to contain Null Byte!!!
-pub fn as_c_string<'a>(value: &'a String) -> CString {
-    let value = CString::new(value.as_bytes()).unwrap();
-    value
-}
-
-/// Convert null-terminated String to CStr.
-///
-/// You can use trait [WithNull].
-pub fn as_c_str<'a>(value: &'a String) -> &'a CStr {
-    let value = CStr::from_bytes_with_nul(value.as_bytes()).unwrap();
-    value
-}
-
 /// Convert pointer to CStr to String.
-pub fn as_string(ptr: *const i8) -> Result<String, Utf8Error> {
+pub fn string_from_const_i8(ptr: *const i8) -> Result<String, ReaRsError> {
     let value: &CStr = unsafe { CStr::from_ptr(ptr) };
     let value = value.to_str()?;
     let value = String::from(value);
     Ok(value)
-}
-
-/// Convert pointer to CString to String.
-pub fn as_string_mut(ptr: *mut i8) -> Result<String, Utf8Error> {
-    unsafe { Ok(String::from(CString::from_raw(ptr).to_str()?)) }
 }
 
 /// Convert an in-place C output buffer to Rust String with basic
@@ -84,22 +45,6 @@ pub fn string_from_buf(buf: &[i8]) -> Result<String, ReaRsError> {
         .map_err(|_| {
             ReaRsError::InvalidObject("Can not decode value as UTF-8")
         })
-}
-
-/// Make empty CString pointer of the given size.
-pub fn make_string_buf(size: usize) -> *mut i8 {
-    unsafe {
-        let buf: Vec<u8> = vec![0; size];
-        CString::from_vec_unchecked(buf).into_raw()
-    }
-}
-
-/// Make empty CString of the given size.
-pub fn make_c_string_buf(size: usize) -> CString {
-    unsafe {
-        let buf: Vec<u8> = vec![0; size];
-        CString::from_vec_unchecked(buf)
-    }
 }
 
 /// Guarantees that REAPER object has valid pointer.

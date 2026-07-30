@@ -1,12 +1,12 @@
 use crate::{
     ptr_wrappers::{MediaTrack, TrackEnvelope},
-    utils::{as_c_str, WithNull},
+    utils::WithNull,
     AutomationMode, Envelope, KnowsProject, Pan, PanLaw, ReaRsError, Reaper,
     ReaperResult, Track, Volume, WithReaperPtr, GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
-use std::ptr::null_mut;
+use std::{ffi::CString, ptr::null_mut};
 
 #[repr(i32)]
 #[derive(
@@ -202,7 +202,7 @@ pub trait GenericSend<'a>: SendIntType + Sized {
                 track_ptr,
                 self.as_int(),
                 self.index() as i32,
-                as_c_str(param.into().with_null()).as_ptr(),
+                CString::new(param.into().with_null())?.as_ptr(),
             )
         })
     }
@@ -270,7 +270,7 @@ pub trait GenericSend<'a>: SendIntType + Sized {
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                as_c_str(&String::from("P_DESTTRACK\0")).as_ptr(),
+                CString::new(String::from("P_DESTTRACK\0"))?.as_ptr(),
                 null_mut(),
             ) as *mut rea_rs_low::raw::MediaTrack
         };
@@ -288,7 +288,7 @@ pub trait GenericSend<'a>: SendIntType + Sized {
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                as_c_str(&String::from("P_SRCTRACK\0")).as_ptr(),
+                CString::new(String::from("P_SRCTRACK\0"))?.as_ptr(),
                 null_mut(),
             ) as *mut rea_rs_low::raw::MediaTrack
         };
@@ -312,10 +312,8 @@ pub trait GenericSend<'a>: SendIntType + Sized {
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                as_c_str(&String::from(
-                    selector.into().to_string().with_null(),
-                ))
-                .as_ptr(),
+                CString::new(selector.into().to_string().with_null())?
+                    .as_ptr(),
                 null_mut(),
             ) as *mut rea_rs_low::raw::TrackEnvelope
         };
@@ -360,13 +358,12 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a> {
         param: impl Into<String>,
         value: f64,
     ) -> anyhow::Result<()> {
-        let mut param = param.into();
         let result = unsafe {
             Reaper::get().low().SetTrackSendInfo_Value(
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                as_c_str(&param.with_null()).as_ptr(),
+                CString::new(param.into().with_null())?.as_ptr(),
                 value,
             )
         };

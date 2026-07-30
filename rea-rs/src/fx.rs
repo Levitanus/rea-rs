@@ -6,7 +6,7 @@ use std::{
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
-    utils::{as_c_str, as_string_mut, make_c_string_buf, WithNull},
+    utils::{string_from_buf, WithNull},
     Envelope, KnowsProject, ReaRsError, Reaper, ReaperResult, Take, Track,
     WithReaperPtr,
 };
@@ -82,11 +82,11 @@ impl TrackFX {
         name: impl Into<String>,
         is_rec_fx: bool,
     ) -> ReaperResult<Option<Self>> {
-        let mut name = name.into();
+        let name = name.into();
         let index = unsafe {
             Reaper::get().low().TrackFX_AddByName(
                 parent.get()?.as_ptr(),
-                as_c_str(name.with_null()).as_ptr(),
+                CString::new(name.with_null())?.as_ptr(),
                 is_rec_fx,
                 0,
             )
@@ -111,12 +111,12 @@ impl FX for TrackFX {
         index: usize,
     ) -> ReaperResult<Option<Self>> {
         let size = 512;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().TrackFX_GetFXName(
                 parent.get()?.as_ptr(),
                 index as i32,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
@@ -152,13 +152,13 @@ impl FX for TrackFX {
         let parmname =
             CString::new("is_instrument").expect("failed to make CString");
         let size = 8;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let got_value = unsafe {
             Reaper::get().low().TrackFX_GetNamedConfigParm(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
                 parmname.as_ptr(),
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
@@ -167,7 +167,7 @@ impl FX for TrackFX {
         }
 
         Ok(matches!(
-            as_string_mut(buf)
+            string_from_buf(&buf)
                 .ok()
                 .and_then(|s| s.trim().parse::<i32>().ok()),
             Some(1)
@@ -243,20 +243,18 @@ impl FX for TrackFX {
 
     fn preset(&self) -> ReaperResult<String> {
         let size = 250;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().TrackFX_GetPreset(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
         match result {
-            true => {
-                Ok(as_string_mut(buf)
-                    .expect("Can not convert result to string."))
-            }
+            true => Ok(string_from_buf(&buf)
+                .expect("Can not convert result to string.")),
             false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not get preset name",
             )),
@@ -312,17 +310,17 @@ impl FX for TrackFX {
     }
     fn name(&self) -> ReaperResult<String> {
         let size = 150;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().TrackFX_GetFXName(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
         match result {
-            true => as_string_mut(buf)
+            true => string_from_buf(&buf)
                 .or(Err(ReaRsError::Str("Cannot convert name from CString"))),
             false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not get FX name. Probably, it's deleted",
@@ -428,12 +426,12 @@ impl FX for TrackFX {
     }
 
     fn set_preset(&mut self, preset: impl Into<String>) -> ReaperResult<()> {
-        let mut name = preset.into();
+        let name = preset.into();
         let result = unsafe {
             Reaper::get().low().TrackFX_SetPreset(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                as_c_str(name.with_null()).as_ptr(),
+                CString::new(name.with_null())?.as_ptr(),
             )
         };
         match result {
@@ -508,12 +506,12 @@ impl param_parent::FXParamParent<Track> for TrackFX {
         &self,
         param: impl Into<String>,
     ) -> ReaperResult<Option<FXParam<Track, Self>>> {
-        let mut param = param.into();
+        let param = param.into();
         let index = unsafe {
             Reaper::get().low().TrackFX_GetParamFromIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                as_c_str(param.with_null()).as_ptr(),
+                CString::new(param.with_null())?.as_ptr(),
             )
         };
         let res = if index < 0 {
@@ -526,13 +524,13 @@ impl param_parent::FXParamParent<Track> for TrackFX {
 
     fn param_name(&self, param: usize) -> ReaperResult<String> {
         let size = 100;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().TrackFX_GetParamName(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
@@ -541,19 +539,19 @@ impl param_parent::FXParamParent<Track> for TrackFX {
                 "Can not get param name. Fx deleted?",
             ));
         }
-        as_string_mut(buf)
+        string_from_buf(&buf)
             .or(Err(ReaRsError::Str("Can not convert name to String")))
     }
 
     fn param_ident_string(&self, param: usize) -> ReaperResult<String> {
         let size = 100;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().TrackFX_GetParamIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
@@ -562,7 +560,7 @@ impl param_parent::FXParamParent<Track> for TrackFX {
                 "Can not get param ident. Fx deleted?",
             ));
         }
-        as_string_mut(buf)
+        string_from_buf(&buf)
             .or(Err(ReaRsError::Str("Can not convert name to String")))
     }
 
@@ -592,13 +590,13 @@ impl param_parent::FXParamParent<Track> for TrackFX {
 
     fn param_value_formatted(&self, param: usize) -> ReaperResult<String> {
         let size = 100;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().TrackFX_GetFormattedParamValue(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
@@ -607,7 +605,7 @@ impl param_parent::FXParamParent<Track> for TrackFX {
                 "Can not get param value. Fx deleted?",
             ));
         }
-        as_string_mut(buf)
+        string_from_buf(&buf)
             .or(Err(ReaRsError::Str("Can not convert value to String")))
     }
 
@@ -713,12 +711,12 @@ impl param_parent::FXParamParent<Track> for TrackFX {
         &mut self,
         param: impl Into<String>,
     ) -> ReaperResult<Option<FXParam<Track, Self>>> {
-        let mut param = param.into();
+        let param = param.into();
         let index = unsafe {
             Reaper::get().low().TrackFX_GetParamFromIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                as_c_str(param.with_null()).as_ptr(),
+                CString::new(param.with_null())?.as_ptr(),
             )
         };
         Ok(if index < 0 {
@@ -796,11 +794,11 @@ impl TakeFX {
         parent: &Take,
         name: impl Into<String>,
     ) -> ReaperResult<Option<Self>> {
-        let mut name = name.into();
+        let name = name.into();
         let index = unsafe {
             Reaper::get().low().TakeFX_AddByName(
                 parent.get()?.as_ptr(),
-                as_c_str(name.with_null()).as_ptr(),
+                CString::new(name.with_null())?.as_ptr(),
                 0,
             )
         };
@@ -824,12 +822,12 @@ impl FX for TakeFX {
         index: usize,
     ) -> ReaperResult<Option<Self>> {
         let size = 512;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().TakeFX_GetFXName(
                 parent.get()?.as_ptr(),
                 index as i32,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
@@ -864,13 +862,13 @@ impl FX for TakeFX {
         let parmname =
             CString::new("is_instrument").expect("failed to make CString");
         let size = 8;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let got_value = unsafe {
             Reaper::get().low().TakeFX_GetNamedConfigParm(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
                 parmname.as_ptr(),
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
@@ -879,7 +877,7 @@ impl FX for TakeFX {
         }
 
         Ok(matches!(
-            as_string_mut(buf)
+            string_from_buf(&buf)
                 .ok()
                 .and_then(|s| s.trim().parse::<i32>().ok()),
             Some(1)
@@ -954,20 +952,18 @@ impl FX for TakeFX {
 
     fn preset(&self) -> ReaperResult<String> {
         let size = 250;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().TakeFX_GetPreset(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
         match result {
-            true => {
-                Ok(as_string_mut(buf)
-                    .expect("Can not convert result to string."))
-            }
+            true => Ok(string_from_buf(&buf)
+                .expect("Can not convert result to string.")),
             false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not get preset name",
             )),
@@ -1022,17 +1018,17 @@ impl FX for TakeFX {
     }
     fn name(&self) -> ReaperResult<String> {
         let size = 150;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().TakeFX_GetFXName(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
         match result {
-            true => as_string_mut(buf)
+            true => string_from_buf(&buf)
                 .or(Err(ReaRsError::Str("Cannot convert name from CString"))),
             false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not get FX name. Probably, it's deleted",
@@ -1138,12 +1134,12 @@ impl FX for TakeFX {
     }
 
     fn set_preset(&mut self, preset: impl Into<String>) -> ReaperResult<()> {
-        let mut name = preset.into();
+        let name = preset.into();
         let result = unsafe {
             Reaper::get().low().TakeFX_SetPreset(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                as_c_str(name.with_null()).as_ptr(),
+                CString::new(name.with_null())?.as_ptr(),
             )
         };
         match result {
@@ -1217,12 +1213,12 @@ impl param_parent::FXParamParent<Take> for TakeFX {
         &self,
         param: impl Into<String>,
     ) -> ReaperResult<Option<FXParam<Take, Self>>> {
-        let mut param = param.into();
+        let param = param.into();
         let index = unsafe {
             Reaper::get().low().TakeFX_GetParamFromIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                as_c_str(param.with_null()).as_ptr(),
+                CString::new(param.with_null())?.as_ptr(),
             )
         };
         Ok(if index < 0 {
@@ -1234,13 +1230,13 @@ impl param_parent::FXParamParent<Take> for TakeFX {
 
     fn param_name(&self, param: usize) -> ReaperResult<String> {
         let size = 100;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().TakeFX_GetParamName(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
@@ -1249,19 +1245,19 @@ impl param_parent::FXParamParent<Take> for TakeFX {
                 "Can not get param name. Fx deleted?",
             ));
         }
-        as_string_mut(buf)
+        string_from_buf(&buf)
             .or(Err(ReaRsError::Str("Can not convert name to String")))
     }
 
     fn param_ident_string(&self, param: usize) -> ReaperResult<String> {
         let size = 100;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().TakeFX_GetParamIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
@@ -1270,7 +1266,7 @@ impl param_parent::FXParamParent<Take> for TakeFX {
                 "Can not get param ident. Fx deleted?",
             ));
         }
-        as_string_mut(buf)
+        string_from_buf(&buf)
             .or(Err(ReaRsError::Str("Can not convert name to String")))
     }
 
@@ -1300,13 +1296,13 @@ impl param_parent::FXParamParent<Take> for TakeFX {
 
     fn param_value_formatted(&self, param: usize) -> ReaperResult<String> {
         let size = 100;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().TakeFX_GetFormattedParamValue(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
                 param as i32,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
@@ -1315,7 +1311,7 @@ impl param_parent::FXParamParent<Take> for TakeFX {
                 "Can not get param value. Fx deleted?",
             ));
         }
-        as_string_mut(buf)
+        string_from_buf(&buf)
             .or(Err(ReaRsError::Str("Can not convert value to String")))
     }
 
@@ -1421,12 +1417,12 @@ impl param_parent::FXParamParent<Take> for TakeFX {
         &mut self,
         param: impl Into<String>,
     ) -> ReaperResult<Option<FXParam<Take, Self>>> {
-        let mut param = param.into();
+        let param = param.into();
         let index = unsafe {
             Reaper::get().low().TakeFX_GetParamFromIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                as_c_str(param.with_null()).as_ptr(),
+                CString::new(param.with_null())?.as_ptr(),
             )
         };
         Ok(if index < 0 {

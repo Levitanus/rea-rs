@@ -1,11 +1,14 @@
-use std::{ffi::c_char, mem::MaybeUninit};
+use std::{
+    ffi::{c_char, CString},
+    mem::MaybeUninit,
+};
 
 use crate::{
     ptr_wrappers::{
         self, MediaItem, MediaItemTake, MediaTrack, PcmSource, ReaProject,
         TrackEnvelope,
     },
-    utils::{as_c_str, as_c_string, as_string, string_from_buf, WithNull},
+    utils::{string_from_buf, string_from_const_i8, WithNull},
     AudioAccessor, Color, Envelope, FXParent, Item, KnowsProject,
     MidiEventBuilder, Pan, PanLaw, Pitch, PlayRate, Project, ProjectContext,
     ReaRsError, Reaper, ReaperResult, Source, SourceOffset, TakeFX, Track,
@@ -151,7 +154,8 @@ impl Take {
     pub fn name(&self) -> ReaperResult<String> {
         let result =
             unsafe { Reaper::get().low().GetTakeName(self.get()?.as_ptr()) };
-        Ok(as_string(result).expect("Can not convert name to string"))
+        Ok(string_from_const_i8(result)
+            .expect("Can not convert name to string"))
     }
 
     pub fn source(&self) -> ReaperResult<Option<Source>> {
@@ -218,12 +222,12 @@ impl Take {
                 "buffer size must be at least 2",
             ));
         }
-        let mut category = category.into();
+
         let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
                 self.get()?.as_ptr(),
-                as_c_str(category.with_null()).as_ptr(),
+                CString::new(category.into().with_null())?.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             )
@@ -247,11 +251,10 @@ impl Take {
         &self,
         category: impl Into<String>,
     ) -> ReaperResult<f64> {
-        let mut category = category.into();
         Ok(unsafe {
             Reaper::get().low().GetMediaItemTakeInfo_Value(
                 self.get()?.as_ptr(),
-                as_c_str(category.with_null()).as_ptr(),
+                CString::new(category.into().with_null())?.as_ptr(),
             )
         })
     }
@@ -427,7 +430,7 @@ impl Take {
         let index = unsafe {
             Reaper::get().low().TakeFX_AddByName(
                 self.get()?.as_ptr(),
-                as_c_str(name.into().with_null()).as_ptr(),
+                CString::new(name.into().with_null())?.as_ptr(),
                 insatantinate,
             )
         };
@@ -544,13 +547,11 @@ impl Take {
         category: impl Into<String>,
         string: impl Into<String>,
     ) -> ReaperResult<()> {
-        let mut category = category.into();
-        let string = string.into();
-        let buf = as_c_string(&string).into_raw();
+        let buf = CString::new(string.into().with_null())?.into_raw();
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
                 self.get()?.as_ptr(),
-                as_c_str(category.with_null()).as_ptr(),
+                CString::new(category.into().with_null())?.as_ptr(),
                 buf,
                 true,
             )
@@ -574,11 +575,10 @@ impl Take {
         category: impl Into<String>,
         value: f64,
     ) -> ReaperResult<()> {
-        let category = category.into();
         let result = unsafe {
             Reaper::get().low().SetMediaItemTakeInfo_Value(
                 self.get()?.as_ptr(),
-                as_c_string(&category).as_ptr(),
+                CString::new(category.into().with_null())?.as_ptr(),
                 value,
             )
         };

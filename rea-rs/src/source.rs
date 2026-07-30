@@ -1,6 +1,6 @@
 use crate::{
     ptr_wrappers::{MediaItem, MediaItemTake, PcmSource, ReaProject},
-    utils::{as_c_str, string_from_buf, WithNull},
+    utils::{string_from_buf, WithNull},
     KnowsProject, Position, Project, ProjectContext, ReaRsError, Reaper,
     ReaperResult, Take, Volume, WithReaperPtr,
 };
@@ -8,6 +8,7 @@ use chrono::TimeDelta;
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
 use std::{
+    ffi::CString,
     mem::MaybeUninit,
     ops::{Add, Sub},
     path::PathBuf,
@@ -98,18 +99,18 @@ impl Source {
                 }
                 let item_ptr =
                     item_ptr.ok_or(ReaRsError::NullPtr("take item"))?;
-                let mut item_pos_key = String::from("D_POSITION");
+                let item_pos_key = String::from("D_POSITION");
                 let item_start = unsafe {
                     Reaper::get().low().GetMediaItemInfo_Value(
                         item_ptr.as_ptr(),
-                        as_c_str(item_pos_key.with_null()).as_ptr(),
+                        CString::new(item_pos_key.with_null())?.as_ptr(),
                     )
                 };
-                let mut offset_key = String::from("D_STARTOFFS");
+                let offset_key = String::from("D_STARTOFFS");
                 let start_offset = unsafe {
                     Reaper::get().low().GetMediaItemTakeInfo_Value(
                         self.take().as_ptr(),
-                        as_c_str(offset_key.with_null()).as_ptr(),
+                        CString::new(offset_key.with_null())?.as_ptr(),
                     )
                 };
                 let project = match self.project_ptr {

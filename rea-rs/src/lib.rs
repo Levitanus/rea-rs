@@ -153,6 +153,8 @@
 //!
 //! Enjoy the coding!
 
+use std::{ffi::NulError, str::Utf8Error};
+
 use anyhow::Error;
 pub use chrono::Duration;
 pub use int_enum::IntEnum;
@@ -256,6 +258,14 @@ pub enum ReaRsError {
     UnsuccessfulOperation(&'static str),
     #[error("Error: {0}")]
     Str(&'static str),
+    #[error("CString: can not convert string to CString")]
+    CString(#[from] NulError),
+    #[error("Utf8Error: can not convert pointer to String")]
+    Utf8Error(#[from] Utf8Error),
+    #[error("UnderlyingError: other error {0}")]
+    UnderlyingError(Error),
+    #[error("IntEnumError: {0}")]
+    IntEnum(String),
 }
 
 pub type ReaperResult<T> = Result<T, ReaRsError>;

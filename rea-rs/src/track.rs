@@ -11,7 +11,7 @@ use serde_derive::{Deserialize, Serialize};
 
 use crate::{
     ptr_wrappers::{MediaItem, MediaTrack, ReaProject, TrackEnvelope},
-    utils::{as_c_str, as_c_string, as_string, string_from_buf, WithNull},
+    utils::{string_from_buf, string_from_const_i8, WithNull},
     AudioAccessor, AutomationMode, Color, Envelope, EnvelopeSelector,
     FXParent, GenericSend, GetLength, HardwareSend, HardwareSocket, Item,
     KnowsProject, Pan, PanLaw, PanLawMode, Position, PositionPixel, Project,
@@ -143,7 +143,7 @@ impl Track {
             let mut buf = vec![0_i8; self.info_buf_size];
             let result = Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get()?.as_ptr(),
-                as_c_str(&category.into().with_null()).as_ptr(),
+                CString::new(category.into().with_null())?.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             );
@@ -224,7 +224,7 @@ impl Track {
         Ok(unsafe {
             Reaper::get().low().GetMediaTrackInfo_Value(
                 self.get()?.as_ptr(),
-                as_c_str(&category.into().with_null()).as_ptr(),
+                CString::new(category.into().with_null())?.as_ptr(),
             )
         })
     }
@@ -620,11 +620,7 @@ impl Track {
         };
         match raw.is_null() {
             true => Ok(None),
-            false => Ok(Some(as_string(raw).map_err(|_| {
-                ReaRsError::UnexpectedAPI(
-                    "Can not receive note name string".to_string(),
-                )
-            })?)),
+            false => Ok(Some(string_from_const_i8(raw)?)),
         }
     }
 
@@ -697,14 +693,14 @@ impl Track {
         &self,
         selector: EnvelopeSelector,
     ) -> ReaperResult<Option<Envelope<'_, Self>>> {
-        let mut chunk = match selector {
+        let chunk = match selector {
             EnvelopeSelector::Chunk(chunk) => chunk.to_string(),
             EnvelopeSelector::Guid(guid) => guid.to_string(),
         };
         let ptr = unsafe {
             Reaper::get().low().GetTrackEnvelopeByChunkName(
                 self.get()?.as_ptr(),
-                as_c_str(chunk.with_null()).as_ptr(),
+                CString::new(chunk.with_null())?.as_ptr(),
             )
         };
         Ok(match TrackEnvelope::new(ptr) {
@@ -717,11 +713,11 @@ impl Track {
         &self,
         name: impl Into<String>,
     ) -> ReaperResult<Option<Envelope<'_, Self>>> {
-        let mut name = name.into();
+        let name = name.into();
         let ptr = unsafe {
             Reaper::get().low().GetTrackEnvelopeByName(
                 self.get()?.as_ptr(),
-                as_c_str(name.with_null()).as_ptr(),
+                CString::new(name.with_null())?.as_ptr(),
             )
         };
         Ok(match TrackEnvelope::new(ptr) {
@@ -805,11 +801,11 @@ impl Track {
         chunk: impl Into<String>,
         need_undo: bool,
     ) -> ReaperResult<()> {
-        let mut chunk = chunk.into();
+        let chunk = chunk.into();
         let result = unsafe {
             Reaper::get().low().SetTrackStateChunk(
                 self.get()?.as_ptr(),
-                as_c_str(chunk.with_null()).as_ptr(),
+                CString::new(chunk.with_null())?.as_ptr(),
                 need_undo,
             )
         };
@@ -828,14 +824,14 @@ impl Track {
         pitch: u16,
         note_name: impl Into<String>,
     ) -> ReaperResult<()> {
-        let mut note_name = note_name.into();
+        let note_name = note_name.into();
         let result = unsafe {
             Reaper::get().low().SetTrackMIDINoteNameEx(
                 self.project().context().to_raw(),
                 self.get()?.as_ptr(),
                 pitch as i32,
                 channel as i32,
-                as_c_str(note_name.with_null()).as_ptr(),
+                CString::new(note_name.with_null())?.as_ptr(),
             )
         };
         match result {
@@ -851,13 +847,13 @@ impl Track {
         category: impl Into<String>,
         value: impl Into<String>,
     ) -> ReaperResult<()> {
-        let mut category = category.into();
+        let category = category.into();
         let value = value.into();
         let result = unsafe {
             Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get()?.as_ptr(),
-                as_c_str(&category.with_null()).as_ptr(),
-                as_c_string(&value).into_raw(),
+                CString::new(category.with_null())?.as_ptr(),
+                CString::new(value.with_null())?.into_raw(),
                 true,
             )
         };
@@ -958,7 +954,7 @@ impl Track {
         let index = unsafe {
             Reaper::get().low().TrackFX_AddByName(
                 self.get()?.as_ptr(),
-                as_c_str(name.into().with_null()).as_ptr(),
+                CString::new(name.into().with_null())?.as_ptr(),
                 input_fx,
                 insatantinate,
             )
@@ -1100,11 +1096,11 @@ impl Track {
         param: impl Into<String>,
         value: f64,
     ) -> anyhow::Result<()> {
-        let mut param_name: String = param.into();
+        let param_name: String = param.into();
         let result = unsafe {
             Reaper::get().low().SetMediaTrackInfo_Value(
                 self.get()?.as_ptr(),
-                as_c_str(&param_name.with_null()).as_ptr(),
+                CString::new(param_name.with_null())?.as_ptr(),
                 value,
             )
         };

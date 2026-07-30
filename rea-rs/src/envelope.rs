@@ -1,6 +1,6 @@
 use crate::{
     ptr_wrappers::TrackEnvelope,
-    utils::{as_c_str, as_string_mut, make_c_string_buf, WithNull},
+    utils::{string_from_buf, WithNull},
     GetLength, KnowsProject, Position, ReaRsError, Reaper, ReaperResult,
     WithReaperPtr, GUID,
 };
@@ -51,27 +51,21 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     }
     pub fn guid(&self) -> ReaperResult<GUID> {
         let size = 50;
-        let buf = make_c_string_buf(size);
-        let ptr = buf.into_raw();
+        let mut buf = vec![0_i8; size];
         let category = CString::new("GUID")
             .expect("Can not convert category to CString.");
         let result = unsafe {
             Reaper::get().low().GetSetEnvelopeInfo_String(
                 self.get()?.as_ptr(),
                 category.as_ptr(),
-                ptr,
+                buf.as_mut_ptr(),
                 false,
             )
         };
         if !result {
             return Err(ReaRsError::UnsuccessfulOperation("Can't get GUID"));
         }
-        let guid_string = as_string_mut(ptr).map_err(|e| {
-            ReaRsError::UnexpectedAPI(format!(
-                "Can't convert GUID ptr to string: {}",
-                e
-            ))
-        })?;
+        let guid_string = string_from_buf(&buf)?;
         GUID::from_string(guid_string)
     }
 
@@ -90,11 +84,11 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
 
     pub fn name(&self) -> ReaperResult<String> {
         let size = 100;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().GetEnvelopeName(
                 self.get()?.as_ptr(),
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             )
         };
@@ -102,12 +96,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
             false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not get envelope name!",
             )),
-            true => Ok(as_string_mut(buf).map_err(|e| {
-                ReaRsError::UnexpectedAPI(format!(
-                    "Can not convert name to string: {}",
-                    e
-                ))
-            })?),
+            true => string_from_buf(&buf),
         }
     }
 
@@ -134,11 +123,11 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     /// Full Envelope state, as it written in project file.
     pub fn state_chunk(&self) -> ReaperResult<String> {
         let size = i32::MAX;
-        let buf = make_c_string_buf(size as usize).into_raw();
+        let mut buf = vec![0_i8; size as usize];
         let result = unsafe {
             Reaper::get().low().GetEnvelopeStateChunk(
                 self.get()?.as_ptr(),
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
                 false,
             )
@@ -147,12 +136,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
             false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not get envelope name!",
             )),
-            true => Ok(as_string_mut(buf).map_err(|e| {
-                ReaRsError::UnexpectedAPI(format!(
-                    "Can not convert state chunk to string: {}",
-                    e
-                ))
-            })?),
+            true => string_from_buf(&buf),
         }
     }
 
@@ -312,21 +296,16 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     /// Get value, as it written in GUI
     pub fn format_value(&self, value: f64) -> ReaperResult<String> {
         let size = 100;
-        let buf = make_c_string_buf(size).into_raw();
+        let mut buf = vec![0_i8; size];
         unsafe {
             Reaper::get().low().Envelope_FormatValue(
                 self.get()?.as_ptr(),
                 value,
-                buf,
+                buf.as_mut_ptr(),
                 size as i32,
             );
         }
-        Ok(as_string_mut(buf).map_err(|e| {
-            ReaRsError::UnexpectedAPI(format!(
-                "Can not convert value to string: {}",
-                e
-            ))
-        })?)
+        string_from_buf(&buf)
     }
 
     /// Get info value by string key. Should not be used in 99% cases.
@@ -344,11 +323,11 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         &self,
         category: impl Into<String>,
     ) -> ReaperResult<f64> {
-        let mut category = category.into();
+        let category = category.into();
         Ok(unsafe {
             Reaper::get().low().GetEnvelopeInfo_Value(
                 self.get()?.as_ptr(),
-                as_c_str(category.with_null()).as_ptr(),
+                CString::new(category.with_null())?.as_ptr(),
             )
         })
     }
@@ -617,11 +596,11 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         state: impl Into<String>,
         with_undo: bool,
     ) -> ReaperResult<()> {
-        let mut state = state.into();
+        let state = state.into();
         let result = unsafe {
             Reaper::get().low().SetEnvelopeStateChunk(
                 self.get()?.as_ptr(),
-                as_c_str(state.with_null()).as_ptr(),
+                CString::new(state.with_null())?.as_ptr(),
                 with_undo,
             )
         };
@@ -761,12 +740,12 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
         &self,
         category: impl Into<String>,
     ) -> ReaperResult<f64> {
-        let mut category = category.into();
+        let category = category.into();
         Ok(unsafe {
             Reaper::get().low().GetSetAutomationItemInfo(
                 self.envelope().get()?.as_ptr(),
                 self.index() as i32,
-                as_c_str(category.with_null()).as_ptr(),
+                CString::new(category.with_null())?.as_ptr(),
                 0.0,
                 false,
             )
@@ -822,12 +801,12 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
         category: impl Into<String>,
         value: f64,
     ) -> ReaperResult<()> {
-        let mut category = category.into();
+        let category = category.into();
         unsafe {
             Reaper::get().low().GetSetAutomationItemInfo(
                 self.envelope().get()?.as_ptr(),
                 self.index() as i32,
-                as_c_str(category.with_null()).as_ptr(),
+                CString::new(category.with_null())?.as_ptr(),
                 value,
                 true,
             );

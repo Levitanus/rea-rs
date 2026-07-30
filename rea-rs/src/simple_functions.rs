@@ -2,18 +2,21 @@ use crate::{
     misc_enums::ProjectContext,
     ptr_wrappers::Hwnd,
     reaper_pointer::ReaperPointer,
-    utils::{
-        as_c_char, as_c_str, as_mut_i8, as_string, make_string_buf, WithNull,
-    },
+    utils::{string_from_buf, string_from_const_i8, WithNull},
     AutomationMode, Color, CommandId, MIDIEditor, MessageBoxType,
-    MessageBoxValue, Project, ReaRsError, Reaper, Section, ThemeColor,
-    UndoFlags,
+    MessageBoxValue, Project, ReaRsError, Reaper, ReaperResult, Section,
+    ThemeColor, UndoFlags,
 };
 use int_enum::IntEnum;
-use log::debug;
+use log::{debug, error};
 use std::{
-    collections::HashMap, error::Error, ffi::CString, fs::canonicalize,
-    marker::PhantomData, path::Path, ptr::NonNull, str::Utf8Error,
+    collections::HashMap,
+    error::Error,
+    ffi::CString,
+    fs::canonicalize,
+    marker::PhantomData,
+    path::Path,
+    ptr::{null_mut, NonNull},
 };
 
 impl Reaper {
@@ -25,10 +28,11 @@ impl Reaper {
     pub fn show_console_msg(&self, msg: impl Into<String>) {
         let mut msg: String = msg.into();
         msg.push_str("\n");
-        unsafe {
-            self.low()
-                .ShowConsoleMsg(as_c_str(msg.with_null()).as_ptr())
+        let msg = match CString::new(msg.with_null()) {
+            Err(e) => return error!("Can not convert msg to CString: {}", e),
+            Ok(msg) => msg,
         };
+        unsafe { self.low().ShowConsoleMsg(msg.as_ptr()) };
     }
 
     pub fn clear_console(&self) {
@@ -90,7 +94,9 @@ impl Reaper {
                 let current_project =
                     Project::new(ProjectContext::CurrentProject);
                 let project = self.add_project_tab(true);
-                current_project.make_current_project();
+                current_project
+                    .make_current_project()
+                    .expect("should be valid project");
                 project
             }
             true => {
@@ -106,21 +112,23 @@ impl Reaper {
         file: &Path,
         in_new_tab: bool,
         make_current_project: bool,
-    ) -> Result<Project, &str> {
+    ) -> ReaperResult<Project> {
         let current_project = self.current_project();
         if in_new_tab {
             self.add_project_tab(true);
         }
         if !file.is_file() {
-            return Err("path is not file");
+            return Err(ReaRsError::Str("path is not file"));
         }
-        let path = file.to_str().ok_or("can not use this path")?;
+        let path = file
+            .to_str()
+            .ok_or(ReaRsError::Str("can not use this path"))?;
         unsafe {
-            self.low().Main_openProject(as_mut_i8(path));
+            self.low().Main_openProject(CString::new(path)?.into_raw());
         }
         let project = self.current_project();
         if !make_current_project {
-            current_project.make_current_project();
+            current_project.make_current_project()?;
         }
         Ok(project)
     }
@@ -160,19 +168,21 @@ impl Reaper {
         section: Section,
         commit: bool,
         add: bool,
-    ) -> anyhow::Result<Option<CommandId>> {
+    ) -> ReaperResult<Option<CommandId>> {
         if !file.is_file() {
             return Err(ReaRsError::Str("path is not file!").into());
         }
-        let abs = canonicalize(file)?;
+        let abs = canonicalize(file)
+            .map_err(|e| ReaRsError::UnderlyingError(e.into()))?;
         unsafe {
             let id = self.low().AddRemoveReaScript(
                 add,
                 section.id() as i32,
-                as_mut_i8(
+                CString::new(
                     abs.to_str()
                         .ok_or(ReaRsError::Str("can not resolve path"))?,
-                ),
+                )?
+                .into_raw(),
                 commit,
             );
             if id <= 0 {
@@ -195,18 +205,18 @@ impl Reaper {
         &self,
         window_title: impl Into<String>,
         extension: impl Into<String>,
-    ) -> Result<Box<Path>, Box<dyn Error>> {
+    ) -> ReaperResult<Box<Path>> {
         unsafe {
-            let buf = make_string_buf(4096);
+            let mut buf = vec![0_i8; 4096];
             let result = self.low().GetUserFileNameForRead(
-                buf,
-                as_mut_i8(window_title.into().as_str()),
-                as_mut_i8(extension.into().as_str()),
+                buf.as_mut_ptr(),
+                CString::new(window_title.into().with_null())?.into_raw(),
+                CString::new(extension.into().with_null())?.into_raw(),
             );
             match result {
-                false => Err(Box::new(ReaRsError::UserAborted)),
+                false => Err(ReaRsError::UserAborted),
                 true => {
-                    let filename = CString::from_raw(buf).into_string()?;
+                    let filename = string_from_buf(&buf)?;
                     Ok(Path::new(&filename).into())
                 }
             }
@@ -219,29 +229,39 @@ impl Reaper {
     ///
     /// arms a command (or disarms if 0 passed) in section
     /// (empty string for main)
-    pub fn arm_command(&self, command: CommandId, section: impl Into<String>) {
+    pub fn arm_command(
+        &self,
+        command: CommandId,
+        section: impl Into<String>,
+    ) -> ReaperResult<()> {
         unsafe {
             self.low().ArmCommand(
                 command.get() as i32,
-                as_mut_i8(section.into().as_str()),
+                CString::new(section.into().with_null())?.as_ptr(),
             )
         }
+        Ok(())
     }
 
-    pub fn disarm_command(&self) {
-        self.arm_command(CommandId::new(0), "");
+    pub fn disarm_command(&self) -> ReaperResult<()> {
+        self.arm_command(CommandId::new(0), "")
     }
 
     /// Get armed command.
     ///
     /// If string is empty (`len() = 0`), then it's main section.
-    pub fn armed_command(&self) -> Option<(CommandId, String)> {
+    pub fn armed_command(
+        &self,
+        size: impl Into<Option<usize>>,
+    ) -> Option<(CommandId, String)> {
+        let size = match size.into() {
+            None => 256,
+            Some(s) => s,
+        };
         unsafe {
-            let buf = make_string_buf(200);
-            let id = self.low().GetArmedCommand(buf, 200);
-            let result = CString::from_raw(buf)
-                .into_string()
-                .unwrap_or(String::from(""));
+            let mut buf = vec![0_i8; size];
+            let id = self.low().GetArmedCommand(buf.as_mut_ptr(), size as i32);
+            let result = string_from_buf(&buf).unwrap_or(String::new());
             match id {
                 0 => None,
                 _ => Some((CommandId::new(id as u32), String::from(result))),
@@ -267,18 +287,20 @@ impl Reaper {
     pub fn get_action_id(
         &self,
         action_name: impl Into<String>,
-    ) -> Option<CommandId> {
+    ) -> ReaperResult<Option<CommandId>> {
         unsafe {
             let mut name: String = action_name.into();
             if !name.starts_with("_") {
                 name = String::from("_") + &name;
             }
             // debug!("action name: {:?}", name);
-            let id = self.low().NamedCommandLookup(as_mut_i8(name.as_str()));
+            let id = self
+                .low()
+                .NamedCommandLookup(CString::new(name.with_null())?.as_ptr());
             // debug!("got action id: {:?}", id);
             match id {
-                x if x <= 0 => None,
-                _ => Some(CommandId::new(id as u32)),
+                x if x <= 0 => Ok(None),
+                _ => Ok(Some(CommandId::new(id as u32))),
             }
         }
     }
@@ -290,14 +312,15 @@ impl Reaper {
         // debug!("received result: {:?}", result);
         match result.is_null() {
             true => None,
-            false => Some(as_string(result).unwrap()),
+            false => Some(string_from_const_i8(result).unwrap()),
         }
     }
 
     /// Return REAPER bin directory (e.g. "C:\\Program Files\\REAPER").
     pub fn get_binary_directory(&self) -> String {
         let result = self.low().GetExePath();
-        as_string(result).expect("Can not convert result to string.")
+        string_from_const_i8(result)
+            .expect("Can not convert result to string.")
     }
 
     /// Get globally overrided automation mode.
@@ -339,20 +362,19 @@ impl Reaper {
                 CString::new(title).expect("CString construction failed");
             let captions_c = CString::new(captions.join(","))
                 .expect("CString construction failed");
-            let buf = make_string_buf(buf_size);
+            let mut buf = vec![0_i8; buf_size];
             let result = self.low().GetUserInputs(
                 title_c.as_ptr(),
                 captions.len() as i32,
                 captions_c.as_ptr(),
-                buf,
+                buf.as_mut_ptr(),
                 buf_size as i32,
             );
             if result == false {
                 return Err(ReaRsError::UserAborted.into());
             }
             let mut map = HashMap::new();
-            let values =
-                as_string(buf).expect("can not retrieve user inputs.");
+            let values = string_from_buf(&buf)?;
             for (key, val) in captions.into_iter().zip(values.split(",")) {
                 map.insert(String::from(key), String::from(val));
             }
@@ -361,8 +383,8 @@ impl Reaper {
     }
 
     /// get the path for reaper resources: scripts, options etc.
-    pub fn get_resource_path(&self) -> Result<String, Utf8Error> {
-        as_string(self.low().GetResourcePath())
+    pub fn get_resource_path(&self) -> ReaperResult<String> {
+        string_from_const_i8(self.low().GetResourcePath())
     }
 
     /// get the color from current Reaper Theme
@@ -445,7 +467,7 @@ impl Reaper {
         mut f: impl FnMut() -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
         let low = self.low();
-        let undo_name: String = undo_name.into();
+        let undo_name = CString::new(undo_name.into().with_null())?;
         match project {
             None => low.Undo_BeginBlock(),
             Some(pr) => unsafe {
@@ -459,11 +481,11 @@ impl Reaper {
             let flags = flags.bits() as i32;
             match project {
                 None => {
-                    low.Undo_EndBlock(as_c_char(undo_name.as_str()), flags);
+                    low.Undo_EndBlock(undo_name.as_ptr(), flags);
                 }
                 Some(pr) => low.Undo_EndBlock2(
                     pr.context().to_raw(),
-                    as_c_char(undo_name.as_str()),
+                    undo_name.as_ptr(),
                     flags,
                 ),
             }
@@ -481,8 +503,8 @@ impl Reaper {
         unsafe {
             let low = self.low();
             let status = low.ShowMessageBox(
-                as_mut_i8(text.into().as_str()),
-                as_mut_i8(title.into().as_str()),
+                CString::new(text.into())?.as_ptr(),
+                CString::new(title.into())?.as_ptr(),
                 box_type.int_value(),
             );
             Ok(MessageBoxValue::from_int(status)?)
@@ -508,12 +530,16 @@ impl Reaper {
         &self,
         page: impl Into<Option<u32>>,
         name: impl Into<Option<String>>,
-    ) {
+    ) -> ReaperResult<()> {
         let name = name.into().unwrap_or(String::from(""));
         let page = page.into().unwrap_or(0_u32);
         unsafe {
-            self.low().ViewPrefs(page as i32, as_c_char(name.as_str()));
+            self.low().ViewPrefs(
+                page as i32,
+                CString::new(name.with_null())?.as_ptr(),
+            );
         }
+        Ok(())
     }
 
     /// Iter through all opened projects.
@@ -602,7 +628,7 @@ impl Iterator for ProjectIterator {
     type Item = Project;
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
-            let raw = self.low.EnumProjects(self.index, as_mut_i8(""), 0);
+            let raw = self.low.EnumProjects(self.index, null_mut(), 0);
             let raw = NonNull::new(raw);
             self.index += 1;
             match raw {

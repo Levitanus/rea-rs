@@ -137,7 +137,7 @@ fn action() -> TestStep {
         );
         debug!("got from id: {:?}", result);
         assert_eq!(result, name);
-        let result = rpr.get_action_id(name).expect("should get action ID");
+        let result = rpr.get_action_id(name)?.expect("should get action ID");
         debug!("got from name: {:?}", result);
         assert_eq!(result, id);
         Ok(())
@@ -215,40 +215,40 @@ fn projects() -> TestStep {
         debug!("Test Info Value");
 
         debug!("render bounds");
-        assert_eq!(pr.get_render_bounds_mode(), BoundsMode::EntireProject);
-        pr.set_render_bounds_mode(BoundsMode::SelectedItems);
-        assert_eq!(pr.get_render_bounds_mode(), BoundsMode::SelectedItems);
-        pr.set_render_bounds(2.0, 5.0);
+        assert_eq!(pr.get_render_bounds_mode()?, BoundsMode::EntireProject);
+        pr.set_render_bounds_mode(BoundsMode::SelectedItems)?;
+        assert_eq!(pr.get_render_bounds_mode()?, BoundsMode::SelectedItems);
+        pr.set_render_bounds(2.0, 5.0)?;
         assert_eq!(
-            pr.get_render_bounds(),
+            pr.get_render_bounds()?,
             (Position::from(2.0), Position::from(5.0))
         );
 
         debug!("render settings");
         assert_eq!(
-            pr.get_render_settings(),
+            pr.get_render_settings()?,
             RenderSettings::new(RenderMode::MasterMix, false, false)
         );
         pr.set_render_settings(RenderSettings::new(
             RenderMode::RenderMatrix,
             true,
             true,
-        ));
+        ))?;
         assert_eq!(
-            pr.get_render_settings(),
+            pr.get_render_settings()?,
             RenderSettings::new(RenderMode::RenderMatrix, true, true)
         );
 
         debug!("Render channels amount");
-        assert_eq!(pr.get_render_channels_amount(), 2);
-        pr.set_render_channels_amount(3);
-        assert_eq!(pr.get_render_channels_amount(), 3);
+        assert_eq!(pr.get_render_channels_amount()?, 2);
+        pr.set_render_channels_amount(3)?;
+        assert_eq!(pr.get_render_channels_amount()?, 3);
 
         debug!("Sample rate");
-        pr.set_srate(96000);
-        assert_eq!(pr.get_srate(), Some(96000));
-        pr.set_render_srate(22050);
-        assert_eq!(pr.get_render_srate(), Some(22050));
+        pr.set_srate(96000)?;
+        assert_eq!(pr.get_srate()?, Some(96000));
+        pr.set_render_srate(22050)?;
+        assert_eq!(pr.get_render_srate()?, Some(22050));
 
         debug!("render tail");
         let tail = RenderTail::new(
@@ -256,8 +256,8 @@ fn projects() -> TestStep {
             RenderTailFlags::IN_TIME_SELECTION
                 | RenderTailFlags::IN_ALL_REGIONS,
         );
-        pr.set_render_tail(tail);
-        assert_eq!(pr.get_render_tail(), tail);
+        pr.set_render_tail(tail)?;
+        assert_eq!(pr.get_render_tail()?, tail);
         Ok(())
     })
 }
@@ -612,7 +612,7 @@ fn tracks() -> TestStep {
         assert_eq!(tr2.name()?, "second");
         assert_eq!(tr2.index()?, 1);
         let tr2 = tr2.get()?;
-        let tr2 = Track::new(&pr, tr2)?;
+        let tr2 = Track::new(pr.get()?, tr2);
         assert_eq!(tr2.index()?, 1);
 
         debug!("add track 'third'");
@@ -1464,11 +1464,11 @@ fn takes() -> TestStep {
         let mut take = item.add_take()?;
 
         assert_eq!(take.name()?, "");
-        take.set_name("my funny name");
+        take.set_name("my funny name")?;
         assert_eq!(take.name()?, "my funny name");
 
         let guid = GUID::new();
-        take.set_guid(guid);
+        take.set_guid(guid)?;
         assert_eq!(take.guid()?, guid);
 
         assert_eq!(take.start_offset()?, SourceOffset::from_secs_f64(0.0));
@@ -1476,15 +1476,15 @@ fn takes() -> TestStep {
         assert_eq!(take.start_offset()?, SourceOffset::from_secs_f64(2.0));
 
         assert_eq!(take.volume()?, Volume::from_db(0.0));
-        take.set_volume(Volume::from_db(25.0));
+        take.set_volume(Volume::from_db(25.0))?;
         assert_eq!(take.volume()?, Volume::from_db(25.0));
 
         assert_eq!(take.pan()?, Pan::from(0.0));
-        take.set_pan(Pan::from(1.0));
+        take.set_pan(Pan::from(1.0))?;
         assert_eq!(take.pan()?, Pan::from(1.0));
 
         assert_eq!(take.pan_law()?, PanLaw::Default);
-        take.set_pan_law(PanLaw::Minus3dBCompensated);
+        take.set_pan_law(PanLaw::Minus3dBCompensated)?;
         assert_eq!(take.pan_law()?, PanLaw::Minus3dBCompensated);
 
         assert_eq!(take.play_rate()?, PlayRate::from(1.0));
@@ -1496,18 +1496,18 @@ fn takes() -> TestStep {
         assert_eq!(take.pitch()?, Pitch::from(3.0));
 
         assert!(take.preserve_pitch()?);
-        take.set_preserve_pitch(false);
+        take.set_preserve_pitch(false)?;
         assert!(!take.preserve_pitch()?);
 
         assert_eq!(take.y_pos()?, 0);
         info!("Let's look at take height: {:?}", take.height()?);
 
         assert_eq!(take.channel_mode()?, TakeChannelMode::Normal);
-        take.set_channel_mode(TakeChannelMode::Right);
+        take.set_channel_mode(TakeChannelMode::Right)?;
         assert_eq!(take.channel_mode()?, TakeChannelMode::Right);
 
         assert_eq!(take.pitch_mode()?, None);
-        take.set_pitch_mode(Some(TakePitchMode::new(2, 1)));
+        take.set_pitch_mode(Some(TakePitchMode::new(2, 1)))?;
         assert_eq!(take.pitch_mode()?, Some(TakePitchMode::new(2, 1)));
 
         assert_eq!(take.n_stretch_markers()?, 0);

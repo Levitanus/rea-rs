@@ -1,7 +1,7 @@
 pub use crate::utils::WithReaperPtr;
 use crate::{
     ptr_wrappers::{MediaItem, MediaTrack, ReaProject},
-    utils::{as_c_str, as_c_string, as_string, string_from_buf, WithNull},
+    utils::{string_from_buf, string_from_const_i8, WithNull},
     Color, CommandId, Item, MarkerRegionInfo, MarkerRegionIterator, PlayRate,
     Position, ProjectContext, ReaRsError, Reaper, ReaperResult, TimeRange,
     TimeRangeKind, TimeSignature, Track, UndoFlags,
@@ -102,7 +102,7 @@ impl<'a> Project {
     }
 
     /// Activate project tab with the project.
-    pub fn make_current_project(&self) -> Result<(), ReaRsError> {
+    pub fn make_current_project(&self) -> ReaperResult<()> {
         let low = Reaper::get().low();
         unsafe {
             low.SelectProjectInstance(self.get()?.as_ptr());
@@ -112,12 +112,11 @@ impl<'a> Project {
 
     /// If the project tab is active.
     pub fn is_current_project(&self) -> bool {
-        unsafe {
-            let low = Reaper::get().low();
-            let ptr =
-                low.EnumProjects(-1, CString::from(c_str!("")).into_raw(), 0);
-            self.pointer.as_ptr() == ptr
-        }
+        let low = Reaper::get().low();
+        let ptr = unsafe {
+            low.EnumProjects(-1, CString::from(c_str!("")).into_raw(), 0)
+        };
+        self.pointer.as_ptr() == ptr
     }
 
     /// Focus project for performing the closure
@@ -148,7 +147,7 @@ impl<'a> Project {
     }
 
     /// Mark project dirty (i.e. needing save).
-    pub fn mark_dirty(&mut self) -> Result<(), ReaRsError> {
+    pub fn mark_dirty(&mut self) -> ReaperResult<()> {
         unsafe {
             Reaper::get().low().MarkProjectDirty(self.get()?.as_ptr());
         }
@@ -174,7 +173,7 @@ impl<'a> Project {
     }
 
     /// Direct way to simulate pause button hit.
-    pub fn pause(&mut self) -> Result<(), ReaRsError> {
+    pub fn pause(&mut self) -> ReaperResult<()> {
         unsafe { Reaper::get().low().OnPauseButtonEx(self.get()?.as_ptr()) }
         Ok(())
     }
@@ -189,7 +188,7 @@ impl<'a> Project {
     }
 
     /// Direct way to simulate play button hit.
-    pub fn play(&mut self) -> Result<(), ReaRsError> {
+    pub fn play(&mut self) -> ReaperResult<()> {
         unsafe { Reaper::get().low().OnPlayButtonEx(self.get()?.as_ptr()) }
         Ok(())
     }
@@ -225,7 +224,7 @@ impl<'a> Project {
     }
 
     /// Direct way to simulate stop button hit.
-    pub fn stop(&mut self) -> Result<(), ReaRsError> {
+    pub fn stop(&mut self) -> ReaperResult<()> {
         unsafe { Reaper::get().low().OnStopButtonEx(self.get()?.as_ptr()) }
         Ok(())
     }
@@ -264,10 +263,7 @@ impl<'a> Project {
         }
     }
 
-    pub fn set_loop_enabled(
-        &mut self,
-        should_loop: bool,
-    ) -> Result<(), ReaRsError> {
+    pub fn set_loop_enabled(&mut self, should_loop: bool) -> ReaperResult<()> {
         unsafe {
             let val = match should_loop {
                 true => 1,
@@ -383,7 +379,7 @@ impl<'a> Project {
         end: Position,
     ) -> anyhow::Result<usize> {
         let rpr = Reaper::get();
-        let mut name = match name {
+        let name = match name {
             None => String::from(""),
             Some(s) => s.into(),
         };
@@ -403,7 +399,7 @@ impl<'a> Project {
                 is_region,
                 start.into(),
                 end.into(),
-                as_c_str(&name.with_null()).as_ptr(),
+                CString::new(name.with_null())?.as_ptr(),
                 desired_index,
                 color,
             );
@@ -426,7 +422,7 @@ impl<'a> Project {
                 info.is_region,
                 info.position.into(),
                 info.rgn_end.into(),
-                as_c_str(&info.name.to_string().with_null()).as_ptr(),
+                CString::new(info.name.to_string().with_null())?.as_ptr(),
                 info.color.to_native(),
             ) {
                 true => Ok(()),
@@ -624,30 +620,10 @@ impl<'a> Project {
     pub fn iter_tracks(&self) -> TracksIterator<'_> {
         TracksIterator::new(self)
     }
-    // pub fn iter_tracks_mut(
-    //     &mut self,
-    //     mut f: impl FnMut(Track) -> anyhow::Result<()>,
-    // ) -> anyhow::Result<()> {
-    //     for track in TracksIterator::new(self) {
-    //         let track = Track::new(self, track.get()?);
-    //         f(track)?
-    //     }
-    //     Ok(())
-    // }
 
     pub fn iter_selected_tracks(&self) -> SelectedTracksIterator<'_> {
         SelectedTracksIterator::new(self)
     }
-    // pub fn iter_selected_tracks_mut(
-    //     &mut self,
-    //     mut f: impl FnMut(Track) -> anyhow::Result<()>,
-    // ) -> anyhow::Result<()> {
-    //     for track in SelectedTracksIterator::new(self) {
-    //         let track = Track::new(self, track.get()?);
-    //         f(track)?
-    //     }
-    //     Ok(())
-    // }
 
     pub fn iter_items(&'a self) -> ItemsIterator<'a> {
         ItemsIterator::new(self)
@@ -708,7 +684,7 @@ impl<'a> Project {
     /// # Safety
     ///
     /// [Project::end_undo_block] has to be called after.
-    pub fn begin_undo_block(&mut self) -> Result<(), ReaRsError> {
+    pub fn begin_undo_block(&mut self) -> ReaperResult<()> {
         unsafe {
             Reaper::get().low().Undo_BeginBlock2(self.get()?.as_ptr());
         }
@@ -724,11 +700,11 @@ impl<'a> Project {
         &mut self,
         name: impl Into<String>,
         flags: UndoFlags,
-    ) -> Result<(), ReaRsError> {
+    ) -> ReaperResult<()> {
         unsafe {
             Reaper::get().low().Undo_EndBlock2(
                 self.get()?.as_ptr(),
-                as_c_str(&name.into().with_null()).as_ptr(),
+                CString::new(name.into().with_null())?.as_ptr(),
                 flags.bits() as i32,
             )
         }
@@ -751,7 +727,7 @@ impl<'a> Project {
     }
 
     /// Try to undo last action.
-    pub fn undo(&mut self) -> Result<(), ReaRsError> {
+    pub fn undo(&mut self) -> ReaperResult<()> {
         unsafe {
             match Reaper::get().low().Undo_DoUndo2(self.get()?.as_ptr()) {
                 0 => Err(ReaRsError::UnsuccessfulOperation("can not do undo")),
@@ -761,7 +737,7 @@ impl<'a> Project {
     }
 
     /// Try to redo last undone action.
-    pub fn redo(&mut self) -> Result<(), ReaRsError> {
+    pub fn redo(&mut self) -> ReaperResult<()> {
         unsafe {
             match Reaper::get().low().Undo_DoRedo2(self.get()?.as_ptr()) {
                 0 => Err(ReaRsError::UnsuccessfulOperation("can not do redo")),
@@ -793,12 +769,15 @@ impl<'a> Project {
     }
 
     /// Bypass (`true`) or un-bypass (`false`) FX on all tracks.
-    pub fn bypass_fx_on_all_tracks(&mut self, bypass: bool) {
-        self.with_current_project(|| -> anyhow::Result<()> {
+    pub fn bypass_fx_on_all_tracks(
+        &mut self,
+        bypass: bool,
+    ) -> ReaperResult<()> {
+        self.with_current_project(|| {
             Reaper::get().low().BypassFxAllTracks(bypass as i32);
             Ok(())
         })
-        .unwrap()
+        .map_err(|_| ReaRsError::InvalidObject("Project"))
     }
 
     /// Get the name of the next action in redo queue, if any.
@@ -807,9 +786,7 @@ impl<'a> Project {
             let ptr = Reaper::get().low().Undo_CanRedo2(self.get()?.as_ptr());
             match ptr.is_null() {
                 true => Ok(None),
-                false => Ok(Some(
-                    as_string(ptr).expect("can not convert to string"),
-                )),
+                false => Ok(Some(string_from_const_i8(ptr)?)),
             }
         }
     }
@@ -820,9 +797,7 @@ impl<'a> Project {
             let ptr = Reaper::get().low().Undo_CanUndo2(self.get()?.as_ptr());
             match ptr.is_null() {
                 true => Ok(None),
-                false => Ok(Some(
-                    as_string(ptr).expect("can not convert to string"),
-                )),
+                false => Ok(Some(string_from_const_i8(ptr)?)),
             }
         }
     }
@@ -843,7 +818,7 @@ impl<'a> Project {
         position: Position,
         move_view: bool,
         seek_play: bool,
-    ) -> Result<(), ReaRsError> {
+    ) -> ReaperResult<()> {
         let project = self.get()?;
         unsafe {
             Reaper::get().low().SetEditCurPos2(
@@ -857,12 +832,12 @@ impl<'a> Project {
     }
 
     /// Disarm record on all tracks.
-    pub fn disarm_rec_on_all_tracks(&mut self) {
+    pub fn disarm_rec_on_all_tracks(&mut self) -> ReaperResult<()> {
         self.with_current_project(|| -> anyhow::Result<()> {
             Reaper::get().low().ClearAllRecArmed();
             Ok(())
         })
-        .unwrap()
+        .map_err(|_| ReaRsError::InvalidObject("Project"))
     }
 
     /// Check if there is any FX window in focus.
@@ -934,7 +909,7 @@ impl<'a> Project {
     fn get_info_string(
         &self,
         param_name: impl Into<String>,
-    ) -> anyhow::Result<String> {
+    ) -> ReaperResult<String> {
         unsafe {
             if self.info_buf_size < 2 {
                 return Err(ReaRsError::InvalidObject(
@@ -942,12 +917,11 @@ impl<'a> Project {
                 )
                 .into());
             }
-            let mut param_name: String = param_name.into();
             let mut buf = vec![0_i8; self.info_buf_size];
             let project = self.get()?;
             let result = Reaper::get().low().GetSetProjectInfo_String(
                 project.as_ptr(),
-                as_c_str(&param_name.with_null()).as_ptr(),
+                CString::new(param_name.into().with_null())?.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             );
@@ -975,57 +949,52 @@ impl<'a> Project {
         &mut self,
         param_name: impl Into<String>,
         value: impl Into<String>,
-    ) -> anyhow::Result<()> {
-        unsafe {
-            let mut param_name: String = param_name.into();
-            let value: String = value.into();
-            let val = as_c_string(&value).into_raw();
-            let project = self.get()?;
-            let result = Reaper::get().low().GetSetProjectInfo_String(
+    ) -> ReaperResult<()> {
+        let value: String = value.into();
+        let val = CString::new(value)?.into_raw();
+        let project = self.get()?;
+        let result = unsafe {
+            Reaper::get().low().GetSetProjectInfo_String(
                 project.as_ptr(),
-                as_c_str(&param_name.with_null()).as_ptr(),
+                CString::new(param_name.into().with_null())?.as_ptr(),
                 val,
                 true,
-            );
-            match result {
-                false => Err(ReaRsError::InvalidObject(
-                    "can not set value to project.",
-                )
-                .into()),
-                true => Ok(()),
+            )
+        };
+        match result {
+            false => {
+                Err(ReaRsError::InvalidObject("can not set value to project.")
+                    .into())
             }
-            // Ok(())
+            true => Ok(()),
         }
     }
 
     pub fn name(&self) -> Result<String, ReaRsError> {
         let project = self.get()?;
+        let mut name = vec![0_i8; self.info_buf_size];
         unsafe {
-            let mut name = vec![0_i8; self.info_buf_size];
             Reaper::get().low().GetProjectName(
                 project.as_ptr(),
                 name.as_mut_ptr(),
                 self.info_buf_size as i32,
             );
-            string_from_buf(&name)
         }
+        string_from_buf(&name)
     }
 
     ///  title field from Project Settings/Notes dialog
-    pub fn get_title(&self) -> anyhow::Result<String> {
+    pub fn get_title(&self) -> ReaperResult<String> {
         self.get_info_string("PROJECT_TITLE")
     }
 
     ///  title field from Project Settings/Notes dialog
-    pub fn set_title(
-        &mut self,
-        title: impl Into<String>,
-    ) -> anyhow::Result<()> {
+    pub fn set_title(&mut self, title: impl Into<String>) -> ReaperResult<()> {
         self.set_info_string("PROJECT_TITLE", title)
     }
 
     ///  author field from Project Settings/Notes dialog
-    pub fn get_author(&self) -> anyhow::Result<String> {
+    pub fn get_author(&self) -> ReaperResult<String> {
         self.get_info_string("PROJECT_AUTHOR")
     }
 
@@ -1033,14 +1002,14 @@ impl<'a> Project {
     pub fn set_author(
         &mut self,
         author: impl Into<String>,
-    ) -> anyhow::Result<()> {
+    ) -> ReaperResult<()> {
         self.set_info_string("PROJECT_AUTHOR", author)
     }
 
     pub fn get_marker_guid(
         &self,
         marker_index: usize,
-    ) -> anyhow::Result<String> {
+    ) -> ReaperResult<String> {
         let pattern = format!("MARKER_GUID:{:?}", marker_index);
         warn!("this function, probably, not working properly");
         self.get_info_string(pattern)
@@ -1049,7 +1018,7 @@ impl<'a> Project {
     pub fn get_track_group_name(
         &self,
         group_index: usize,
-    ) -> anyhow::Result<String> {
+    ) -> ReaperResult<String> {
         let group_index = match group_index {
             0..=63 => group_index + 1,
             _ => {
@@ -1068,7 +1037,7 @@ impl<'a> Project {
         &mut self,
         group_index: usize,
         track_group_name: impl Into<String>,
-    ) -> anyhow::Result<()> {
+    ) -> ReaperResult<()> {
         let group_index = match group_index {
             0..=63 => group_index + 1,
             _ => {
@@ -1086,7 +1055,7 @@ impl<'a> Project {
     pub fn get_record_path(
         &self,
         secondary_path: bool,
-    ) -> anyhow::Result<PathBuf> {
+    ) -> ReaperResult<PathBuf> {
         let param_name = match secondary_path {
             false => "RECORD_PATH",
             true => "RECORD_PATH_SECONDARY",
@@ -1095,7 +1064,7 @@ impl<'a> Project {
     }
 
     /// Project path.
-    pub fn get_path(&self) -> anyhow::Result<PathBuf> {
+    pub fn get_path(&self) -> ReaperResult<PathBuf> {
         let project = self.get()?;
         unsafe {
             let mut buf = vec![0_i8; self.info_buf_size];
@@ -1113,7 +1082,7 @@ impl<'a> Project {
         &mut self,
         secondary_path: bool,
         directory: impl Into<PathBuf>,
-    ) -> anyhow::Result<()> {
+    ) -> ReaperResult<()> {
         let param_name = match secondary_path {
             false => "RECORD_PATH",
             true => "RECORD_PATH_SECONDARY",
@@ -1127,14 +1096,14 @@ impl<'a> Project {
         )
     }
 
-    pub fn get_render_directory(&self) -> anyhow::Result<PathBuf> {
+    pub fn get_render_directory(&self) -> ReaperResult<PathBuf> {
         Ok(PathBuf::from(self.get_info_string("RENDER_FILE")?))
     }
 
     pub fn set_render_directory(
         &mut self,
         directory: impl Into<PathBuf>,
-    ) -> anyhow::Result<()> {
+    ) -> ReaperResult<()> {
         let directory: PathBuf = directory.into();
         self.set_info_string(
             "RENDER_FILE",
@@ -1145,7 +1114,7 @@ impl<'a> Project {
     }
 
     ///  render file name (may contain wildcards)
-    pub fn get_render_file(&self) -> anyhow::Result<String> {
+    pub fn get_render_file(&self) -> ReaperResult<String> {
         self.get_info_string("RENDER_PATTERN")
     }
 
@@ -1153,7 +1122,7 @@ impl<'a> Project {
     pub fn set_render_file(
         &mut self,
         file: impl Into<String>,
-    ) -> anyhow::Result<()> {
+    ) -> ReaperResult<()> {
         self.set_info_string("RENDER_PATTERN", file)
     }
 
@@ -1164,7 +1133,7 @@ impl<'a> Project {
     pub fn get_render_format(
         &self,
         secondary_format: bool,
-    ) -> anyhow::Result<String> {
+    ) -> ReaperResult<String> {
         let param = match secondary_format {
             false => "RENDER_FORMAT",
             true => "RENDER_FORMAT2",
@@ -1187,7 +1156,7 @@ impl<'a> Project {
         &mut self,
         format: impl Into<String>,
         secondary_format: bool,
-    ) -> anyhow::Result<()> {
+    ) -> ReaperResult<()> {
         let param = match secondary_format {
             false => "RENDER_FORMAT",
             true => "RENDER_FORMAT2",
@@ -1196,7 +1165,7 @@ impl<'a> Project {
     }
 
     /// Filenames, that will be rendered.
-    pub fn get_render_targets(&self) -> anyhow::Result<Vec<String>> {
+    pub fn get_render_targets(&self) -> ReaperResult<Vec<String>> {
         Ok(self
             .get_info_string("RENDER_TARGETS")?
             .split(";")
@@ -1205,17 +1174,20 @@ impl<'a> Project {
     }
 
     /// Will return `PlayRate::from(1.0)` in normal conditions.
-    pub fn get_play_rate(&self, position: impl Into<Position>) -> PlayRate {
-        let project = self.get().expect("should get project ptr");
-        unsafe {
+    pub fn get_play_rate(
+        &self,
+        position: impl Into<Position>,
+    ) -> ReaperResult<PlayRate> {
+        let project = self.get()?;
+        Ok(unsafe {
             PlayRate::from(Reaper::get().low().Master_GetPlayRateAtTime(
                 position.into().into(),
                 project.as_ptr(),
             ))
-        }
+        })
     }
 
-    pub fn save(&mut self, force_save_as: bool) -> Result<(), ReaRsError> {
+    pub fn save(&mut self, force_save_as: bool) -> ReaperResult<()> {
         let project = self.get()?;
         unsafe {
             Reaper::get()
@@ -1228,7 +1200,7 @@ impl<'a> Project {
     pub fn select_all_items(
         &mut self,
         should_select: bool,
-    ) -> Result<(), ReaRsError> {
+    ) -> ReaperResult<()> {
         let project = self.get()?;
         unsafe {
             Reaper::get()
@@ -1238,7 +1210,10 @@ impl<'a> Project {
         Ok(())
     }
 
-    pub fn select_all_tracks(&mut self, should_select: bool) {
+    pub fn select_all_tracks(
+        &mut self,
+        should_select: bool,
+    ) -> ReaperResult<()> {
         self.with_current_project(|| {
             let id = match should_select {
                 true => CommandId::new(40297),
@@ -1247,10 +1222,10 @@ impl<'a> Project {
             Reaper::get().perform_action(id, 0, Some(self));
             Ok(())
         })
-        .unwrap()
+        .map_err(|_| ReaRsError::InvalidObject("Project"))
     }
 
-    pub fn solo_all_tracks(&mut self, solo: bool) {
+    pub fn solo_all_tracks(&mut self, solo: bool) -> ReaperResult<()> {
         self.with_current_project(|| {
             Reaper::get().low().SoloAllTracks(match solo {
                 true => 1,
@@ -1258,117 +1233,143 @@ impl<'a> Project {
             });
             Ok(())
         })
-        .expect("should not be error in inner closure.")
+        .map_err(|_| ReaRsError::InvalidObject("Project"))
     }
-    pub fn mute_all_tracks(&mut self, mute: bool) {
+    pub fn mute_all_tracks(&mut self, mute: bool) -> ReaperResult<()> {
         self.with_current_project(|| {
             Reaper::get().low().MuteAllTracks(mute);
             Ok(())
         })
-        .expect("should not be error in inner closure.")
+        .map_err(|_| ReaRsError::InvalidObject("Project"))
     }
-    pub fn clear_all_rec_armed_tracks(&mut self) {
+
+    pub fn clear_all_rec_armed_tracks(&mut self) -> ReaperResult<()> {
         self.with_current_project(|| {
             Reaper::get().low().ClearAllRecArmed();
             Ok(())
         })
-        .expect("should not be error in inner closure.")
+        .map_err(|_| ReaRsError::InvalidObject("Project"))
     }
 
-    fn get_info_value(&self, param_name: impl Into<String>) -> f64 {
-        let project = self.get().expect("should get project ptr");
-        unsafe {
+    fn get_info_value(
+        &self,
+        param_name: impl Into<String>,
+    ) -> ReaperResult<f64> {
+        let project = self.get()?;
+        Ok(unsafe {
             Reaper::get().low().GetSetProjectInfo(
                 project.as_ptr(),
-                as_c_str(&param_name.into().with_null()).as_ptr(),
+                CString::new(param_name.into().with_null())?.as_ptr(),
                 0.0,
                 false,
             )
-        }
+        })
     }
-    fn set_info_value(&mut self, param_name: impl Into<String>, value: f64) {
-        let project = self.get().expect("should get project ptr");
+
+    fn set_info_value(
+        &mut self,
+        param_name: impl Into<String>,
+        value: f64,
+    ) -> ReaperResult<()> {
+        let project = self.get()?;
         unsafe {
             Reaper::get().low().GetSetProjectInfo(
                 project.as_ptr(),
-                as_c_str(&param_name.into().with_null()).as_ptr(),
+                CString::new(param_name.into().with_null())?.as_ptr(),
                 value,
                 true,
             );
         }
+        Ok(())
     }
 
-    pub fn get_render_bounds_mode(&self) -> BoundsMode {
-        let val = self.get_info_value("RENDER_BOUNDSFLAG");
+    pub fn get_render_bounds_mode(&self) -> ReaperResult<BoundsMode> {
+        let val = self.get_info_value("RENDER_BOUNDSFLAG")?;
         BoundsMode::from_int(val as u32)
-            .expect("should convert to bounds mode.")
+            .map_err(|e| ReaRsError::IntEnum(e.to_string()))
     }
-    pub fn set_render_bounds_mode(&mut self, mode: BoundsMode) {
+
+    pub fn set_render_bounds_mode(
+        &mut self,
+        mode: BoundsMode,
+    ) -> ReaperResult<()> {
         let mode = mode.int_value();
         self.set_info_value("RENDER_BOUNDSFLAG", mode as f64)
     }
 
-    pub fn get_render_settings(&self) -> RenderSettings {
+    pub fn get_render_settings(&self) -> ReaperResult<RenderSettings> {
         let mut settings =
-            RenderSettings::from_raw(self.get_info_value("RENDER_SETTINGS"));
+            RenderSettings::from_raw(self.get_info_value("RENDER_SETTINGS")?);
         settings.add_to_project =
-            self.get_info_value("RENDER_ADDTOPROJ") as u32 == 1;
-        settings
+            self.get_info_value("RENDER_ADDTOPROJ")? as u32 == 1;
+        Ok(settings)
     }
-    pub fn set_render_settings(&mut self, settings: RenderSettings) {
-        self.set_info_value("RENDER_SETTINGS", settings.to_raw());
+    pub fn set_render_settings(
+        &mut self,
+        settings: RenderSettings,
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_SETTINGS", settings.to_raw())?;
         let add_to_proj = match settings.add_to_project {
             true => 1,
             false => 0,
         };
-        self.set_info_value("RENDER_ADDTOPROJ", add_to_proj as f64);
+        self.set_info_value("RENDER_ADDTOPROJ", add_to_proj as f64)
     }
 
-    pub fn get_render_channels_amount(&self) -> u32 {
-        self.get_info_value("RENDER_CHANNELS") as u32
+    pub fn get_render_channels_amount(&self) -> ReaperResult<u32> {
+        Ok(self.get_info_value("RENDER_CHANNELS")? as u32)
     }
-    pub fn set_render_channels_amount(&mut self, channels_amount: u32) {
+    pub fn set_render_channels_amount(
+        &mut self,
+        channels_amount: u32,
+    ) -> ReaperResult<()> {
         self.set_info_value("RENDER_CHANNELS", channels_amount as f64)
     }
 
     /// If None — then sample rate from Reaper settings used.
-    pub fn get_srate(&self) -> Option<u32> {
-        match self.get_info_value("PROJECT_SRATE") as u32 {
-            0 => None,
-            val => Some(val),
+    pub fn get_srate(&self) -> ReaperResult<Option<u32>> {
+        match self.get_info_value("PROJECT_SRATE")? as u32 {
+            0 => Ok(None),
+            val => Ok(Some(val)),
         }
     }
     /// If None — then sample rate from Reaper settings used.
-    pub fn set_srate(&mut self, srate: impl Into<Option<u32>>) {
+    pub fn set_srate(
+        &mut self,
+        srate: impl Into<Option<u32>>,
+    ) -> ReaperResult<()> {
         let srate = srate.into();
-        self.set_info_value("PROJECT_SRATE", srate.unwrap_or(0) as f64);
+        self.set_info_value("PROJECT_SRATE", srate.unwrap_or(0) as f64)?;
         match srate {
             None => self.set_info_value("PROJECT_SRATE_USE", 1.0),
             Some(_) => self.set_info_value("PROJECT_SRATE_USE", 0.0),
-        };
+        }
     }
 
     /// If None — then project sample rate used.
-    pub fn get_render_srate(&self) -> Option<u32> {
-        match self.get_info_value("RENDER_SRATE") as u32 {
-            0 => None,
-            val => Some(val),
+    pub fn get_render_srate(&self) -> ReaperResult<Option<u32>> {
+        match self.get_info_value("RENDER_SRATE")? as u32 {
+            0 => Ok(None),
+            val => Ok(Some(val)),
         }
     }
     /// If None — then project sample rate used.
-    pub fn set_render_srate(&mut self, srate: impl Into<Option<u32>>) {
+    pub fn set_render_srate(
+        &mut self,
+        srate: impl Into<Option<u32>>,
+    ) -> ReaperResult<()> {
         let srate = srate.into();
-        self.set_info_value("RENDER_SRATE", srate.unwrap_or(0) as f64);
+        self.set_info_value("RENDER_SRATE", srate.unwrap_or(0) as f64)
     }
 
     /// Get in tuple (start, end)
     ///
     /// Valid only when [Project::get_render_bounds_mode] is
     /// [BoundsMode::Custom]
-    pub fn get_render_bounds(&self) -> (Position, Position) {
-        let start = self.get_info_value("RENDER_STARTPOS");
-        let end = self.get_info_value("RENDER_ENDPOS");
-        (Position::from(start), Position::from(end))
+    pub fn get_render_bounds(&self) -> ReaperResult<(Position, Position)> {
+        let start = self.get_info_value("RENDER_STARTPOS")?;
+        let end = self.get_info_value("RENDER_ENDPOS")?;
+        Ok((Position::from(start), Position::from(end)))
     }
     /// Valid only when [Project::get_render_bounds_mode] is
     /// [BoundsMode::Custom]
@@ -1376,24 +1377,28 @@ impl<'a> Project {
         &mut self,
         start: impl Into<Position>,
         end: impl Into<Position>,
-    ) {
-        self.set_info_value("RENDER_STARTPOS", start.into().into());
-        self.set_info_value("RENDER_ENDPOS", end.into().into());
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_STARTPOS", start.into().into())?;
+        self.set_info_value("RENDER_ENDPOS", end.into().into())
     }
 
-    pub fn get_render_tail(&self) -> RenderTail {
-        let tail =
-            Duration::from_millis(self.get_info_value("RENDER_TAILMS") as u64);
-        let flags_raw = self.get_info_value("RENDER_TAILFLAG");
+    pub fn get_render_tail(&self) -> ReaperResult<RenderTail> {
+        let tail = Duration::from_millis(
+            self.get_info_value("RENDER_TAILMS")? as u64,
+        );
+        let flags_raw = self.get_info_value("RENDER_TAILFLAG")?;
         let flags = RenderTailFlags::from_bits(flags_raw as u32)
-            .expect("Can not get tail flags");
-        RenderTail { tail, flags }
+            .ok_or(ReaRsError::InvalidObject("Can not get tail flags"))?;
+        Ok(RenderTail { tail, flags })
     }
-    pub fn set_render_tail(&mut self, render_tail: RenderTail) {
+    pub fn set_render_tail(
+        &mut self,
+        render_tail: RenderTail,
+    ) -> ReaperResult<()> {
         let tail = render_tail.tail.as_millis() as f64;
         let flags = render_tail.flags.bits();
-        self.set_info_value("RENDER_TAILMS", tail);
-        self.set_info_value("RENDER_TAILFLAG", flags as f64);
+        self.set_info_value("RENDER_TAILMS", tail)?;
+        self.set_info_value("RENDER_TAILFLAG", flags as f64)
     }
 }
 

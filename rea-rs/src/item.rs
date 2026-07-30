@@ -1,13 +1,13 @@
 use crate::{
     ptr_wrappers::{MediaItem, MediaItemTake, MediaTrack, ReaProject},
+    utils::string_from_buf,
     utils::WithNull,
-    utils::{as_c_str, as_c_string, string_from_buf},
     Color, KnowsProject, Position, Project, ProjectContext, ReaRsError,
     Reaper, ReaperResult, Take, TimeMode, Track, Volume, WithReaperPtr, GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{ffi::CString, time::Duration};
 
 #[derive(Debug, PartialEq)]
 pub struct Item {
@@ -119,11 +119,11 @@ impl Item {
         &self,
         category: impl Into<String>,
     ) -> ReaperResult<f64> {
-        let mut category = category.into();
+        let category = category.into();
         Ok(unsafe {
             Reaper::get().low().GetMediaItemInfo_Value(
                 self.get()?.as_ptr(),
-                as_c_str(&category.with_null()).as_ptr(),
+                CString::new(category.with_null())?.as_ptr(),
             )
         })
     }
@@ -268,12 +268,12 @@ impl Item {
                 "buffer size must be at least 2",
             ));
         }
-        let mut category = category.into();
+        let category = category.into();
         let mut buf = vec![0_i8; buf_size];
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemInfo_String(
                 self.get()?.as_ptr(),
-                as_c_str(category.with_null()).as_ptr(),
+                CString::new(category.with_null())?.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             )
@@ -444,11 +444,11 @@ impl Item {
         category: impl Into<String>,
         value: f64,
     ) -> ReaperResult<()> {
-        let mut category = category.into();
+        let category = category.into();
         let result = unsafe {
             Reaper::get().low().SetMediaItemInfo_Value(
                 self.get()?.as_ptr(),
-                as_c_str(category.with_null()).as_ptr(),
+                CString::new(category.with_null())?.as_ptr(),
                 value,
             )
         };
@@ -553,13 +553,13 @@ impl Item {
         category: impl Into<String>,
         value: impl Into<String>,
     ) -> ReaperResult<()> {
-        let mut category = category.into();
+        let category = category.into();
         let value = value.into();
-        let buf = as_c_string(&value).into_raw();
+        let buf = CString::new(value)?.into_raw();
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemInfo_String(
                 self.get()?.as_ptr(),
-                as_c_str(category.with_null()).as_ptr(),
+                CString::new(category.with_null())?.as_ptr(),
                 buf,
                 true,
             )
