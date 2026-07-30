@@ -358,6 +358,139 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         }))
     }
 
+    pub fn is_active(&self) -> ReaperResult<bool> {
+        let Ok(result) = self.get_info_string("ACTIVE", 64)?.parse::<i32>()
+        else {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "can not parse get_info_string result as i32",
+            ));
+        };
+        Ok(result > 0)
+    }
+
+    pub fn set_active(&mut self, active: bool) -> ReaperResult<()> {
+        self.set_info_string(
+            "ACTIVE",
+            match active {
+                true => "1".to_string(),
+                false => "0".to_string(),
+            },
+        )
+    }
+
+    pub fn is_armed(&self) -> ReaperResult<bool> {
+        let Ok(result) = self.get_info_string("ARM", 64)?.parse::<i32>()
+        else {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "can not parse get_info_string result as i32",
+            ));
+        };
+        Ok(result > 0)
+    }
+
+    pub fn set_armed(&mut self, armed: bool) -> ReaperResult<()> {
+        self.set_info_string(
+            "ARM",
+            match armed {
+                true => "1".to_string(),
+                false => "0".to_string(),
+            },
+        )
+    }
+
+    pub fn is_visible(&self) -> ReaperResult<bool> {
+        let Ok(result) = self.get_info_string("VISIBLE", 64)?.parse::<i32>()
+        else {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "can not parse get_info_string result as i32",
+            ));
+        };
+        Ok(result > 0)
+    }
+
+    pub fn set_visible(&mut self, visible: bool) -> ReaperResult<()> {
+        self.set_info_string(
+            "VISIBLE",
+            match visible {
+                true => "1".to_string(),
+                false => "0".to_string(),
+            },
+        )
+    }
+
+    /// show envelope in separate lane
+    pub fn is_show_line(&self) -> ReaperResult<bool> {
+        let Ok(result) = self.get_info_string("SHOWLANE", 64)?.parse::<i32>()
+        else {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "can not parse get_info_string result as i32",
+            ));
+        };
+        Ok(result > 0)
+    }
+
+    /// show envelope in separate lane
+    pub fn set_show_line(&mut self, show_line: bool) -> ReaperResult<()> {
+        self.set_info_string(
+            "SHOWLANE",
+            match show_line {
+                true => "1".to_string(),
+                false => "0".to_string(),
+            },
+        )
+    }
+
+    fn get_info_string(
+        &self,
+        param: impl Into<String>,
+        buf_size: usize,
+    ) -> ReaperResult<String> {
+        let param = param.into();
+        let param = CString::new(param)?;
+        let mut buf = vec![0_i8; buf_size];
+        if !unsafe {
+            Reaper::get().low().GetSetEnvelopeInfo_String(
+                self.get()?.as_ptr(),
+                param.as_ptr(),
+                buf.as_mut_ptr(),
+                false,
+            )
+        } {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "can not get envelope string value",
+            ));
+        }
+        string_from_buf(&buf)
+    }
+
+    fn set_info_string(
+        &mut self,
+        param: impl Into<String>,
+        string: String,
+    ) -> ReaperResult<()> {
+        let param = param.into();
+        let param = CString::new(param)?;
+        let string = CString::new(string).map_err(|_| {
+            ReaRsError::UnsuccessfulOperation(
+                "Can not convert string value to CString",
+            )
+        })?;
+        if unsafe {
+            Reaper::get().low().GetSetEnvelopeInfo_String(
+                self.get()?.as_ptr(),
+                param.as_ptr(),
+                string.as_ptr() as *mut i8,
+                true,
+            )
+        } {
+            Ok(())
+        } else {
+            Err(ReaRsError::UnsuccessfulOperation(
+                "can not get envelope string value",
+            ))
+        }
+    }
+
     /// Y offset of envelope relative to parent track
     ///
     /// (may be separate lane or overlap with track contents)
