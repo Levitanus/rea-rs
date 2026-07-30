@@ -47,9 +47,9 @@ fn open_egui_baseview_window_action(_: &mut ActionHook) -> TestStepResult {
             DockableEguiWindow::new(
                 "rea-rs egui-baseview (dockable)",
                 "rea_rs_egui_baseview_demo",
-                baseview::dpi::Size::new(
-                    baseview::dpi::LogicalSize::new(520.0, 340.0),
-                ),
+                baseview::dpi::Size::new(baseview::dpi::LogicalSize::new(
+                    520.0, 340.0,
+                )),
             )
         });
 
@@ -88,10 +88,8 @@ fn open_egui_baseview_window_action(_: &mut ActionHook) -> TestStepResult {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 if ui.button("⛓️ Float").clicked() {
-                    EGUI_WINDOW_DOCK_REQUEST.store(
-                        u32::MAX,
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
+                    EGUI_WINDOW_DOCK_REQUEST
+                        .store(u32::MAX, std::sync::atomic::Ordering::Relaxed);
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
 
