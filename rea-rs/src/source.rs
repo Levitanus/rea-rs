@@ -50,7 +50,7 @@ impl Source {
         Ok(Self {
             take: take.get()?,
             project_ptr: Some(take.project().get()?),
-            item_ptr: Some(take.item()?.get()?),
+            item_ptr: Some(take.parent_item()?.get()?),
             ptr,
             should_check: true,
         })

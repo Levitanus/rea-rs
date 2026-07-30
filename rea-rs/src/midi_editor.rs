@@ -1,6 +1,6 @@
 use crate::{
-    ptr_wrappers::{Hwnd, MediaItem, MediaItemTake},
-    Item, Project, ReaRsError, Reaper, ReaperResult, WithReaperPtr,
+    ptr_wrappers::{Hwnd, MediaItemTake},
+    ReaRsError, Reaper, ReaperResult, Take, WithReaperPtr,
 };
 
 #[derive(Debug, PartialEq)]
@@ -38,23 +38,12 @@ impl MIDIEditor {
             checked: true,
         }
     }
-    pub fn item(&self, project: &Project) -> ReaperResult<Item> {
-        Item::new(project, self.item_ptr()?)
-    }
-    pub fn item_mut(&mut self, project: &Project) -> ReaperResult<Item> {
-        Item::new(project, self.item_ptr()?)
-    }
-    fn item_ptr(&self) -> ReaperResult<MediaItem> {
+    pub fn get_active_take(&self) -> ReaperResult<Take> {
         let rpr = Reaper::get().low();
         let ptr = unsafe { rpr.MIDIEditor_GetTake(self.get()?.as_ptr()) };
         match MediaItemTake::new(ptr) {
             None => Err(ReaRsError::NullPtr("MIDI editor take")),
-            Some(ptr) => {
-                let item_ptr =
-                    unsafe { rpr.GetMediaItemTake_Item(ptr.as_ptr()) };
-                MediaItem::new(item_ptr)
-                    .ok_or(ReaRsError::NullPtr("MIDI editor item"))
-            }
+            Some(ptr) => Take::new(ptr, None),
         }
     }
 }

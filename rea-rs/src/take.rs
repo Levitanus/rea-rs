@@ -2,13 +2,14 @@ use std::{ffi::c_char, mem::MaybeUninit};
 
 use crate::{
     ptr_wrappers::{
-        self, MediaItem, MediaItemTake, PcmSource, ReaProject, TrackEnvelope,
+        self, MediaItem, MediaItemTake, MediaTrack, PcmSource, ReaProject,
+        TrackEnvelope,
     },
     utils::{as_c_str, as_c_string, as_string, string_from_buf, WithNull},
     AudioAccessor, Color, Envelope, FXParent, Item, KnowsProject,
     MidiEventBuilder, Pan, PanLaw, Pitch, PlayRate, Project, ProjectContext,
-    ReaRsError, Reaper, ReaperResult, Source, SourceOffset, TakeFX, Volume,
-    WithReaperPtr, FX, GUID,
+    ReaRsError, Reaper, ReaperResult, Source, SourceOffset, TakeFX, Track,
+    Volume, WithReaperPtr, FX, GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
@@ -57,16 +58,23 @@ impl WithReaperPtr for Take {
     }
 }
 impl Take {
-    pub fn new(ptr: MediaItemTake, item: &Item) -> ReaperResult<Self> {
+    pub fn new<'a>(
+        ptr: MediaItemTake,
+        item: Option<&Item>,
+    ) -> ReaperResult<Self> {
+        let (item_ptr, project_ptr) = match item {
+            None => (None, None),
+            Some(item) => (Some(item.get()?), Some(item.project().get()?)),
+        };
         Ok(Self {
             ptr,
             should_check: true,
-            item_ptr: Some(item.get()?),
-            project_ptr: Some(item.project().get()?),
+            item_ptr,
+            project_ptr,
         })
     }
 
-    pub fn item(&self) -> ReaperResult<Item> {
+    pub fn parent_item(&self) -> ReaperResult<Item> {
         let item = match self.item_ptr {
             Some(ptr) => Item::from_raw_project_ptr(self.project_ptr, ptr),
             None => {
@@ -85,6 +93,19 @@ impl Take {
         Ok(item)
     }
 
+    pub fn parent_track(&self) -> ReaperResult<Track> {
+        let track_ptr = unsafe {
+            Reaper::get()
+                .low()
+                .GetMediaItemTake_Track(self.get()?.as_ptr())
+        };
+        Ok(Track::new(
+            self.project_ptr,
+            MediaTrack::new(track_ptr)
+                .ok_or(ReaRsError::NullPtr("Parent Track"))?,
+        ))
+    }
+
     pub fn get_visible_fx(&self) -> ReaperResult<Option<TakeFX>> {
         let result = unsafe {
             Reaper::get()
@@ -99,7 +120,7 @@ impl Take {
     }
 
     pub fn is_active(&self) -> ReaperResult<bool> {
-        Ok(self.item()?.active_take()?.get()? == self.get()?)
+        Ok(self.parent_item()?.active_take()?.get()? == self.get()?)
     }
 
     pub fn is_midi(&self) -> ReaperResult<bool> {

@@ -70,14 +70,14 @@ impl Item {
         };
         match MediaTrack::new(ptr) {
             None => panic!("Got null ptr! Maybe track is deleted?"),
-            Some(ptr) => Track::new(&self.project(), ptr),
+            Some(ptr) => Ok(Track::new(self.project().get()?, ptr)),
         }
     }
 
     pub fn get_take(&self, index: usize) -> ReaperResult<Option<Take>> {
         let ptr = self.get_take_ptr(index)?;
         match ptr {
-            Some(ptr) => Ok(Some(Take::new(ptr, self)?)),
+            Some(ptr) => Ok(Some(Take::new(ptr, Some(self))?)),
             None => Ok(None),
         }
     }
@@ -98,7 +98,7 @@ impl Item {
         let ptr = self
             .active_take_ptr()?
             .ok_or(ReaRsError::NullPtr("active take"))?;
-        Take::new(ptr, self)
+        Take::new(ptr, Some(self))
     }
 
     fn active_take_ptr(&self) -> ReaperResult<Option<MediaItemTake>> {
@@ -305,7 +305,7 @@ impl Item {
         };
         match MediaItemTake::new(ptr) {
             None => panic!("can not make Take"),
-            Some(ptr) => Take::new(ptr, self),
+            Some(ptr) => Take::new(ptr, Some(self)),
         }
     }
 
@@ -315,7 +315,7 @@ impl Item {
     ) -> ReaperResult<Option<Take>> {
         let ptr = self.get_take_ptr(index)?;
         match ptr {
-            Some(ptr) => Ok(Some(Take::new(ptr, self)?)),
+            Some(ptr) => Ok(Some(Take::new(ptr, Some(self))?)),
             None => Ok(None),
         }
     }
@@ -324,7 +324,7 @@ impl Item {
         let ptr = self
             .active_take_ptr()?
             .ok_or(ReaRsError::NullPtr("active take"))?;
-        Take::new(ptr, self)
+        Take::new(ptr, Some(self))
     }
 
     pub fn set_position(
@@ -384,7 +384,7 @@ impl Item {
 
     pub fn make_only_selected_item(&mut self) -> ReaperResult<()> {
         let mut pr = self.project();
-        pr.select_all_items(false);
+        pr.select_all_items(false)?;
         self.set_selected(true)
     }
 

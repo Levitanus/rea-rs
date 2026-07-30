@@ -67,20 +67,23 @@ impl KnowsProject for Track {
     }
 }
 impl Track {
-    pub fn new(project: &Project, pointer: MediaTrack) -> ReaperResult<Self> {
-        Ok(Self {
+    pub fn new(
+        project_pointer: impl Into<Option<ReaProject>>,
+        pointer: MediaTrack,
+    ) -> Self {
+        Self {
             ptr: pointer,
-            project_ptr: Some(project.get()?),
+            project_ptr: project_pointer.into(),
             should_check: true,
             info_buf_size: 512,
-        })
+        }
     }
     pub fn from_index(
         project: &Project,
         index: usize,
     ) -> ReaperResult<Option<Self>> {
         if let Some(track) = project.get_track(index)? {
-            Ok(Some(Self::new(project, track.get_pointer())?))
+            Ok(Some(Self::new(project.get_pointer(), track.get_pointer())))
         } else {
             Ok(None)
         }
@@ -94,7 +97,9 @@ impl Track {
             .iter_tracks()
             .find(|tr| tr.name().map(|n| n == name).unwrap_or(false));
         match track {
-            Some(track) => Ok(Some(Self::new(project, track.ptr)?)),
+            Some(track) => {
+                Ok(Some(Self::new(project.get_pointer(), track.ptr)))
+            }
             None => Ok(None),
         }
     }
@@ -112,7 +117,7 @@ impl Track {
         };
         match MediaTrack::new(ptr) {
             None => Ok(None),
-            Some(ptr) => Ok(Some(Self::new(project, ptr)?)),
+            Some(ptr) => Ok(Some(Self::new(project.get_pointer(), ptr))),
         }
     }
     pub fn from_guid(
@@ -123,7 +128,9 @@ impl Track {
             .iter_tracks()
             .find(|tr| tr.guid().map(|n| n == guid).unwrap_or(false));
         match track {
-            Some(track) => Ok(Some(Self::new(project, track.ptr)?)),
+            Some(track) => {
+                Ok(Some(Self::new(project.get_pointer(), track.ptr)))
+            }
             None => Ok(None),
         }
     }
@@ -730,7 +737,7 @@ impl Track {
         };
         match MediaTrack::new(ptr) {
             None => Ok(None),
-            Some(ptr) => Ok(Some(Track::new(&self.project(), ptr)?)),
+            Some(ptr) => Ok(Some(Track::new(self.project_ptr, ptr))),
         }
     }
 

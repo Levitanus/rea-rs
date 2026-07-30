@@ -159,7 +159,7 @@ impl<'a> Project {
         let ptr = Reaper::get().low().GetLastTouchedTrack();
         match MediaTrack::new(ptr) {
             None => Ok(None),
-            Some(ptr) => Ok(Some(Track::new(self, ptr)?)),
+            Some(ptr) => Ok(Some(Track::new(self.get()?, ptr))),
         }
     }
 
@@ -169,7 +169,7 @@ impl<'a> Project {
         let ptr = Reaper::get().low().GetLastTouchedTrack();
         match MediaTrack::new(ptr) {
             None => Ok(None),
-            Some(ptr) => Ok(Some(Track::new(self, ptr)?)),
+            Some(ptr) => Ok(Some(Track::new(self.get()?, ptr))),
         }
     }
 
@@ -589,7 +589,7 @@ impl<'a> Project {
             );
             match ptr {
                 None => Ok(None),
-                Some(ptr) => Ok(Some(Track::new(self, ptr)?)),
+                Some(ptr) => Ok(Some(Track::new(self.get_pointer(), ptr))),
             }
         }
     }
@@ -606,7 +606,7 @@ impl<'a> Project {
             );
             match ptr {
                 None => Ok(None),
-                Some(ptr) => Ok(Some(Track::new(self, ptr)?)),
+                Some(ptr) => Ok(Some(Track::new(self.get_pointer(), ptr))),
             }
         }
     }
@@ -618,7 +618,7 @@ impl<'a> Project {
             )
             .ok_or(ReaRsError::NullPtr("Null Master Track"))?
         };
-        Track::new(self, ptr)
+        Ok(Track::new(self.get_pointer(), ptr))
     }
 
     pub fn iter_tracks(&self) -> TracksIterator<'_> {

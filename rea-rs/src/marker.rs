@@ -211,7 +211,7 @@ impl<'a> Iterator for RenderedTracksIterator<'a> {
             );
             self.index += 1;
             let ptr = MediaTrack::new(ptr)?;
-            Track::new(self.project, ptr).ok()
+            Some(Track::new(self.project.get().ok()?, ptr))
         }
     }
 }

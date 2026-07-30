@@ -278,7 +278,7 @@ pub trait GenericSend<'a>: SendIntType + Sized {
         match ptr {
             None => Ok(None),
             Some(ptr) => {
-                Ok(Some(Track::new(&self.parent_track().project(), ptr)?))
+                Ok(Some(Track::new(self.parent_track().project().get()?, ptr)))
             }
         }
     }
@@ -296,7 +296,7 @@ pub trait GenericSend<'a>: SendIntType + Sized {
         match ptr {
             None => Ok(None),
             Some(ptr) => {
-                Ok(Some(Track::new(&self.parent_track().project(), ptr)?))
+                Ok(Some(Track::new(self.parent_track().project().get()?, ptr)))
             }
         }
     }

@@ -240,21 +240,6 @@ pub enum CSurfPan {
     Dual(f64, f64),
 }
 
-/// instantiate a track from a raw mut pointer.
-/// `track_from_mut(track_pointer, project)`
-macro_rules! track_from_mut {
-    ($mut_ptr:ident, $project:ident) => {{
-        let track_ptr =
-            MediaTrack::new($mut_ptr as _).expect("null pointer to track");
-        match Track::new(&$project, track_ptr) {
-            Ok(track) => track,
-            Err(e) => {
-                panic!("Failed to create track: {:?}", e);
-            }
-        }
-    }};
-}
-
 #[derive(Debug)]
 pub(crate) struct ControlSurfaceWrap {
     child: Arc<RefCell<dyn ControlSurface>>,
@@ -280,6 +265,18 @@ impl ControlSurfaceWrap {
         match result {
             Ok(_) => (),
             Err(e) => self.error(e),
+        }
+    }
+    fn track_from_mut(
+        &self,
+        track_mut: *mut rea_rs_low::raw::MediaTrack,
+    ) -> Option<Track> {
+        match MediaTrack::new(track_mut) {
+            None => {
+                self.error(ReaRsError::NullPtr("Track").into());
+                None
+            }
+            Some(ptr) => Some(Track::new(None, ptr)),
         }
     }
 }
@@ -332,21 +329,11 @@ impl IReaperControlSurface for ControlSurfaceWrap {
         trackid: *mut rea_rs_low::raw::MediaTrack,
         volume: f64,
     ) {
-        let project = Reaper::get().current_project();
-        let Some(pointer) = MediaTrack::new(trackid) else {
-            self.error(ReaRsError::NullPtr("track").into());
-            return;
-        };
-        let mut track = match Track::new(&project, pointer) {
-            Ok(track) => track,
-            Err(e) => {
-                self.error(e.into());
-                return;
-            }
-        };
-        self.check_for_error(
-            self.child.borrow().set_surface_volume(&mut track, volume),
-        )
+        if let Some(mut track) = self.track_from_mut(trackid) {
+            self.check_for_error(
+                self.child.borrow().set_surface_volume(&mut track, volume),
+            )
+        }
     }
 
     fn SetSurfacePan(
@@ -354,21 +341,11 @@ impl IReaperControlSurface for ControlSurfaceWrap {
         trackid: *mut rea_rs_low::raw::MediaTrack,
         pan: f64,
     ) {
-        let project = Reaper::get().current_project();
-        let Some(pointer) = MediaTrack::new(trackid) else {
-            self.error(ReaRsError::NullPtr("track").into());
-            return;
-        };
-        let mut track = match Track::new(&project, pointer) {
-            Ok(track) => track,
-            Err(e) => {
-                self.error(e.into());
-                return;
-            }
-        };
-        self.check_for_error(
-            self.child.borrow().set_surface_pan(&mut track, pan),
-        )
+        if let Some(mut track) = self.track_from_mut(trackid) {
+            self.check_for_error(
+                self.child.borrow().set_surface_pan(&mut track, pan),
+            )
+        }
     }
 
     fn SetSurfaceMute(
@@ -376,21 +353,11 @@ impl IReaperControlSurface for ControlSurfaceWrap {
         trackid: *mut rea_rs_low::raw::MediaTrack,
         mute: bool,
     ) {
-        let project = Reaper::get().current_project();
-        let Some(pointer) = MediaTrack::new(trackid) else {
-            self.error(ReaRsError::NullPtr("track").into());
-            return;
-        };
-        let mut track = match Track::new(&project, pointer) {
-            Ok(track) => track,
-            Err(e) => {
-                self.error(e.into());
-                return;
-            }
-        };
-        self.check_for_error(
-            self.child.borrow().set_surface_mute(&mut track, mute),
-        )
+        if let Some(mut track) = self.track_from_mut(trackid) {
+            self.check_for_error(
+                self.child.borrow().set_surface_mute(&mut track, mute),
+            )
+        }
     }
 
     fn SetSurfaceSelected(
@@ -398,23 +365,13 @@ impl IReaperControlSurface for ControlSurfaceWrap {
         trackid: *mut rea_rs_low::raw::MediaTrack,
         selected: bool,
     ) {
-        let project = Reaper::get().current_project();
-        let Some(pointer) = MediaTrack::new(trackid) else {
-            self.error(ReaRsError::NullPtr("track").into());
-            return;
-        };
-        let mut track = match Track::new(&project, pointer) {
-            Ok(track) => track,
-            Err(e) => {
-                self.error(e.into());
-                return;
-            }
-        };
-        self.check_for_error(
-            self.child
-                .borrow()
-                .set_surface_selected(&mut track, selected),
-        )
+        if let Some(mut track) = self.track_from_mut(trackid) {
+            self.check_for_error(
+                self.child
+                    .borrow()
+                    .set_surface_selected(&mut track, selected),
+            )
+        }
     }
 
     fn SetSurfaceSolo(
@@ -422,21 +379,11 @@ impl IReaperControlSurface for ControlSurfaceWrap {
         trackid: *mut rea_rs_low::raw::MediaTrack,
         solo: bool,
     ) {
-        let project = Reaper::get().current_project();
-        let Some(pointer) = MediaTrack::new(trackid) else {
-            self.error(ReaRsError::NullPtr("track").into());
-            return;
-        };
-        let mut track = match Track::new(&project, pointer) {
-            Ok(track) => track,
-            Err(e) => {
-                self.error(e.into());
-                return;
-            }
-        };
-        self.check_for_error(
-            self.child.borrow().set_surface_solo(&mut track, solo),
-        )
+        if let Some(mut track) = self.track_from_mut(trackid) {
+            self.check_for_error(
+                self.child.borrow().set_surface_solo(&mut track, solo),
+            )
+        }
     }
 
     fn SetSurfaceRecArm(
@@ -444,21 +391,11 @@ impl IReaperControlSurface for ControlSurfaceWrap {
         trackid: *mut rea_rs_low::raw::MediaTrack,
         recarm: bool,
     ) {
-        let project = Reaper::get().current_project();
-        let Some(pointer) = MediaTrack::new(trackid) else {
-            self.error(ReaRsError::NullPtr("track").into());
-            return;
-        };
-        let mut track = match Track::new(&project, pointer) {
-            Ok(track) => track,
-            Err(e) => {
-                self.error(e.into());
-                return;
-            }
-        };
-        self.check_for_error(
-            self.child.borrow().set_surface_recarm(&mut track, recarm),
-        )
+        if let Some(mut track) = self.track_from_mut(trackid) {
+            self.check_for_error(
+                self.child.borrow().set_surface_recarm(&mut track, recarm),
+            )
+        }
     }
 
     fn SetPlayState(&self, play: bool, pause: bool, rec: bool) {
@@ -476,26 +413,16 @@ impl IReaperControlSurface for ControlSurfaceWrap {
         trackid: *mut rea_rs_low::raw::MediaTrack,
         title: *const std::os::raw::c_char,
     ) {
-        let project = Reaper::get().current_project();
-        let Some(pointer) = MediaTrack::new(trackid) else {
-            self.error(ReaRsError::NullPtr("track").into());
-            return;
-        };
-        let mut track = match Track::new(&project, pointer) {
-            Ok(track) => track,
-            Err(e) => {
-                self.error(e.into());
-                return;
-            }
-        };
-        let title = unsafe { CStr::from_ptr(title) };
-        let title = match title.to_str() {
-            Err(e) => return self.error(e.into()),
-            Ok(s) => s.to_string(),
-        };
-        self.check_for_error(
-            self.child.borrow().set_track_title(&mut track, title),
-        )
+        if let Some(mut track) = self.track_from_mut(trackid) {
+            let title = unsafe { CStr::from_ptr(title) };
+            let title = match title.to_str() {
+                Err(e) => return self.error(e.into()),
+                Ok(s) => s.to_string(),
+            };
+            self.check_for_error(
+                self.child.borrow().set_track_title(&mut track, title),
+            )
+        }
     }
 
     fn GetTouchState(
@@ -503,17 +430,8 @@ impl IReaperControlSurface for ControlSurfaceWrap {
         trackid: *mut rea_rs_low::raw::MediaTrack,
         is_pan: std::os::raw::c_int,
     ) -> bool {
-        let project = Reaper::get().current_project();
-        let Some(pointer) = MediaTrack::new(trackid) else {
-            self.error(ReaRsError::NullPtr("track").into());
+        let Some(mut track) = self.track_from_mut(trackid) else {
             return false;
-        };
-        let mut track = match Track::new(&project, pointer) {
-            Ok(track) => track,
-            Err(e) => {
-                self.error(e.into());
-                return false;
-            }
         };
         match self.child.borrow().get_touch_state(&mut track, is_pan) {
             Err(e) => {
@@ -533,21 +451,11 @@ impl IReaperControlSurface for ControlSurfaceWrap {
     }
 
     fn OnTrackSelection(&self, trackid: *mut rea_rs_low::raw::MediaTrack) {
-        let project = Reaper::get().current_project();
-        let Some(pointer) = MediaTrack::new(trackid) else {
-            self.error(ReaRsError::NullPtr("track").into());
-            return;
-        };
-        let mut track = match Track::new(&project, pointer) {
-            Ok(track) => track,
-            Err(e) => {
-                self.error(e.into());
-                return;
-            }
-        };
-        self.check_for_error(
-            self.child.borrow().on_track_selection(&mut track),
-        )
+        if let Some(mut track) = self.track_from_mut(trackid) {
+            self.check_for_error(
+                self.child.borrow().on_track_selection(&mut track),
+            )
+        }
     }
 
     fn IsKeyDown(&self, key: std::os::raw::c_int) -> bool {
@@ -567,11 +475,15 @@ impl IReaperControlSurface for ControlSurfaceWrap {
         parm2: *mut std::os::raw::c_void,
         parm3: *mut std::os::raw::c_void,
     ) -> std::os::raw::c_int {
-        let project = Reaper::get().current_project();
         let call = match call {
             raw::CSURF_EXT_RESET => CSurfExtended::Reset,
             raw::CSURF_EXT_SETINPUTMONITOR => {
-                let track = track_from_mut!(parm1, project);
+                let track = match self
+                    .track_from_mut(parm1 as *mut rea_rs_low::raw::MediaTrack)
+                {
+                    None => return 0,
+                    Some(track) => track,
+                };
                 let monitor = unsafe { *(parm2 as *mut i32) };
                 CSurfExtended::SetInputMonitor(track, monitor)
             }
@@ -597,7 +509,12 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 },
             ),
             raw::CSURF_EXT_SETSENDVOLUME => {
-                let track = track_from_mut!(parm1, project);
+                let track = match self
+                    .track_from_mut(parm1 as *mut rea_rs_low::raw::MediaTrack)
+                {
+                    None => return 0,
+                    Some(track) => track,
+                };
                 CSurfExtended::SetSendVolume {
                     track,
                     send_idx: unsafe { *(parm2 as *mut i32) } as usize,
@@ -605,7 +522,12 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 }
             }
             raw::CSURF_EXT_SETSENDPAN => {
-                let track = track_from_mut!(parm1, project);
+                let track = match self
+                    .track_from_mut(parm1 as *mut rea_rs_low::raw::MediaTrack)
+                {
+                    None => return 0,
+                    Some(track) => track,
+                };
                 CSurfExtended::SetSendPan {
                     track,
                     send_idx: unsafe { *(parm2 as *mut i32) } as usize,
@@ -613,7 +535,12 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 }
             }
             raw::CSURF_EXT_SETFXENABLED => {
-                let track = track_from_mut!(parm1, project);
+                let track = match self
+                    .track_from_mut(parm1 as *mut rea_rs_low::raw::MediaTrack)
+                {
+                    None => return 0,
+                    Some(track) => track,
+                };
                 CSurfExtended::SetFxEnabled {
                     track,
                     fx_idx: unsafe { *(parm2 as *mut i32) } as usize,
@@ -621,7 +548,12 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 }
             }
             raw::CSURF_EXT_SETFXPARAM => {
-                let track = track_from_mut!(parm1, project);
+                let track = match self
+                    .track_from_mut(parm1 as *mut rea_rs_low::raw::MediaTrack)
+                {
+                    None => return 0,
+                    Some(track) => track,
+                };
                 let fx_idx = unsafe { *(parm2 as *mut i32) } >> 16;
                 let param_idx =
                     unsafe { *(parm2 as *mut i32) } / 0b1000000000000000;
@@ -633,7 +565,12 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 }
             }
             raw::CSURF_EXT_SETFXPARAM_RECFX => {
-                let track = track_from_mut!(parm1, project);
+                let track = match self
+                    .track_from_mut(parm1 as *mut rea_rs_low::raw::MediaTrack)
+                {
+                    None => return 0,
+                    Some(track) => track,
+                };
                 let fx_idx = unsafe { *(parm2 as *mut i32) } >> 16;
                 let param_idx =
                     unsafe { *(parm2 as *mut i32) } / 0b1000000000000000;
@@ -658,7 +595,14 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             raw::CSURF_EXT_SETLASTTOUCHEDFX => {
                 let track = match parm1.is_null() {
                     true => None,
-                    false => Some(track_from_mut!(parm1, project)),
+                    false => Some(
+                        match self.track_from_mut(
+                            parm1 as *mut rea_rs_low::raw::MediaTrack,
+                        ) {
+                            None => return 0,
+                            Some(track) => track,
+                        },
+                    ),
                 };
                 let item_idx = match parm2.is_null() {
                     true => None,
@@ -677,7 +621,14 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             raw::CSURF_EXT_SETFOCUSEDFX => {
                 let track = match parm1.is_null() {
                     true => None,
-                    false => Some(track_from_mut!(parm1, project)),
+                    false => Some(
+                        match self.track_from_mut(
+                            parm1 as *mut rea_rs_low::raw::MediaTrack,
+                        ) {
+                            None => return 0,
+                            Some(track) => track,
+                        },
+                    ),
                 };
                 let item_idx = match parm2.is_null() {
                     true => None,
@@ -694,15 +645,30 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 }
             }
             raw::CSURF_EXT_SETLASTTOUCHEDTRACK => {
-                CSurfExtended::SetLastTouchedTrack(track_from_mut!(
-                    parm1, project
-                ))
+                CSurfExtended::SetLastTouchedTrack(
+                    match self.track_from_mut(
+                        parm1 as *mut rea_rs_low::raw::MediaTrack,
+                    ) {
+                        None => return 0,
+                        Some(track) => track,
+                    },
+                )
             }
-            raw::CSURF_EXT_SETMIXERSCROLL => {
-                CSurfExtended::SetMixerScroll(track_from_mut!(parm1, project))
-            }
+            raw::CSURF_EXT_SETMIXERSCROLL => CSurfExtended::SetMixerScroll(
+                match self
+                    .track_from_mut(parm1 as *mut rea_rs_low::raw::MediaTrack)
+                {
+                    None => return 0,
+                    Some(track) => track,
+                },
+            ),
             raw::CSURF_EXT_SETPAN_EX => {
-                let track = track_from_mut!(parm1, project);
+                let track = match self
+                    .track_from_mut(parm1 as *mut rea_rs_low::raw::MediaTrack)
+                {
+                    None => return 0,
+                    Some(track) => track,
+                };
                 let mode: i32 = unsafe { *(parm3 as *mut i32) };
                 match mode {
                     0 => CSurfExtended::SetpanEx {
@@ -747,7 +713,12 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 }
             }
             raw::CSURF_EXT_SETRECVVOLUME => {
-                let track = track_from_mut!(parm1, project);
+                let track = match self
+                    .track_from_mut(parm1 as *mut rea_rs_low::raw::MediaTrack)
+                {
+                    None => return 0,
+                    Some(track) => track,
+                };
                 CSurfExtended::SetRecvVolume {
                     track,
                     recv_idx: unsafe { *(parm2 as *mut i32) } as usize,
@@ -755,7 +726,12 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 }
             }
             raw::CSURF_EXT_SETRECVPAN => {
-                let track = track_from_mut!(parm1, project);
+                let track = match self
+                    .track_from_mut(parm1 as *mut rea_rs_low::raw::MediaTrack)
+                {
+                    None => return 0,
+                    Some(track) => track,
+                };
                 CSurfExtended::SetRecvPan {
                     track,
                     recv_idx: unsafe { *(parm2 as *mut i32) } as usize,
@@ -763,7 +739,12 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 }
             }
             raw::CSURF_EXT_SETFXOPEN => CSurfExtended::SetFxOpen {
-                track: track_from_mut!(parm1, project),
+                track: match self
+                    .track_from_mut(parm1 as *mut rea_rs_low::raw::MediaTrack)
+                {
+                    None => return 0,
+                    Some(track) => track,
+                },
                 fx_idx: unsafe { *(parm2 as *mut i32) } as usize,
                 opened: (parm3 as usize) != 0,
             },
@@ -771,7 +752,12 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 // REAPER passes flags in parm2 as INT_PTR, not as int*.
                 let flags = parm2 as usize;
                 CSurfExtended::SetFxChange {
-                    track: track_from_mut!(parm1, project),
+                    track: match self.track_from_mut(
+                        parm1 as *mut rea_rs_low::raw::MediaTrack,
+                    ) {
+                        None => return 0,
+                        Some(track) => track,
+                    },
                     is_rec_fx: (flags & 1) != 0,
                 }
             }
@@ -780,7 +766,12 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             }
             raw::CSURF_EXT_TRACKFX_PRESET_CHANGED => {
                 CSurfExtended::TrackFxPresetChanged {
-                    track: track_from_mut!(parm1, project),
+                    track: match self.track_from_mut(
+                        parm1 as *mut rea_rs_low::raw::MediaTrack,
+                    ) {
+                        None => return 0,
+                        Some(track) => track,
+                    },
                     fx_idx: unsafe { *(parm2 as *mut i32) } as usize,
                 }
             }

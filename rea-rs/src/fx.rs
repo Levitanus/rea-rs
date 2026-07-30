@@ -94,7 +94,7 @@ impl TrackFX {
         Ok(match index {
             -1 => None,
             x => Some(Self {
-                parent: Track::new(&parent.project(), parent.get()?)?,
+                parent: Track::new(parent.project().get()?, parent.get()?),
                 index: x as usize,
             }),
         })
@@ -122,7 +122,7 @@ impl FX for TrackFX {
         };
         Ok(match result {
             true => Some(Self {
-                parent: Track::new(&parent.project(), parent.get()?)?,
+                parent: Track::new(parent.project().get()?, parent.get()?),
                 index,
             }),
             false => None,
