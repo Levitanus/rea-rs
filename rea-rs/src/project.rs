@@ -1,7 +1,7 @@
 pub use crate::utils::WithReaperPtr;
 use crate::{
     ptr_wrappers::{MediaItem, MediaTrack, ReaProject},
-    utils::{string_from_buf, string_from_const_i8, WithNull},
+    utils::{string_from_buf, string_from_const_i8},
     Color, CommandId, Item, MarkerRegionInfo, MarkerRegionIterator, PlayRate,
     Position, ProjectContext, ReaRsError, Reaper, ReaperResult, TimeRange,
     TimeRangeKind, TimeSignature, Track, UndoFlags,
@@ -399,7 +399,7 @@ impl<'a> Project {
                 is_region,
                 start.into(),
                 end.into(),
-                CString::new(name.with_null())?.as_ptr(),
+                CString::new(name)?.as_ptr(),
                 desired_index,
                 color,
             );
@@ -422,7 +422,7 @@ impl<'a> Project {
                 info.is_region,
                 info.position.into(),
                 info.rgn_end.into(),
-                CString::new(info.name.to_string().with_null())?.as_ptr(),
+                CString::new(info.name.to_string())?.as_ptr(),
                 info.color.to_native(),
             ) {
                 true => Ok(()),
@@ -685,6 +685,7 @@ impl<'a> Project {
     ///
     /// [Project::end_undo_block] has to be called after.
     pub fn begin_undo_block(&mut self) -> ReaperResult<()> {
+        debug!("begin_undo_block");
         unsafe {
             Reaper::get().low().Undo_BeginBlock2(self.get()?.as_ptr());
         }
@@ -701,10 +702,12 @@ impl<'a> Project {
         name: impl Into<String>,
         flags: UndoFlags,
     ) -> ReaperResult<()> {
+        let name = name.into();
+        debug!("end undo block: {}", name);
         unsafe {
             Reaper::get().low().Undo_EndBlock2(
                 self.get()?.as_ptr(),
-                CString::new(name.into().with_null())?.as_ptr(),
+                CString::new(name)?.as_ptr(),
                 flags.bits() as i32,
             )
         }
@@ -921,7 +924,7 @@ impl<'a> Project {
             let project = self.get()?;
             let result = Reaper::get().low().GetSetProjectInfo_String(
                 project.as_ptr(),
-                CString::new(param_name.into().with_null())?.as_ptr(),
+                CString::new(param_name.into())?.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             );
@@ -956,7 +959,7 @@ impl<'a> Project {
         let result = unsafe {
             Reaper::get().low().GetSetProjectInfo_String(
                 project.as_ptr(),
-                CString::new(param_name.into().with_null())?.as_ptr(),
+                CString::new(param_name.into())?.as_ptr(),
                 val,
                 true,
             )
@@ -1259,7 +1262,7 @@ impl<'a> Project {
         Ok(unsafe {
             Reaper::get().low().GetSetProjectInfo(
                 project.as_ptr(),
-                CString::new(param_name.into().with_null())?.as_ptr(),
+                CString::new(param_name.into())?.as_ptr(),
                 0.0,
                 false,
             )
@@ -1275,7 +1278,7 @@ impl<'a> Project {
         unsafe {
             Reaper::get().low().GetSetProjectInfo(
                 project.as_ptr(),
-                CString::new(param_name.into().with_null())?.as_ptr(),
+                CString::new(param_name.into())?.as_ptr(),
                 value,
                 true,
             );

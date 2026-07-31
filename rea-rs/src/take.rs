@@ -8,7 +8,7 @@ use crate::{
         self, MediaItem, MediaItemTake, MediaTrack, PcmSource, ReaProject,
         TrackEnvelope,
     },
-    utils::{string_from_buf, string_from_const_i8, WithNull},
+    utils::{string_from_buf, string_from_const_i8},
     AudioAccessor, Color, Envelope, FXParent, Item, KnowsProject,
     MidiEventBuilder, Pan, PanLaw, Pitch, PlayRate, Project, ProjectContext,
     ReaRsError, Reaper, ReaperResult, Source, SourceOffset, TakeFX, Track,
@@ -227,7 +227,7 @@ impl Take {
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.into().with_null())?.as_ptr(),
+                CString::new(category.into())?.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             )
@@ -254,7 +254,7 @@ impl Take {
         Ok(unsafe {
             Reaper::get().low().GetMediaItemTakeInfo_Value(
                 self.get()?.as_ptr(),
-                CString::new(category.into().with_null())?.as_ptr(),
+                CString::new(category.into())?.as_ptr(),
             )
         })
     }
@@ -430,7 +430,7 @@ impl Take {
         let index = unsafe {
             Reaper::get().low().TakeFX_AddByName(
                 self.get()?.as_ptr(),
-                CString::new(name.into().with_null())?.as_ptr(),
+                CString::new(name.into())?.as_ptr(),
                 insatantinate,
             )
         };
@@ -547,11 +547,11 @@ impl Take {
         category: impl Into<String>,
         string: impl Into<String>,
     ) -> ReaperResult<()> {
-        let buf = CString::new(string.into().with_null())?.into_raw();
+        let buf = CString::new(string.into())?.into_raw();
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.into().with_null())?.as_ptr(),
+                CString::new(category.into())?.as_ptr(),
                 buf,
                 true,
             )
@@ -578,7 +578,7 @@ impl Take {
         let result = unsafe {
             Reaper::get().low().SetMediaItemTakeInfo_Value(
                 self.get()?.as_ptr(),
-                CString::new(category.into().with_null())?.as_ptr(),
+                CString::new(category.into())?.as_ptr(),
                 value,
             )
         };

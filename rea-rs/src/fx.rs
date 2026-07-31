@@ -6,7 +6,7 @@ use std::{
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
-    utils::{string_from_buf, WithNull},
+    utils::{string_from_buf},
     Envelope, KnowsProject, ReaRsError, Reaper, ReaperResult, Take, Track,
     WithReaperPtr,
 };
@@ -86,7 +86,7 @@ impl TrackFX {
         let index = unsafe {
             Reaper::get().low().TrackFX_AddByName(
                 parent.get()?.as_ptr(),
-                CString::new(name.with_null())?.as_ptr(),
+                CString::new(name)?.as_ptr(),
                 is_rec_fx,
                 0,
             )
@@ -431,7 +431,7 @@ impl FX for TrackFX {
             Reaper::get().low().TrackFX_SetPreset(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                CString::new(name.with_null())?.as_ptr(),
+                CString::new(name)?.as_ptr(),
             )
         };
         match result {
@@ -511,7 +511,7 @@ impl param_parent::FXParamParent<Track> for TrackFX {
             Reaper::get().low().TrackFX_GetParamFromIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                CString::new(param.with_null())?.as_ptr(),
+                CString::new(param)?.as_ptr(),
             )
         };
         let res = if index < 0 {
@@ -716,7 +716,7 @@ impl param_parent::FXParamParent<Track> for TrackFX {
             Reaper::get().low().TrackFX_GetParamFromIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                CString::new(param.with_null())?.as_ptr(),
+                CString::new(param)?.as_ptr(),
             )
         };
         Ok(if index < 0 {
@@ -798,7 +798,7 @@ impl TakeFX {
         let index = unsafe {
             Reaper::get().low().TakeFX_AddByName(
                 parent.get()?.as_ptr(),
-                CString::new(name.with_null())?.as_ptr(),
+                CString::new(name)?.as_ptr(),
                 0,
             )
         };
@@ -1139,7 +1139,7 @@ impl FX for TakeFX {
             Reaper::get().low().TakeFX_SetPreset(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                CString::new(name.with_null())?.as_ptr(),
+                CString::new(name)?.as_ptr(),
             )
         };
         match result {
@@ -1218,7 +1218,7 @@ impl param_parent::FXParamParent<Take> for TakeFX {
             Reaper::get().low().TakeFX_GetParamFromIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                CString::new(param.with_null())?.as_ptr(),
+                CString::new(param)?.as_ptr(),
             )
         };
         Ok(if index < 0 {
@@ -1422,7 +1422,7 @@ impl param_parent::FXParamParent<Take> for TakeFX {
             Reaper::get().low().TakeFX_GetParamFromIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                CString::new(param.with_null())?.as_ptr(),
+                CString::new(param)?.as_ptr(),
             )
         };
         Ok(if index < 0 {

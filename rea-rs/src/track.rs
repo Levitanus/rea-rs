@@ -7,11 +7,12 @@ use std::{
 
 use bitflags::bitflags;
 use int_enum::IntEnum;
+use log::debug;
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
     ptr_wrappers::{MediaItem, MediaTrack, ReaProject, TrackEnvelope},
-    utils::{string_from_buf, string_from_const_i8, WithNull},
+    utils::{string_from_buf, string_from_const_i8},
     AudioAccessor, AutomationMode, Color, Envelope, EnvelopeSelector,
     FXParent, GenericSend, GetLength, HardwareSend, HardwareSocket, Item,
     KnowsProject, Pan, PanLaw, PanLawMode, Position, PositionPixel, Project,
@@ -143,7 +144,7 @@ impl Track {
             let mut buf = vec![0_i8; self.info_buf_size];
             let result = Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.into().with_null())?.as_ptr(),
+                CString::new(category.into())?.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             );
@@ -224,7 +225,7 @@ impl Track {
         Ok(unsafe {
             Reaper::get().low().GetMediaTrackInfo_Value(
                 self.get()?.as_ptr(),
-                CString::new(category.into().with_null())?.as_ptr(),
+                CString::new(category.into())?.as_ptr(),
             )
         })
     }
@@ -700,7 +701,7 @@ impl Track {
         let ptr = unsafe {
             Reaper::get().low().GetTrackEnvelopeByChunkName(
                 self.get()?.as_ptr(),
-                CString::new(chunk.with_null())?.as_ptr(),
+                CString::new(chunk)?.as_ptr(),
             )
         };
         Ok(match TrackEnvelope::new(ptr) {
@@ -717,7 +718,7 @@ impl Track {
         let ptr = unsafe {
             Reaper::get().low().GetTrackEnvelopeByName(
                 self.get()?.as_ptr(),
-                CString::new(name.with_null())?.as_ptr(),
+                CString::new(name)?.as_ptr(),
             )
         };
         Ok(match TrackEnvelope::new(ptr) {
@@ -805,7 +806,7 @@ impl Track {
         let result = unsafe {
             Reaper::get().low().SetTrackStateChunk(
                 self.get()?.as_ptr(),
-                CString::new(chunk.with_null())?.as_ptr(),
+                CString::new(chunk)?.as_ptr(),
                 need_undo,
             )
         };
@@ -831,7 +832,7 @@ impl Track {
                 self.get()?.as_ptr(),
                 pitch as i32,
                 channel as i32,
-                CString::new(note_name.with_null())?.as_ptr(),
+                CString::new(note_name)?.as_ptr(),
             )
         };
         match result {
@@ -849,11 +850,12 @@ impl Track {
     ) -> ReaperResult<()> {
         let category = category.into();
         let value = value.into();
+        debug!("set_info_string: category: {category}, value: {value}");
         let result = unsafe {
             Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
-                CString::new(value.with_null())?.into_raw(),
+                CString::new(category)?.as_ptr(),
+                CString::new(value)?.into_raw(),
                 true,
             )
         };
@@ -954,7 +956,7 @@ impl Track {
         let index = unsafe {
             Reaper::get().low().TrackFX_AddByName(
                 self.get()?.as_ptr(),
-                CString::new(name.into().with_null())?.as_ptr(),
+                CString::new(name.into())?.as_ptr(),
                 input_fx,
                 insatantinate,
             )
@@ -1100,7 +1102,7 @@ impl Track {
         let result = unsafe {
             Reaper::get().low().SetMediaTrackInfo_Value(
                 self.get()?.as_ptr(),
-                CString::new(param_name.with_null())?.as_ptr(),
+                CString::new(param_name)?.as_ptr(),
                 value,
             )
         };

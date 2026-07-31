@@ -4,7 +4,7 @@ use serde_derive::{Deserialize, Serialize};
 
 use crate::{
     ptr_wrappers::MediaTrack,
-    utils::{string_from_const_i8, WithNull},
+    utils::{string_from_const_i8},
     Color, Position, Project, ReaRsError, Reaper, ReaperResult, Track,
     WithReaperPtr,
 };
@@ -44,7 +44,7 @@ impl MarkerRegionInfo {
             Ok(low.GetRegionOrMarkerInfo_Value(
                 project.context().to_raw(),
                 marker,
-                CString::new(parameter_name.with_null())?.as_ptr(),
+                CString::new(parameter_name)?.as_ptr(),
             ))
         }
     }
@@ -76,7 +76,7 @@ impl MarkerRegionInfo {
             low.SetRegionOrMarkerInfo_Value(
                 project.context().to_raw(),
                 marker,
-                CString::new(parameter_name.with_null())?.as_ptr(),
+                CString::new(parameter_name)?.as_ptr(),
                 value,
             );
         }

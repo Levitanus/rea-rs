@@ -46,4 +46,21 @@ impl MIDIEditor {
             Some(ptr) => Take::new(ptr, None),
         }
     }
+
+    pub fn enum_takes(
+        &self,
+        editable_only: bool,
+    ) -> impl Iterator<Item = Take> {
+        let low = Reaper::get().low();
+        let ptr = self.hwnd;
+        let mut idx = 0;
+        std::iter::from_fn(move || {
+            let result = unsafe {
+                low.MIDIEditor_EnumTakes(ptr.as_ptr(), idx, editable_only)
+            };
+            let take_ptr = MediaItemTake::new(result)?;
+            idx += 1;
+            Some(Take::new(take_ptr, None).expect("should be valid Take"))
+        })
+    }
 }

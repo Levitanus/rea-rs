@@ -2,7 +2,7 @@ use crate::{
     misc_enums::ProjectContext,
     ptr_wrappers::Hwnd,
     reaper_pointer::ReaperPointer,
-    utils::{string_from_buf, string_from_const_i8, WithNull},
+    utils::{string_from_buf, string_from_const_i8},
     AutomationMode, Color, CommandId, MIDIEditor, MessageBoxType,
     MessageBoxValue, Project, ReaRsError, Reaper, ReaperResult, Section,
     ThemeColor, UndoFlags,
@@ -44,7 +44,7 @@ impl Reaper {
     pub fn show_console_msg(&self, msg: impl Into<String>) {
         let mut msg: String = msg.into();
         msg.push_str("\n");
-        let msg = match CString::new(msg.with_null()) {
+        let msg = match CString::new(msg) {
             Err(e) => return error!("Can not convert msg to CString: {}", e),
             Ok(msg) => msg,
         };
@@ -226,8 +226,8 @@ impl Reaper {
             let mut buf = vec![0_i8; 4096];
             let result = self.low().GetUserFileNameForRead(
                 buf.as_mut_ptr(),
-                CString::new(window_title.into().with_null())?.into_raw(),
-                CString::new(extension.into().with_null())?.into_raw(),
+                CString::new(window_title.into())?.into_raw(),
+                CString::new(extension.into())?.into_raw(),
             );
             match result {
                 false => Err(ReaRsError::UserAborted),
@@ -253,7 +253,7 @@ impl Reaper {
         unsafe {
             self.low().ArmCommand(
                 command.get() as i32,
-                CString::new(section.into().with_null())?.as_ptr(),
+                CString::new(section.into())?.as_ptr(),
             )
         }
         Ok(())
@@ -312,7 +312,7 @@ impl Reaper {
             // debug!("action name: {:?}", name);
             let id = self
                 .low()
-                .NamedCommandLookup(CString::new(name.with_null())?.as_ptr());
+                .NamedCommandLookup(CString::new(name)?.as_ptr());
             // debug!("got action id: {:?}", id);
             match id {
                 x if x <= 0 => Ok(None),
@@ -483,7 +483,7 @@ impl Reaper {
         mut f: impl FnMut() -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
         let low = self.low();
-        let undo_name = CString::new(undo_name.into().with_null())?;
+        let undo_name = CString::new(undo_name.into())?;
         match project {
             None => low.Undo_BeginBlock(),
             Some(pr) => unsafe {
@@ -552,7 +552,7 @@ impl Reaper {
         unsafe {
             self.low().ViewPrefs(
                 page as i32,
-                CString::new(name.with_null())?.as_ptr(),
+                CString::new(name)?.as_ptr(),
             );
         }
         Ok(())

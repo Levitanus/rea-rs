@@ -1,6 +1,6 @@
 use crate::{
     ptr_wrappers::{MediaItem, MediaItemTake, PcmSource, ReaProject},
-    utils::{string_from_buf, WithNull},
+    utils::{string_from_buf},
     KnowsProject, Position, Project, ProjectContext, ReaRsError, Reaper,
     ReaperResult, Take, Volume, WithReaperPtr,
 };
@@ -103,14 +103,14 @@ impl Source {
                 let item_start = unsafe {
                     Reaper::get().low().GetMediaItemInfo_Value(
                         item_ptr.as_ptr(),
-                        CString::new(item_pos_key.with_null())?.as_ptr(),
+                        CString::new(item_pos_key)?.as_ptr(),
                     )
                 };
                 let offset_key = String::from("D_STARTOFFS");
                 let start_offset = unsafe {
                     Reaper::get().low().GetMediaItemTakeInfo_Value(
                         self.take().as_ptr(),
-                        CString::new(offset_key.with_null())?.as_ptr(),
+                        CString::new(offset_key)?.as_ptr(),
                     )
                 };
                 let project = match self.project_ptr {

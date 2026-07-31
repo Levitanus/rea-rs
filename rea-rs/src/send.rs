@@ -1,6 +1,5 @@
 use crate::{
     ptr_wrappers::{MediaTrack, TrackEnvelope},
-    utils::WithNull,
     AutomationMode, Envelope, KnowsProject, Pan, PanLaw, ReaRsError, Reaper,
     ReaperResult, Track, Volume, WithReaperPtr, GUID,
 };
@@ -202,7 +201,7 @@ pub trait GenericSend<'a>: SendIntType + Sized {
                 track_ptr,
                 self.as_int(),
                 self.index() as i32,
-                CString::new(param.into().with_null())?.as_ptr(),
+                CString::new(param.into())?.as_ptr(),
             )
         })
     }
@@ -312,7 +311,7 @@ pub trait GenericSend<'a>: SendIntType + Sized {
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                CString::new(selector.into().to_string().with_null())?
+                CString::new(selector.into().to_string())?
                     .as_ptr(),
                 null_mut(),
             ) as *mut rea_rs_low::raw::TrackEnvelope
@@ -363,7 +362,7 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a> {
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                CString::new(param.into().with_null())?.as_ptr(),
+                CString::new(param.into())?.as_ptr(),
                 value,
             )
         };

@@ -1,7 +1,6 @@
 use crate::{
     ptr_wrappers::{MediaItem, MediaItemTake, MediaTrack, ReaProject},
     utils::string_from_buf,
-    utils::WithNull,
     Color, KnowsProject, Position, Project, ProjectContext, ReaRsError,
     Reaper, ReaperResult, Take, TimeMode, Track, Volume, WithReaperPtr, GUID,
 };
@@ -123,7 +122,7 @@ impl Item {
         Ok(unsafe {
             Reaper::get().low().GetMediaItemInfo_Value(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
+                CString::new(category)?.as_ptr(),
             )
         })
     }
@@ -273,7 +272,7 @@ impl Item {
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
+                CString::new(category)?.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             )
@@ -448,7 +447,7 @@ impl Item {
         let result = unsafe {
             Reaper::get().low().SetMediaItemInfo_Value(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
+                CString::new(category)?.as_ptr(),
                 value,
             )
         };
@@ -559,7 +558,7 @@ impl Item {
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
+                CString::new(category)?.as_ptr(),
                 buf,
                 true,
             )

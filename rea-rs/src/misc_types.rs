@@ -1,6 +1,6 @@
 use crate::{
-    utils::{string_from_buf, WithNull},
-    Direction, Project, ReaRsError, Reaper, ReaperResult, Take, WithReaperPtr,
+    utils::string_from_buf, Direction, Project, ReaRsError, Reaper,
+    ReaperResult, Take, WithReaperPtr,
 };
 use int_enum::IntEnum;
 use log::debug;
@@ -738,7 +738,7 @@ impl GUID {
         let mut g = MaybeUninit::zeroed();
         unsafe {
             Reaper::get().low().stringToGuid(
-                CString::new(value.with_null())?.as_ptr(),
+                CString::new(value)?.as_ptr(),
                 g.as_mut_ptr(),
             );
             let g = g.assume_init();

@@ -1,6 +1,6 @@
 use crate::{
     ptr_wrappers::TrackEnvelope,
-    utils::{string_from_buf, WithNull},
+    utils::{string_from_buf},
     GetLength, KnowsProject, Position, ReaRsError, Reaper, ReaperResult,
     WithReaperPtr, GUID,
 };
@@ -327,7 +327,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         Ok(unsafe {
             Reaper::get().low().GetEnvelopeInfo_Value(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
+                CString::new(category)?.as_ptr(),
             )
         })
     }
@@ -733,7 +733,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         let result = unsafe {
             Reaper::get().low().SetEnvelopeStateChunk(
                 self.get()?.as_ptr(),
-                CString::new(state.with_null())?.as_ptr(),
+                CString::new(state)?.as_ptr(),
                 with_undo,
             )
         };
@@ -878,7 +878,7 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
             Reaper::get().low().GetSetAutomationItemInfo(
                 self.envelope().get()?.as_ptr(),
                 self.index() as i32,
-                CString::new(category.with_null())?.as_ptr(),
+                CString::new(category)?.as_ptr(),
                 0.0,
                 false,
             )
@@ -939,7 +939,7 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
             Reaper::get().low().GetSetAutomationItemInfo(
                 self.envelope().get()?.as_ptr(),
                 self.index() as i32,
-                CString::new(category.with_null())?.as_ptr(),
+                CString::new(category)?.as_ptr(),
                 value,
                 true,
             );

@@ -1,19 +1,21 @@
+use log::debug;
+
 use crate::{reaper_pointer::ReaperPointer, Project, ReaRsError, Reaper};
 use std::ffi::CStr;
 
-/// Returns self as a null-terminated String. Implemented only for [String].
-pub trait WithNull: Clone {
-    /// If not `\0` at the end, it will be added.
-    fn with_null(self) -> String;
-}
-impl WithNull for String {
-    fn with_null(mut self) -> String {
-        if !self.ends_with("\0") {
-            self.push('\0');
-        }
-        self
-    }
-}
+// /// Returns self as a null-terminated String. Implemented only for [String].
+// pub trait WithNull: Clone {
+//     /// If not `\0` at the end, it will be added.
+//     fn with_null(self) -> String;
+// }
+// impl WithNull for String {
+//     fn with_null(mut self) -> String {
+//         if !self.ends_with("\0") {
+//             self.push('\0');
+//         }
+//         self
+//     }
+// }
 
 /// Convert pointer to CStr to String.
 pub fn string_from_const_i8(ptr: *const i8) -> Result<String, ReaRsError> {
@@ -92,9 +94,9 @@ pub trait WithReaperPtr {
     /// [`WithReaperPtr::make_unchecked`].
     fn require_valid(&self) -> Result<Self::Ptr, ReaRsError> {
         if !self.should_check() {
-            return Ok(self.get()?);
+            return Ok(self.get_pointer());
         }
-        let ptr = self.get()?;
+        let ptr = self.get_pointer();
         match Reaper::get().validate_ptr(ptr.clone()) {
             true => Ok(ptr),
             false => Err(ReaRsError::NullPtr("reaper object").into()),
@@ -112,9 +114,9 @@ pub trait WithReaperPtr {
         project: &Project,
     ) -> Result<Self::Ptr, ReaRsError> {
         if !self.should_check() {
-            return Ok(self.get()?);
+            return Ok(self.get_pointer());
         }
-        let ptr = self.get()?;
+        let ptr = self.get_pointer();
         match Reaper::get().validate_ptr_2(project, ptr.clone()) {
             true => Ok(ptr),
             false => Err(ReaRsError::NullPtr("reaper object").into()),
