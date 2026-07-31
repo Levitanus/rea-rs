@@ -26,8 +26,8 @@ serde_derive = "1.0"
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 strum = { version = "0.26", features = ["derive"] }
-thiserror = "1.0.5"
-anyhow = "1.0.8"
+thiserror = {workspace = true}
+anyhow = {workspace = true}
 
 ws = "0.9.2"
 

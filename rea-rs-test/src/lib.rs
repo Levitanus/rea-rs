@@ -73,7 +73,7 @@
 //!     Ok(())
 //! }
 //! #[reaper_extension_plugin]
-//! fn test_extension(context: PluginContext) -> Result<(), Box<dyn Error>> {
+//! fn test_extension(context: PluginContext) -> Result<(), anyhow::Error> {
 //!     // setup test global environment
 //!     let test = ReaperTest::setup(context, "test_action");
 //!     // Push single test step.
@@ -90,7 +90,9 @@
 //! Use crates `log` and `env_logger` for printing to stdio. integration test
 //! turns env logger on by itself.
 
-use rea_rs::{ActionHook, ActionKind, PluginContext, Reaper, Timer};
+use rea_rs::{
+    ActionHook, ActionKind, PluginContext, ReaRsError, Reaper, Timer,
+};
 use rea_rs_low::register_plugin_destroy_hook;
 use std::{
     cell::RefCell, error::Error, fmt::Debug, panic, process, sync::Arc,
@@ -101,7 +103,7 @@ pub use integration_test::*;
 
 static mut INSTANCE: Option<ReaperTest> = None;
 
-pub type TestStepResult = Result<(), Box<dyn Error>>;
+pub type TestStepResult = Result<(), anyhow::Error>;
 pub type TestCallback = dyn Fn(&'static mut Reaper) -> TestStepResult;
 
 pub struct TestStep {
@@ -111,7 +113,7 @@ pub struct TestStep {
 impl TestStep {
     pub fn new(
         name: impl Into<String>,
-        operation: impl Fn(&'static mut Reaper) -> Result<(), Box<dyn Error>>
+        operation: impl Fn(&'static mut Reaper) -> Result<(), anyhow::Error>
             + 'static,
     ) -> Self {
         Self {
@@ -126,18 +128,18 @@ impl Debug for TestStep {
     }
 }
 
-fn run_tests() -> Result<(), Box<dyn Error>> {
+fn run_tests() -> Result<(), anyhow::Error> {
     ReaperTest::get_mut().test();
     Ok(())
 }
 
-fn test(_hook: &mut ActionHook) -> Result<(), Box<dyn Error>> {
+fn test(_hook: &mut ActionHook) -> Result<(), anyhow::Error> {
     run_tests()
 }
 
 struct IntegrationTimer {}
 impl Timer for IntegrationTimer {
-    fn run(&mut self) -> Result<(), Box<dyn Error>> {
+    fn run(&mut self) -> Result<(), anyhow::Error> {
         run_tests()?;
         self.stop();
         Ok(())
@@ -224,7 +226,7 @@ impl ReaperTest {
             ReaperTest::get()
                 .steps
                 .iter()
-                .map(|step| -> Result<(), Box<dyn Error>> {
+                .map(|step| -> Result<(), anyhow::Error> {
                     println!("Testing step: {}", step.name);
                     (step.operation)(Reaper::get_mut())?;
                     Ok(())
@@ -234,7 +236,7 @@ impl ReaperTest {
         });
         let final_result = match result.is_err() {
             false => result.unwrap(),
-            true => Err("Reaper panicked!".into()),
+            true => Err(ReaRsError::Str("Reaper panicked!").into()),
         };
         match final_result {
             Ok(_) => {

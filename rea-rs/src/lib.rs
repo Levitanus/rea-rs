@@ -37,7 +37,7 @@
 //! use std::error::Error;
 //!
 //! #[reaper_extension_plugin]
-//! fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
+//! fn plugin_main(context: PluginContext) -> Result<(), anyhow::Error> {
 //!     Reaper::init_global(context);
 //!     let reaper = Reaper::get_mut();
 //!     let message = "Hello from small extension";
@@ -64,20 +64,20 @@
 //!
 //! // Full list of function larger.
 //! impl Timer for Listener {
-//!     fn run(&mut self) -> Result<(), Box<dyn Error>> {
+//!     fn run(&mut self) -> Result<(), anyhow::Error> {
 //!         Reaper::get().perform_action(self.action.command_id, 0, None);
 //!         Ok(())
 //!     }
 //!     fn id_string(&self) -> String {"test listener".to_string()}
 //! }
 //!
-//! fn my_action_func(_hook: &mut ActionHook) -> Result<(), Box<dyn Error>> {
+//! fn my_action_func(_hook: &mut ActionHook) -> Result<(), anyhow::Error> {
 //!     Reaper::get().show_console_msg("running");
 //!     Ok(())
 //! }
 //!
 //! #[reaper_extension_plugin]
-//! fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
+//! fn plugin_main(context: PluginContext) -> Result<(), anyhow::Error> {
 //!     Reaper::init_global(context);
 //!     let reaper = Reaper::get_mut();
 //!

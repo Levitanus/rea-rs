@@ -722,7 +722,9 @@ impl ToString for GUID {
                 .low()
                 .guidToString(&self.raw, buf.as_mut_ptr())
         };
-        string_from_buf(&buf).unwrap_or(String::default())
+        let guid_string = string_from_buf(&buf).unwrap_or(String::default());
+        // debug!("GUID.to_string(): {:?}", guid_string);
+        guid_string
     }
 }
 
@@ -736,11 +738,11 @@ const ZERO_GUID: raw::GUID = raw::GUID {
 impl GUID {
     pub fn from_string(value: String) -> ReaperResult<Self> {
         let mut g = MaybeUninit::zeroed();
+        // debug!("GUID.from_string(): {value}");
         unsafe {
-            Reaper::get().low().stringToGuid(
-                CString::new(value)?.as_ptr(),
-                g.as_mut_ptr(),
-            );
+            Reaper::get()
+                .low()
+                .stringToGuid(CString::new(value)?.as_ptr(), g.as_mut_ptr());
             let g = g.assume_init();
             match g {
                 ZERO_GUID => {

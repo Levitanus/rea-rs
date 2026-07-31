@@ -158,7 +158,7 @@ impl Reaper {
         file: &Path,
         section: Section,
         commit: bool,
-    ) -> Result<CommandId, Box<dyn Error>> {
+    ) -> Result<CommandId, anyhow::Error> {
         Ok(self
             .add_remove_reascript(file, section, commit, true)?
             .expect("should hold CommandId"))
@@ -173,7 +173,7 @@ impl Reaper {
         file: &Path,
         section: Section,
         commit: bool,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), anyhow::Error> {
         self.add_remove_reascript(file, section, commit, false)?;
         Ok(())
     }

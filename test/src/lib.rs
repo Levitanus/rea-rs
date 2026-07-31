@@ -719,11 +719,20 @@ fn tracks() -> TestStep {
         }
 
         debug!("try to find track with new name");
-        assert_eq!(pr.get_track(1)?.ok_or("no track!")?.name()?, "new second");
+        assert_eq!(
+            pr.get_track(1)?
+                .ok_or(ReaRsError::Str("no track!"))?
+                .name()?,
+            "new second"
+        );
 
         debug!("from guid");
-        let guid = pr.get_track(1)?.ok_or("no track!")?.guid()?;
-        let tr = Track::from_guid(&pr, guid)?.ok_or("no track!")?;
+        let guid = pr
+            .get_track(1)?
+            .ok_or(ReaRsError::Str("no track!"))?
+            .guid()?;
+        let tr = Track::from_guid(&pr, guid)?
+            .ok_or(ReaRsError::Str("no track!"))?;
         assert_eq!(tr.index()?, 1);
 
         let pos = Position::from_quarters(4.0, &pr);
@@ -737,7 +746,7 @@ fn tracks() -> TestStep {
         debug!("FX");
         let fx = tr
             .add_fx("ReaEQ", None, false, false)?
-            .ok_or("Can not add FX")?;
+            .ok_or(ReaRsError::Str("Can not add FX"))?;
         assert!(fx.is_enabled()?);
         drop(fx);
 

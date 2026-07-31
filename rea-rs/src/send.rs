@@ -269,7 +269,7 @@ pub trait GenericSend<'a>: SendIntType + Sized {
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                CString::new(String::from("P_DESTTRACK\0"))?.as_ptr(),
+                CString::new(String::from("P_DESTTRACK"))?.as_ptr(),
                 null_mut(),
             ) as *mut rea_rs_low::raw::MediaTrack
         };
@@ -287,7 +287,7 @@ pub trait GenericSend<'a>: SendIntType + Sized {
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                CString::new(String::from("P_SRCTRACK\0"))?.as_ptr(),
+                CString::new(String::from("P_SRCTRACK"))?.as_ptr(),
                 null_mut(),
             ) as *mut rea_rs_low::raw::MediaTrack
         };

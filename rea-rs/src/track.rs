@@ -140,11 +140,13 @@ impl Track {
         &self,
         category: impl Into<String>,
     ) -> ReaperResult<String> {
+        let category = category.into();
+        debug!("get info string, category: {:?}", category);
         unsafe {
             let mut buf = vec![0_i8; self.info_buf_size];
             let result = Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.into())?.as_ptr(),
+                CString::new(category)?.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             );

@@ -32,7 +32,7 @@ pub unsafe fn bootstrap_extension_plugin(
     h_instance: HINSTANCE,
     rec: *mut reaper_plugin_info_t,
     static_context: StaticExtensionPluginContext,
-    init: fn(PluginContext) -> Result<(), Box<dyn Error>>,
+    init: fn(PluginContext) -> Result<(), anyhow::Error>,
 ) -> i32 {
     // TODO-low Log early errors
     firewall(|| {

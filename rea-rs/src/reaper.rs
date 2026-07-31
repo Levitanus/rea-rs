@@ -14,7 +14,6 @@ use serde_derive::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     collections::HashMap,
-    error::Error,
     ffi::CString,
     ptr::NonNull,
     sync::Arc,
@@ -23,7 +22,7 @@ use std::{
 
 static mut INSTANCE: Option<Reaper> = None;
 
-type ActionCallback = dyn Fn(&mut ActionHook) -> Result<(), Box<dyn Error>>;
+type ActionCallback = dyn Fn(&mut ActionHook) -> Result<(), anyhow::Error>;
 
 pub struct Action {
     command_id: CommandId,
@@ -31,7 +30,7 @@ pub struct Action {
     kind: ActionKind,
 }
 impl Action {
-    pub fn call(&self, hook: &mut ActionHook) -> Result<(), Box<dyn Error>> {
+    pub fn call(&self, hook: &mut ActionHook) -> Result<(), anyhow::Error> {
         (self.operation)(hook)
     }
 
@@ -72,7 +71,7 @@ impl<'a> ActionHook<'a> {
 }
 
 pub trait Timer {
-    fn run(&mut self) -> Result<(), Box<dyn Error>>;
+    fn run(&mut self) -> Result<(), anyhow::Error>;
     fn id_string(&self) -> String;
     fn interval(&self) -> Duration {
         Duration::from_secs(0)
@@ -85,14 +84,12 @@ pub trait Timer {
     }
 }
 
-fn action_error(error: Box<dyn Error>) {
-    Reaper::get()
-        .show_message_box(
-            "Error while performing action",
-            error.to_string(),
-            crate::MessageBoxType::Ok,
-        )
-        .expect("Can not show error message box");
+fn action_error(error: anyhow::Error) {
+    log::error!("{:#?}\n Backtrace: {:#?}", error, error.backtrace());
+    Reaper::get().show_console_msg(format!(
+        "Error while performing action: \n{}",
+        error.to_string()
+    ));
 }
 
 extern "C" fn action_hook(command_id: i32, flag: i32) -> bool {
@@ -276,7 +273,7 @@ impl Reaper {
         id_string: &'static str,
         description: &'static str,
         key_binding: impl Into<Option<KeyBinding>>,
-    ) -> Result<RegisteredAccel, Box<dyn Error>> {
+    ) -> Result<RegisteredAccel, anyhow::Error> {
         let kb: Option<KeyBinding> = key_binding.into();
         let low = self.low();
         let id_string = id_string.replace(" ", "_");
@@ -328,9 +325,9 @@ impl Reaper {
         id_string: &'static str,
         description: &'static str,
         kind: ActionKind,
-        operation: impl Fn(&mut ActionHook) -> Result<(), Box<dyn Error>> + 'static,
+        operation: impl Fn(&mut ActionHook) -> Result<(), anyhow::Error> + 'static,
         key_binding: impl Into<Option<KeyBinding>>,
-    ) -> Result<RegisteredAccel, Box<dyn Error>> {
+    ) -> Result<RegisteredAccel, anyhow::Error> {
         let accel =
             self.register_gaccel(id_string, description, key_binding)?;
         let action = Action {

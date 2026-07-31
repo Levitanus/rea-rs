@@ -7,10 +7,12 @@ version = "0.2.0"
 [dependencies]
 env_logger = "0.10"
 log = "0.4"
-rea-rs = {version = "=0.2.0", path = "../../rea-rs"}
-rea-rs-low = {version = "=0.2.0", path = "../../low"}
-rea-rs-macros = {version = "=0.2.0", path = "../../macros"}
-rea-rs-test = {version = "=0.2.0", path = "../"}
+rea-rs = { version = "=0.2.0", path = "../rea-rs", features = ["egui-baseview"] }
+rea-rs-low = { version = "=0.2.0", path = "../low" }
+rea-rs-macros = { version = "=0.2.0", path = "../macros" }
+rea-rs-test = { version = "=0.2.0", path = "../rea-rs-test" }
+
+anyhow = {workspace = true}
 
 [lib]
 crate-type = ["cdylib"]
