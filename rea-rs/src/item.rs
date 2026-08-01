@@ -308,24 +308,6 @@ impl Item {
         }
     }
 
-    pub fn get_take_mut(
-        &mut self,
-        index: usize,
-    ) -> ReaperResult<Option<Take>> {
-        let ptr = self.get_take_ptr(index)?;
-        match ptr {
-            Some(ptr) => Ok(Some(Take::new(ptr, Some(self))?)),
-            None => Ok(None),
-        }
-    }
-
-    pub fn active_take_mut(&mut self) -> ReaperResult<Take> {
-        let ptr = self
-            .active_take_ptr()?
-            .ok_or(ReaRsError::NullPtr("active take"))?;
-        Take::new(ptr, Some(self))
-    }
-
     pub fn set_position(
         &mut self,
         position: impl Into<Position>,
