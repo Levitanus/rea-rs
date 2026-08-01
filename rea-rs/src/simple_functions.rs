@@ -11,13 +11,20 @@ use int_enum::IntEnum;
 use log::{debug, error};
 use std::{
     collections::HashMap,
-    error::Error,
     ffi::CString,
     fs::canonicalize,
     marker::PhantomData,
     path::Path,
     ptr::{null_mut, NonNull},
 };
+
+pub fn linear_to_db(value: f64) -> f64 {
+    20.0 * value.log10()
+}
+
+pub fn db_to_linear(db: f64) -> f64 {
+    10.0_f64.powf(db / 20.0)
+}
 
 impl Reaper {
     /// Returns the REAPER main window handle (HWND).
@@ -310,9 +317,8 @@ impl Reaper {
                 name = String::from("_") + &name;
             }
             // debug!("action name: {:?}", name);
-            let id = self
-                .low()
-                .NamedCommandLookup(CString::new(name)?.as_ptr());
+            let id =
+                self.low().NamedCommandLookup(CString::new(name)?.as_ptr());
             // debug!("got action id: {:?}", id);
             match id {
                 x if x <= 0 => Ok(None),
@@ -550,10 +556,8 @@ impl Reaper {
         let name = name.into().unwrap_or(String::from(""));
         let page = page.into().unwrap_or(0_u32);
         unsafe {
-            self.low().ViewPrefs(
-                page as i32,
-                CString::new(name)?.as_ptr(),
-            );
+            self.low()
+                .ViewPrefs(page as i32, CString::new(name)?.as_ptr());
         }
         Ok(())
     }

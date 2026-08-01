@@ -1,5 +1,6 @@
 pub use crate::utils::WithReaperPtr;
 use crate::{
+    db_to_linear, linear_to_db,
     ptr_wrappers::{MediaItem, MediaTrack, ReaProject},
     utils::{string_from_buf, string_from_const_i8},
     Color, CommandId, Item, MarkerRegionInfo, MarkerRegionIterator, PlayRate,
@@ -16,8 +17,149 @@ use std::{
 };
 
 use self::project_info::{
-    BoundsMode, RenderSettings, RenderTail, RenderTailFlags,
+    BoundsMode, RenderDitherFlags, RenderFadeLowPassFlags, RenderFadeShape,
+    RenderNormalize, RenderSettings, RenderTail, RenderTailFlags,
 };
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct FullRenderSettings {
+    pub settings: Option<RenderSettings>,
+    pub bounds: Option<(Position, Position)>,
+    pub bounds_mode: Option<BoundsMode>,
+    pub add_to_project: Option<bool>,
+    pub dither: Option<RenderDitherFlags>,
+    pub normalize: Option<RenderNormalize>,
+    pub normalize_target: Option<f64>,
+    pub brickwall: Option<f64>,
+    pub fade_in: Option<Duration>,
+    pub fade_out: Option<Duration>,
+    pub fade_in_shape: Option<RenderFadeShape>,
+    pub fade_out_shape: Option<RenderFadeShape>,
+    pub fade_lpf: Option<RenderFadeLowPassFlags>,
+    pub pad_start: Option<Duration>,
+    pub pad_end: Option<Duration>,
+    pub trim_start: Option<f64>,
+    pub trim_end: Option<f64>,
+    pub delay: Option<Duration>,
+    pub channels_amount: Option<u32>,
+    pub directory: Option<PathBuf>,
+    pub file: Option<String>,
+    pub primary_format: Option<String>,
+    pub secondary_format: Option<String>,
+    pub srate: Option<Option<u32>>,
+    pub tail: Option<RenderTail>,
+}
+
+impl FullRenderSettings {
+    pub fn from_project(project: &Project) -> ReaperResult<Self> {
+        Ok(Self {
+            settings: Some(project.get_render_settings()?),
+            bounds: Some(project.get_render_bounds()?),
+            bounds_mode: Some(project.get_render_bounds_mode()?),
+            add_to_project: Some(project.get_render_add_to_project()?),
+            dither: Some(project.get_render_dither()?),
+            normalize: Some(project.get_render_normalize()?),
+            normalize_target: Some(project.get_render_normalize_target()?),
+            brickwall: Some(project.get_render_brickwall()?),
+            fade_in: Some(project.get_render_fade_in()?),
+            fade_out: Some(project.get_render_fade_out()?),
+            fade_in_shape: Some(project.get_render_fade_in_shape()?),
+            fade_out_shape: Some(project.get_render_fade_out_shape()?),
+            fade_lpf: Some(project.get_render_fade_lpf()?),
+            pad_start: Some(project.get_render_pad_start()?),
+            pad_end: Some(project.get_render_pad_end()?),
+            trim_start: Some(project.get_render_trim_start()?),
+            trim_end: Some(project.get_render_trim_end()?),
+            delay: Some(project.get_render_delay()?),
+            channels_amount: Some(project.get_render_channels_amount()?),
+            directory: Some(project.get_render_directory()?),
+            file: Some(project.get_render_file()?),
+            primary_format: Some(project.get_render_format(false)?),
+            secondary_format: Some(project.get_render_format(true)?),
+            srate: Some(project.get_render_srate()?),
+            tail: Some(project.get_render_tail()?),
+        })
+    }
+
+    pub fn apply_to_project(&self, project: &mut Project) -> ReaperResult<()> {
+        if let Some(settings) = self.settings {
+            project.set_render_settings(settings)?;
+        }
+        if let Some((start, end)) = self.bounds {
+            project.set_render_bounds(start, end)?;
+        }
+        if let Some(bounds_mode) = self.bounds_mode {
+            project.set_render_bounds_mode(bounds_mode)?;
+        }
+        if let Some(add_to_project) = self.add_to_project {
+            project.set_render_add_to_project(add_to_project)?;
+        }
+        if let Some(dither) = self.dither {
+            project.set_render_dither(dither)?;
+        }
+        if let Some(normalize) = self.normalize {
+            project.set_render_normalize(normalize)?;
+        }
+        if let Some(normalize_target) = self.normalize_target {
+            project.set_render_normalize_target(normalize_target)?;
+        }
+        if let Some(brickwall) = self.brickwall {
+            project.set_render_brickwall(brickwall)?;
+        }
+        if let Some(fade_in) = self.fade_in {
+            project.set_render_fade_in(fade_in)?;
+        }
+        if let Some(fade_out) = self.fade_out {
+            project.set_render_fade_out(fade_out)?;
+        }
+        if let Some(fade_in_shape) = self.fade_in_shape {
+            project.set_render_fade_in_shape(fade_in_shape)?;
+        }
+        if let Some(fade_out_shape) = self.fade_out_shape {
+            project.set_render_fade_out_shape(fade_out_shape)?;
+        }
+        if let Some(fade_lpf) = self.fade_lpf {
+            project.set_render_fade_lpf(fade_lpf)?;
+        }
+        if let Some(pad_start) = self.pad_start {
+            project.set_render_pad_start(pad_start)?;
+        }
+        if let Some(pad_end) = self.pad_end {
+            project.set_render_pad_end(pad_end)?;
+        }
+        if let Some(trim_start) = self.trim_start {
+            project.set_render_trim_start(trim_start)?;
+        }
+        if let Some(trim_end) = self.trim_end {
+            project.set_render_trim_end(trim_end)?;
+        }
+        if let Some(delay) = self.delay {
+            project.set_render_delay(delay)?;
+        }
+        if let Some(channels_amount) = self.channels_amount {
+            project.set_render_channels_amount(channels_amount)?;
+        }
+        if let Some(directory) = &self.directory {
+            project.set_render_directory(directory.clone())?;
+        }
+        if let Some(file) = &self.file {
+            project.set_render_file(file.clone())?;
+        }
+        if let Some(primary_format) = &self.primary_format {
+            project.set_render_format(primary_format.clone(), false)?;
+        }
+        if let Some(secondary_format) = &self.secondary_format {
+            project.set_render_format(secondary_format.clone(), true)?;
+        }
+        if let Some(srate) = self.srate {
+            project.set_render_srate(srate)?;
+        }
+        if let Some(tail) = self.tail {
+            project.set_render_tail(tail)?;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub struct Project {
@@ -26,6 +168,7 @@ pub struct Project {
     checked: bool,
     info_buf_size: usize,
 }
+
 impl<'a> WithReaperPtr for Project {
     type Ptr = ReaProject;
     fn get_pointer(&self) -> Self::Ptr {
@@ -1300,23 +1443,248 @@ impl<'a> Project {
         self.set_info_value("RENDER_BOUNDSFLAG", mode as f64)
     }
 
+    /// Collect all possible project render settings.
+    pub fn get_full_render_settings(
+        &self,
+    ) -> ReaperResult<FullRenderSettings> {
+        FullRenderSettings::from_project(self)
+    }
+
+    /// Apply render settings to project.
+    pub fn apply_full_render_settings(
+        &mut self,
+        settings: &FullRenderSettings,
+    ) -> ReaperResult<()> {
+        settings.apply_to_project(self)
+    }
+
     pub fn get_render_settings(&self) -> ReaperResult<RenderSettings> {
-        let mut settings =
+        let settings =
             RenderSettings::from_raw(self.get_info_value("RENDER_SETTINGS")?);
-        settings.add_to_project =
-            self.get_info_value("RENDER_ADDTOPROJ")? as u32 == 1;
         Ok(settings)
     }
     pub fn set_render_settings(
         &mut self,
         settings: RenderSettings,
     ) -> ReaperResult<()> {
-        self.set_info_value("RENDER_SETTINGS", settings.to_raw())?;
-        let add_to_proj = match settings.add_to_project {
-            true => 1,
-            false => 0,
-        };
-        self.set_info_value("RENDER_ADDTOPROJ", add_to_proj as f64)
+        self.set_info_value("RENDER_SETTINGS", settings.to_raw())
+    }
+
+    pub fn get_render_add_to_project_flags(
+        &self,
+    ) -> ReaperResult<self::project_info::RenderAddToProjectFlags> {
+        let raw = self.get_info_value("RENDER_ADDTOPROJ")? as u32;
+        self::project_info::RenderAddToProjectFlags::from_bits(raw).ok_or(
+            ReaRsError::InvalidObject(
+                "Can not get render add-to-project flags",
+            ),
+        )
+    }
+    pub fn set_render_add_to_project_flags(
+        &mut self,
+        flags: self::project_info::RenderAddToProjectFlags,
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_ADDTOPROJ", flags.bits() as f64)
+    }
+
+    pub fn get_render_add_to_project(&self) -> ReaperResult<bool> {
+        Ok(self.get_render_add_to_project_flags()?.contains(
+            self::project_info::RenderAddToProjectFlags::ADD_TO_PROJECT,
+        ))
+    }
+    pub fn set_render_add_to_project(
+        &mut self,
+        add_to_project: bool,
+    ) -> ReaperResult<()> {
+        let mut flags = self.get_render_add_to_project_flags()?;
+        if add_to_project {
+            flags.insert(
+                self::project_info::RenderAddToProjectFlags::ADD_TO_PROJECT,
+            );
+        } else {
+            flags.remove(
+                self::project_info::RenderAddToProjectFlags::ADD_TO_PROJECT,
+            );
+        }
+        self.set_render_add_to_project_flags(flags)
+    }
+
+    pub fn get_render_dither(&self) -> ReaperResult<RenderDitherFlags> {
+        let raw = self.get_info_value("RENDER_DITHER")? as u32;
+        RenderDitherFlags::from_bits(raw).ok_or(ReaRsError::InvalidObject(
+            "Can not get render dither flags",
+        ))
+    }
+    pub fn set_render_dither(
+        &mut self,
+        flags: RenderDitherFlags,
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_DITHER", flags.bits() as f64)
+    }
+
+    pub fn get_render_normalize(&self) -> ReaperResult<RenderNormalize> {
+        let raw = self.get_info_value("RENDER_NORMALIZE")?;
+        Ok(RenderNormalize::from_raw(raw))
+    }
+    pub fn set_render_normalize(
+        &mut self,
+        settings: RenderNormalize,
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_NORMALIZE", settings.to_raw())
+    }
+
+    /// Render normalization target level in decibels.
+    ///
+    /// REAPER stores this as a linear amplitude ratio internally, so the
+    /// value is converted to and from dB at the API boundary.
+    pub fn get_render_normalize_target(&self) -> ReaperResult<f64> {
+        let raw = self.get_info_value("RENDER_NORMALIZE_TARGET")?;
+        Ok(linear_to_db(raw))
+    }
+    pub fn set_render_normalize_target(
+        &mut self,
+        value: f64,
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_NORMALIZE_TARGET", db_to_linear(value))
+    }
+
+    /// Render brickwall limit level in decibels.
+    ///
+    /// REAPER stores this as a linear amplitude ratio internally, so the
+    /// value is converted to and from dB at the API boundary.
+    pub fn get_render_brickwall(&self) -> ReaperResult<f64> {
+        let raw = self.get_info_value("RENDER_BRICKWALL")?;
+        Ok(linear_to_db(raw))
+    }
+    pub fn set_render_brickwall(&mut self, value: f64) -> ReaperResult<()> {
+        self.set_info_value("RENDER_BRICKWALL", db_to_linear(value))
+    }
+
+    /// Render fade-in duration.
+    ///
+    /// REAPER stores this as seconds internally, so the value is converted to
+    /// and from [Duration] at the API boundary.
+    pub fn get_render_fade_in(&self) -> ReaperResult<Duration> {
+        let raw = self.get_info_value("RENDER_FADEIN")?;
+        Ok(Duration::from_secs_f64(raw))
+    }
+    pub fn set_render_fade_in(&mut self, value: Duration) -> ReaperResult<()> {
+        self.set_info_value("RENDER_FADEIN", value.as_secs_f64())
+    }
+
+    /// Render fade-out duration.
+    ///
+    /// REAPER stores this as seconds internally, so the value is converted to
+    /// and from [Duration] at the API boundary.
+    pub fn get_render_fade_out(&self) -> ReaperResult<Duration> {
+        let raw = self.get_info_value("RENDER_FADEOUT")?;
+        Ok(Duration::from_secs_f64(raw))
+    }
+    pub fn set_render_fade_out(
+        &mut self,
+        value: Duration,
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_FADEOUT", value.as_secs_f64())
+    }
+
+    pub fn get_render_fade_in_shape(&self) -> ReaperResult<RenderFadeShape> {
+        let raw = self.get_info_value("RENDER_FADEINSHAPE")? as u32;
+        RenderFadeShape::from_int(raw)
+            .map_err(|e| ReaRsError::IntEnum(e.to_string()))
+    }
+    pub fn set_render_fade_in_shape(
+        &mut self,
+        shape: RenderFadeShape,
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_FADEINSHAPE", shape.int_value() as f64)
+    }
+
+    pub fn get_render_fade_out_shape(&self) -> ReaperResult<RenderFadeShape> {
+        let raw = self.get_info_value("RENDER_FADEOUTSHAPE")? as u32;
+        RenderFadeShape::from_int(raw)
+            .map_err(|e| ReaRsError::IntEnum(e.to_string()))
+    }
+    pub fn set_render_fade_out_shape(
+        &mut self,
+        shape: RenderFadeShape,
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_FADEOUTSHAPE", shape.int_value() as f64)
+    }
+
+    pub fn get_render_fade_lpf(&self) -> ReaperResult<RenderFadeLowPassFlags> {
+        let raw = self.get_info_value("RENDER_FADELPF")? as u32;
+        RenderFadeLowPassFlags::from_bits(raw).ok_or(
+            ReaRsError::InvalidObject("Can not get render fade LPF flags"),
+        )
+    }
+    pub fn set_render_fade_lpf(
+        &mut self,
+        flags: RenderFadeLowPassFlags,
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_FADELPF", flags.bits() as f64)
+    }
+
+    /// Render padding before the start in duration.
+    ///
+    /// REAPER stores this as seconds internally, so the value is converted to
+    /// and from [Duration] at the API boundary.
+    pub fn get_render_pad_start(&self) -> ReaperResult<Duration> {
+        let raw = self.get_info_value("RENDER_PADSTART")?;
+        Ok(Duration::from_secs_f64(raw))
+    }
+    pub fn set_render_pad_start(
+        &mut self,
+        value: Duration,
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_PADSTART", value.as_secs_f64())
+    }
+
+    /// Render padding after the end in duration.
+    ///
+    /// REAPER stores this as seconds internally, so the value is converted to
+    /// and from [Duration] at the API boundary.
+    pub fn get_render_pad_end(&self) -> ReaperResult<Duration> {
+        let raw = self.get_info_value("RENDER_PADEND")?;
+        Ok(Duration::from_secs_f64(raw))
+    }
+    pub fn set_render_pad_end(&mut self, value: Duration) -> ReaperResult<()> {
+        self.set_info_value("RENDER_PADEND", value.as_secs_f64())
+    }
+
+    /// Trim threshold at the render start in decibels.
+    ///
+    /// REAPER stores this as a linear amplitude ratio internally, so the
+    /// value is converted to and from dB at the API boundary.
+    pub fn get_render_trim_start(&self) -> ReaperResult<f64> {
+        let raw = self.get_info_value("RENDER_TRIMSTART")?;
+        Ok(linear_to_db(raw))
+    }
+    pub fn set_render_trim_start(&mut self, value: f64) -> ReaperResult<()> {
+        self.set_info_value("RENDER_TRIMSTART", db_to_linear(value))
+    }
+
+    /// Trim threshold at the render end in decibels.
+    ///
+    /// REAPER stores this as a linear amplitude ratio internally, so the
+    /// value is converted to and from dB at the API boundary.
+    pub fn get_render_trim_end(&self) -> ReaperResult<f64> {
+        let raw = self.get_info_value("RENDER_TRIMEND")?;
+        Ok(linear_to_db(raw))
+    }
+    pub fn set_render_trim_end(&mut self, value: f64) -> ReaperResult<()> {
+        self.set_info_value("RENDER_TRIMEND", db_to_linear(value))
+    }
+
+    /// Delay before the render starts.
+    ///
+    /// REAPER stores this as seconds internally, so the value is converted to
+    /// and from [Duration] at the API boundary.
+    pub fn get_render_delay(&self) -> ReaperResult<Duration> {
+        let raw = self.get_info_value("RENDER_DELAY")?;
+        Ok(Duration::from_secs_f64(raw))
+    }
+    pub fn set_render_delay(&mut self, value: Duration) -> ReaperResult<()> {
+        self.set_info_value("RENDER_DELAY", value.as_secs_f64())
     }
 
     pub fn get_render_channels_amount(&self) -> ReaperResult<u32> {
@@ -1430,8 +1798,6 @@ pub mod project_info {
         pub mode: RenderMode,
         /// Render tracks with mono media to mono files.
         pub use_mono: bool,
-        /// Add rendered files to project.
-        pub add_to_project: bool,
     }
     impl RenderSettings {
         pub fn new(
@@ -1439,11 +1805,7 @@ pub mod project_info {
             use_mono: bool,
             add_to_project: bool,
         ) -> Self {
-            Self {
-                mode,
-                use_mono,
-                add_to_project,
-            }
+            Self { mode, use_mono }
         }
         pub(crate) fn to_raw(&self) -> f64 {
             let val = self.mode.int_value()
@@ -1460,7 +1822,6 @@ pub mod project_info {
                 mode: RenderMode::from_int(int_mode)
                     .expect("can not convert to render mode"),
                 use_mono,
-                add_to_project: false,
             }
         }
     }
@@ -1500,6 +1861,335 @@ pub mod project_info {
             const IN_SELECTED_REGIONS=32;
 
         }
+    }
+
+    bitflags! {
+        #[derive(Serialize, Deserialize)]
+        pub struct RenderDitherFlags: u32 {
+            const DITHER = 1;
+            const NOISE_SHAPING = 2;
+            const DITHER_STEMS = 4;
+            const NOISE_SHAPING_STEMS = 8;
+            const DISABLE_ALL = 16;
+        }
+    }
+
+    bitflags! {
+        #[derive(Serialize, Deserialize)]
+        pub struct RenderAddToProjectFlags: u32 {
+            const ADD_TO_PROJECT = 1;
+            const SKIP_LIKELY_SILENT_FILES = 2;
+        }
+    }
+
+    #[repr(u32)]
+    #[derive(
+        Debug, Clone, Copy, PartialEq, Eq, IntEnum, Serialize, Deserialize,
+    )]
+    pub enum RenderNormalizeMode {
+        LufsI = 0,
+        Rms = 2,
+        Peak = 4,
+        TruePeak = 6,
+        LufsMMax = 8,
+        LufsSMax = 10,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum RenderMonoAdjustment {
+        None,
+        Minus3Db,
+        Plus3Db,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum RenderNormalizeTargetMode {
+        None,
+        AsIfFilesPlayTogether,
+        ToLoudestFile,
+        AsIfFilesPlayTogetherCommonGain,
+        ToMasterMix,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum RenderLimitMode {
+        None,
+        AsIfFilesPlayTogether,
+        ToMasterMix,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct RenderNormalize {
+        pub enabled: bool,
+        pub mode: RenderNormalizeMode,
+        pub mono_adjustment: RenderMonoAdjustment,
+        pub target_mode: RenderNormalizeTargetMode,
+        pub brickwall_limit: bool,
+        pub brickwall_limit_true_peak: bool,
+        pub only_normalize_too_loud: bool,
+        pub only_normalize_too_quiet: bool,
+        pub apply_fade_in: bool,
+        pub apply_fade_out: bool,
+        pub trim_start_silence: bool,
+        pub trim_end_silence: bool,
+        pub pad_start_silence: bool,
+        pub pad_end_silence: bool,
+        pub disable_all_postprocessing: bool,
+        pub limit_mode: RenderLimitMode,
+    }
+
+    impl Default for RenderNormalize {
+        fn default() -> Self {
+            Self {
+                enabled: false,
+                mode: RenderNormalizeMode::LufsI,
+                mono_adjustment: RenderMonoAdjustment::None,
+                target_mode: RenderNormalizeTargetMode::None,
+                brickwall_limit: false,
+                brickwall_limit_true_peak: false,
+                only_normalize_too_loud: false,
+                only_normalize_too_quiet: false,
+                apply_fade_in: false,
+                apply_fade_out: false,
+                trim_start_silence: false,
+                trim_end_silence: false,
+                pad_start_silence: false,
+                pad_end_silence: false,
+                disable_all_postprocessing: false,
+                limit_mode: RenderLimitMode::None,
+            }
+        }
+    }
+
+    impl RenderNormalize {
+        pub fn to_raw(&self) -> f64 {
+            let mut raw = 0_u32;
+            if self.enabled {
+                raw |= 1;
+            }
+            raw |= self.mode.int_value();
+
+            match self.mono_adjustment {
+                RenderMonoAdjustment::Minus3Db => raw |= 16,
+                RenderMonoAdjustment::Plus3Db => raw |= 16 | (8 << 16),
+                RenderMonoAdjustment::None => {}
+            }
+
+            match self.target_mode {
+                RenderNormalizeTargetMode::AsIfFilesPlayTogether => raw |= 32,
+                RenderNormalizeTargetMode::ToLoudestFile => raw |= 4096,
+                RenderNormalizeTargetMode::AsIfFilesPlayTogetherCommonGain => {
+                    raw |= 32 | 4096;
+                }
+                RenderNormalizeTargetMode::ToMasterMix => raw |= 16 << 16,
+                RenderNormalizeTargetMode::None => {}
+            }
+
+            if self.brickwall_limit {
+                raw |= 64;
+            }
+            if self.brickwall_limit_true_peak {
+                raw |= 128;
+            }
+            if self.only_normalize_too_loud {
+                raw |= 256;
+            }
+            if self.only_normalize_too_quiet {
+                raw |= 2048;
+            }
+            if self.apply_fade_in {
+                raw |= 512;
+            }
+            if self.apply_fade_out {
+                raw |= 1024;
+            }
+            if self.trim_start_silence {
+                raw |= 16_384;
+            }
+            if self.trim_end_silence {
+                raw |= 32_768;
+            }
+            if self.pad_start_silence {
+                raw |= 1 << 16;
+            }
+            if self.pad_end_silence {
+                raw |= 2 << 16;
+            }
+            if self.disable_all_postprocessing {
+                raw |= 4 << 16;
+            }
+            match self.limit_mode {
+                RenderLimitMode::AsIfFilesPlayTogether => raw |= 32 << 16,
+                RenderLimitMode::ToMasterMix => raw |= 64 << 16,
+                RenderLimitMode::None => {}
+            }
+            raw as f64
+        }
+
+        pub fn from_raw(value: f64) -> Self {
+            let raw = value as u32;
+            let mode = RenderNormalizeMode::from_int(raw & 0x0e)
+                .unwrap_or(RenderNormalizeMode::LufsI);
+            let mono_adjustment = if raw & (8 << 16) != 0 {
+                RenderMonoAdjustment::Plus3Db
+            } else if raw & 16 != 0 {
+                RenderMonoAdjustment::Minus3Db
+            } else {
+                RenderMonoAdjustment::None
+            };
+            let target_mode = match (
+                raw & 32 != 0,
+                raw & 4096 != 0,
+                raw & (16 << 16) != 0,
+            ) {
+                (true, false, false) => {
+                    RenderNormalizeTargetMode::AsIfFilesPlayTogether
+                }
+                (false, true, false) => {
+                    RenderNormalizeTargetMode::ToLoudestFile
+                }
+                (true, true, false) => {
+                    RenderNormalizeTargetMode::AsIfFilesPlayTogetherCommonGain
+                }
+                (false, false, true) => RenderNormalizeTargetMode::ToMasterMix,
+                _ => RenderNormalizeTargetMode::None,
+            };
+            let limit_mode =
+                match (raw & (32 << 16) != 0, raw & (64 << 16) != 0) {
+                    (true, false) => RenderLimitMode::AsIfFilesPlayTogether,
+                    (false, true) => RenderLimitMode::ToMasterMix,
+                    _ => RenderLimitMode::None,
+                };
+            Self {
+                enabled: raw & 1 != 0,
+                mode,
+                mono_adjustment,
+                target_mode,
+                brickwall_limit: raw & 64 != 0,
+                brickwall_limit_true_peak: raw & 128 != 0,
+                only_normalize_too_loud: raw & 256 != 0,
+                only_normalize_too_quiet: raw & 2048 != 0,
+                apply_fade_in: raw & 512 != 0,
+                apply_fade_out: raw & 1024 != 0,
+                trim_start_silence: raw & 16_384 != 0,
+                trim_end_silence: raw & 32_768 != 0,
+                pad_start_silence: raw & (1 << 16) != 0,
+                pad_end_silence: raw & (2 << 16) != 0,
+                disable_all_postprocessing: raw & (4 << 16) != 0,
+                limit_mode,
+            }
+        }
+    }
+
+    #[repr(u32)]
+    #[derive(
+        Debug, Clone, Copy, PartialEq, Eq, IntEnum, Serialize, Deserialize,
+    )]
+    pub enum RenderFadeShape {
+        Linear = 0,
+        EqualPower = 1,
+        EqualGain = 2,
+        SShape = 3,
+    }
+
+    bitflags! {
+        #[derive(Serialize, Deserialize)]
+        pub struct RenderFadeLowPassFlags: u32 {
+            const FADE_IN = 1;
+            const FADE_OUT = 2;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::project_info::{
+        BoundsMode, RenderDitherFlags, RenderLimitMode, RenderMonoAdjustment,
+        RenderNormalize, RenderNormalizeMode, RenderNormalizeTargetMode,
+        RenderSettings,
+    };
+    use super::{FullRenderSettings, Position};
+    use std::path::PathBuf;
+
+    #[test]
+    fn render_dither_flags_round_trip() {
+        let flags = RenderDitherFlags::DITHER
+            | RenderDitherFlags::NOISE_SHAPING
+            | RenderDitherFlags::DISABLE_ALL;
+        assert_eq!(flags.bits(), 19);
+        assert_eq!(RenderDitherFlags::from_bits(19).unwrap(), flags);
+    }
+
+    #[test]
+    fn render_normalize_round_trip() {
+        let settings = RenderNormalize {
+            enabled: true,
+            mode: RenderNormalizeMode::Peak,
+            mono_adjustment: RenderMonoAdjustment::Plus3Db,
+            target_mode: RenderNormalizeTargetMode::ToMasterMix,
+            brickwall_limit: true,
+            brickwall_limit_true_peak: true,
+            only_normalize_too_loud: true,
+            apply_fade_in: true,
+            trim_start_silence: true,
+            pad_end_silence: true,
+            disable_all_postprocessing: true,
+            limit_mode: RenderLimitMode::AsIfFilesPlayTogether,
+            ..Default::default()
+        };
+        let raw = settings.to_raw();
+        assert_eq!(RenderNormalize::from_raw(raw), settings);
+    }
+
+    #[test]
+    fn db_conversion_round_trip() {
+        let db = -6.020599913279624;
+        assert!(
+            (super::linear_to_db(super::db_to_linear(db)) - db).abs() < 1e-12
+        );
+    }
+
+    #[test]
+    fn duration_conversion_round_trip() {
+        let duration = std::time::Duration::from_millis(12);
+        assert_eq!(
+            std::time::Duration::from_secs_f64(duration.as_secs_f64()),
+            duration
+        );
+    }
+
+    #[test]
+    fn full_render_settings_serialization_round_trip() {
+        let settings = FullRenderSettings {
+            settings: Some(RenderSettings::new(
+                super::project_info::RenderMode::MasterMix,
+                true,
+                true,
+            )),
+            bounds: Some((Position::from(1.0), Position::from(2.0))),
+            bounds_mode: Some(BoundsMode::TimeSelection),
+            channels_amount: Some(2),
+            directory: Some(PathBuf::from("/tmp/render")),
+            file: Some("render.wav".to_string()),
+            primary_format: Some("wav".to_string()),
+            secondary_format: Some("wav".to_string()),
+            srate: Some(Some(48000)),
+            ..Default::default()
+        };
+
+        let serialized = serde_json::to_string(&settings).unwrap();
+        let deserialized: FullRenderSettings =
+            serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.settings, settings.settings);
+        assert_eq!(deserialized.bounds, settings.bounds);
+        assert_eq!(deserialized.bounds_mode, settings.bounds_mode);
+        assert_eq!(deserialized.channels_amount, settings.channels_amount);
+        assert_eq!(deserialized.directory, settings.directory);
+        assert_eq!(deserialized.file, settings.file);
+        assert_eq!(deserialized.primary_format, settings.primary_format);
+        assert_eq!(deserialized.secondary_format, settings.secondary_format);
+        assert_eq!(deserialized.srate, settings.srate);
     }
 }
 
