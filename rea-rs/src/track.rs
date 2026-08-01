@@ -647,8 +647,12 @@ impl Track {
     }
 
     /// Get string, that will differ only if midi changed.
-    pub fn midi_hash(&self, notes_only: bool) -> ReaperResult<Option<String>> {
-        let size = 100;
+    pub fn midi_hash(
+        &self,
+        notes_only: bool,
+        size: impl Into<Option<usize>>,
+    ) -> ReaperResult<Option<String>> {
+        let size = size.into().unwrap_or(128);
         let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().MIDI_GetTrackHash(

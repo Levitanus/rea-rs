@@ -212,6 +212,28 @@ impl Take {
         }
     }
 
+    /// Get string, that will differ only if midi changed.
+    pub fn midi_hash(
+        &self,
+        notes_only: bool,
+        size: impl Into<Option<usize>>,
+    ) -> ReaperResult<Option<String>> {
+        let size = size.into().unwrap_or(128);
+        let mut buf = vec![0_i8; size];
+        let result = unsafe {
+            Reaper::get().low().MIDI_GetHash(
+                self.get()?.as_ptr(),
+                notes_only,
+                buf.as_mut_ptr(),
+                size as i32,
+            )
+        };
+        match result {
+            false => Ok(None),
+            true => Ok(Some(string_from_buf(&buf)?)),
+        }
+    }
+
     fn get_info_string(
         &self,
         category: impl Into<String>,
