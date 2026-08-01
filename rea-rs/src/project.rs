@@ -1798,30 +1798,177 @@ pub mod project_info {
         pub mode: RenderMode,
         /// Render tracks with mono media to mono files.
         pub use_mono: bool,
+        /// Render multichannel tracks to multichannel files.
+        pub multichannel_tracks_to_multichannel_files: bool,
+        /// Render selected media items.
+        pub selected_media_items: bool,
+        /// Render selected media items via master.
+        pub selected_media_items_via_master: bool,
+        /// Render selected tracks via master.
+        pub selected_tracks_via_master: bool,
+        /// Embed transients if the format supports it.
+        pub embed_transients: bool,
+        /// Embed metadata if the format supports it.
+        pub embed_metadata: bool,
+        /// Embed take markers if the format supports it.
+        pub embed_take_markers: bool,
+        /// Render a second pass.
+        pub second_pass_render: bool,
+        /// Render razor edits.
+        pub render_razor_edits: bool,
+        /// Use pre-fader stems.
+        pub pre_fader_stems: bool,
+        /// Only send stem channels to the parent.
+        pub only_stem_channels_sent_to_parent: bool,
+        /// Preserve source metadata when possible.
+        pub preserve_source_metadata: bool,
+        /// Preserve source start offset when possible.
+        pub preserve_source_start_offset: bool,
+        /// Preserve source media sample rate when possible.
+        pub preserve_source_media_sample_rate: bool,
+        /// Render selected items or razor edits as a single file.
+        pub render_as_single_file: bool,
+        /// Render in parallel via master.
+        pub parallel_render_via_master: bool,
+        /// Delay render start to allow FX to initialize and load samples.
+        pub delay_render_start: bool,
     }
     impl RenderSettings {
-        pub fn new(
-            mode: RenderMode,
-            use_mono: bool,
-            add_to_project: bool,
-        ) -> Self {
-            Self { mode, use_mono }
+        pub fn new(mode: RenderMode, use_mono: bool) -> Self {
+            Self {
+                mode,
+                use_mono,
+                multichannel_tracks_to_multichannel_files: false,
+                selected_media_items: false,
+                selected_media_items_via_master: false,
+                selected_tracks_via_master: false,
+                embed_transients: false,
+                embed_metadata: false,
+                embed_take_markers: false,
+                second_pass_render: false,
+                render_razor_edits: false,
+                pre_fader_stems: false,
+                only_stem_channels_sent_to_parent: false,
+                preserve_source_metadata: false,
+                preserve_source_start_offset: false,
+                preserve_source_media_sample_rate: false,
+                render_as_single_file: false,
+                parallel_render_via_master: false,
+                delay_render_start: false,
+            }
         }
+
         pub(crate) fn to_raw(&self) -> f64 {
-            let val = self.mode.int_value()
-                | match self.use_mono {
-                    true => 16,
-                    false => 0,
-                };
+            let mut val = self.mode.int_value();
+            if self.use_mono {
+                val |= 16;
+            }
+            if self.multichannel_tracks_to_multichannel_files {
+                val |= 4;
+            }
+            if self.selected_media_items {
+                val |= 32;
+            }
+            if self.selected_media_items_via_master {
+                val |= 64;
+            }
+            if self.selected_tracks_via_master {
+                val |= 128;
+            }
+            if self.embed_transients {
+                val |= 256;
+            }
+            if self.embed_metadata {
+                val |= 512;
+            }
+            if self.embed_take_markers {
+                val |= 1024;
+            }
+            if self.second_pass_render {
+                val |= 2048;
+            }
+            if self.render_razor_edits {
+                val |= 4096;
+            }
+            if self.pre_fader_stems {
+                val |= 8192;
+            }
+            if self.only_stem_channels_sent_to_parent {
+                val |= 16384;
+            }
+            if self.preserve_source_metadata {
+                val |= 32768;
+            }
+            if self.preserve_source_start_offset {
+                val |= 1 << 16;
+            }
+            if self.preserve_source_media_sample_rate {
+                val |= 2 << 16;
+            }
+            if self.render_as_single_file {
+                val |= 4 << 16;
+            }
+            if self.parallel_render_via_master {
+                val |= 8 << 16;
+            }
+            if self.delay_render_start {
+                val |= 16 << 16;
+            }
             val as f64
         }
         pub(crate) fn from_raw(value: f64) -> Self {
-            let int_mode = value as u32 & !16;
-            let use_mono = value as u32 & 16 != 0;
+            let raw = value as u32;
+            let mode = if raw & 8 != 0 && raw & 0x03 == 0 {
+                RenderMode::RenderMatrix
+            } else if raw & 64 != 0 && raw & 0x03 == 0 {
+                RenderMode::SelectedItemsViaMaster
+            } else if raw & 32 != 0 && raw & 0x03 == 0 {
+                RenderMode::SelectedItems
+            } else if raw & 0x03 == 2 {
+                RenderMode::Stems
+            } else if raw & 0x03 == 1 {
+                RenderMode::MasterAndStems
+            } else {
+                RenderMode::MasterMix
+            };
+            let use_mono = raw & 16 != 0;
+            let multichannel_tracks_to_multichannel_files = raw & 4 != 0;
+            let selected_media_items = raw & 32 != 0;
+            let selected_media_items_via_master = raw & 64 != 0;
+            let selected_tracks_via_master = raw & 128 != 0;
+            let embed_transients = raw & 256 != 0;
+            let embed_metadata = raw & 512 != 0;
+            let embed_take_markers = raw & 1024 != 0;
+            let second_pass_render = raw & 2048 != 0;
+            let render_razor_edits = raw & 4096 != 0;
+            let pre_fader_stems = raw & 8192 != 0;
+            let only_stem_channels_sent_to_parent = raw & 16384 != 0;
+            let preserve_source_metadata = raw & 32768 != 0;
+            let preserve_source_start_offset = raw & (1 << 16) != 0;
+            let preserve_source_media_sample_rate = raw & (2 << 16) != 0;
+            let render_as_single_file = raw & (4 << 16) != 0;
+            let parallel_render_via_master = raw & (8 << 16) != 0;
+            let delay_render_start = raw & (16 << 16) != 0;
             Self {
-                mode: RenderMode::from_int(int_mode)
-                    .expect("can not convert to render mode"),
+                mode,
                 use_mono,
+                multichannel_tracks_to_multichannel_files,
+                selected_media_items,
+                selected_media_items_via_master,
+                selected_tracks_via_master,
+                embed_transients,
+                embed_metadata,
+                embed_take_markers,
+                second_pass_render,
+                render_razor_edits,
+                pre_fader_stems,
+                only_stem_channels_sent_to_parent,
+                preserve_source_metadata,
+                preserve_source_start_offset,
+                preserve_source_media_sample_rate,
+                render_as_single_file,
+                parallel_render_via_master,
+                delay_render_start,
             }
         }
     }
@@ -2105,8 +2252,8 @@ pub mod project_info {
 mod tests {
     use super::project_info::{
         BoundsMode, RenderDitherFlags, RenderLimitMode, RenderMonoAdjustment,
-        RenderNormalize, RenderNormalizeMode, RenderNormalizeTargetMode,
-        RenderSettings,
+        RenderMode, RenderNormalize, RenderNormalizeMode,
+        RenderNormalizeTargetMode, RenderSettings,
     };
     use super::{FullRenderSettings, Position};
     use std::path::PathBuf;
@@ -2142,6 +2289,36 @@ mod tests {
     }
 
     #[test]
+    fn render_settings_round_trip_covers_all_api_bits() {
+        let settings = RenderSettings {
+            mode: RenderMode::Stems,
+            use_mono: true,
+            multichannel_tracks_to_multichannel_files: true,
+            selected_media_items: true,
+            selected_media_items_via_master: true,
+            selected_tracks_via_master: true,
+            embed_transients: true,
+            embed_metadata: true,
+            embed_take_markers: true,
+            second_pass_render: true,
+            render_razor_edits: true,
+            pre_fader_stems: true,
+            only_stem_channels_sent_to_parent: true,
+            preserve_source_metadata: true,
+            preserve_source_start_offset: true,
+            preserve_source_media_sample_rate: true,
+            render_as_single_file: true,
+            parallel_render_via_master: true,
+            delay_render_start: true,
+        };
+
+        let raw = settings.to_raw();
+        let restored = RenderSettings::from_raw(raw);
+
+        assert_eq!(restored, settings);
+    }
+
+    #[test]
     fn db_conversion_round_trip() {
         let db = -6.020599913279624;
         assert!(
@@ -2163,7 +2340,6 @@ mod tests {
         let settings = FullRenderSettings {
             settings: Some(RenderSettings::new(
                 super::project_info::RenderMode::MasterMix,
-                true,
                 true,
             )),
             bounds: Some((Position::from(1.0), Position::from(2.0))),
