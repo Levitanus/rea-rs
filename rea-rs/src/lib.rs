@@ -153,9 +153,10 @@
 //!
 //! Enjoy the coding!
 
-use std::{ffi::NulError, str::Utf8Error};
+use std::{ffi::NulError, str::Utf8Error, string::FromUtf8Error};
 
 use anyhow::Error;
+use base64::DecodeError;
 pub use chrono::Duration;
 pub use int_enum::IntEnum;
 pub use rea_rs_low::PluginContext;
@@ -265,6 +266,10 @@ pub enum ReaRsError {
     CString(#[from] NulError),
     #[error("Utf8Error: can not convert pointer to String")]
     Utf8Error(#[from] Utf8Error),
+    #[error("DecodeError: can not convert base64 string")]
+    DecodeError(#[from] DecodeError),
+    #[error("FromUtf8Error: can not convert base64 string")]
+    FromUtf8Error(#[from] FromUtf8Error),
     #[error("UnderlyingError: other error {0}")]
     UnderlyingError(Error),
     #[error("IntEnumError: {0}")]

@@ -514,23 +514,11 @@ impl Take {
         Ok(())
     }
 
-    pub fn source_mut(&mut self) -> ReaperResult<Option<Source>> {
-        let ptr = unsafe {
-            Reaper::get()
-                .low()
-                .GetMediaItemTake_Source(self.get()?.as_ptr())
-        };
-        match PcmSource::new(ptr) {
-            None => Ok(None),
-            Some(ptr) => Ok(Some(Source::new(self, ptr)?)),
-        }
-    }
-
     pub fn set_source(&mut self, source: Source) -> ReaperResult<()> {
         let result = unsafe {
             Reaper::get().low().SetMediaItemTake_Source(
                 self.get()?.as_ptr(),
-                source.get()?.as_ptr(),
+                source.get_pointer().as_ptr(),
             )
         };
         match result {

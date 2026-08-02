@@ -1,6 +1,6 @@
 use crate::{
-    ptr_wrappers::{MediaItem, MediaItemTake, PcmSource, ReaProject},
-    utils::{string_from_buf},
+    ptr_wrappers::{MediaItemTake, PcmSource},
+    utils::string_from_buf,
     KnowsProject, Position, Project, ProjectContext, ReaRsError, Reaper,
     ReaperResult, Take, Volume, WithReaperPtr,
 };
@@ -18,9 +18,7 @@ use std::{
 
 #[derive(Debug, PartialEq)]
 pub struct Source {
-    take: MediaItemTake,
-    project_ptr: Option<ReaProject>,
-    item_ptr: Option<MediaItem>,
+    take: Option<MediaItemTake>,
     ptr: PcmSource,
     should_check: bool,
 }
@@ -30,8 +28,10 @@ impl WithReaperPtr for Source {
         self.ptr
     }
     fn get(&self) -> Result<Self::Ptr, ReaRsError> {
-        let project = match self.project_ptr {
-            Some(ptr) => Project::new(ProjectContext::Proj(ptr)),
+        let project = match self.take()? {
+            Some(take) => Project::new(ProjectContext::Proj(
+                take.project().get_pointer(),
+            )),
             None => Project::new(ProjectContext::CurrentProject),
         };
         self.require_valid_2(&project)
@@ -47,18 +47,28 @@ impl WithReaperPtr for Source {
     }
 }
 impl Source {
-    pub fn new(take: &Take, ptr: PcmSource) -> ReaperResult<Self> {
+    pub fn new<'a>(
+        take: impl Into<Option<&'a Take>>,
+        ptr: PcmSource,
+    ) -> ReaperResult<Self> {
+        let take = take.into();
         Ok(Self {
-            take: take.get()?,
-            project_ptr: Some(take.project().get()?),
-            item_ptr: Some(take.parent_item()?.get()?),
+            take: if let Some(take) = take {
+                Some(take.get()?)
+            } else {
+                None
+            },
             ptr,
             should_check: true,
         })
     }
 
-    pub fn take(&self) -> MediaItemTake {
-        self.take
+    pub fn take(&self) -> ReaperResult<Option<Take>> {
+        if let Some(ptr) = self.take {
+            Ok(Some(Take::new(ptr, None)?))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn filename(&self) -> ReaperResult<PathBuf> {
@@ -72,6 +82,45 @@ impl Source {
             )
         };
         Ok(PathBuf::from(string_from_buf(&buf)?))
+    }
+
+    /// Create Source from file.
+    ///
+    /// if midi_as_file == true MIDI would not be imported as project MIDI
+    pub fn create_from_file(
+        file: PathBuf,
+        midi_as_file: bool,
+    ) -> ReaperResult<Self> {
+        let c_string = CString::new(file.to_string_lossy().to_string())?;
+        let ptr = unsafe {
+            Reaper::get().low().PCM_Source_CreateFromFileEx(
+                c_string.as_ptr(),
+                !midi_as_file,
+            )
+        };
+        Self::new(
+            None,
+            PcmSource::new(ptr).ok_or(ReaRsError::NullPtr("source"))?,
+        )
+    }
+
+    ///Create a PCM_source from a "type" (use this if you're going to load its
+    /// state via LoadState/ProjectStateContext). Valid types include
+    /// "WAVE", "MIDI", or whatever plug-ins define as well.
+    pub fn create_from_type(
+        type_string: impl Into<String>,
+    ) -> ReaperResult<Self> {
+        let type_string = type_string.into();
+        let c_string = CString::new(type_string)?;
+        let ptr = unsafe {
+            Reaper::get().low().PCM_Source_CreateFromType(
+                c_string.as_ptr(),
+            )
+        };
+        Self::new(
+            None,
+            PcmSource::new(ptr).ok_or(ReaRsError::NullPtr("source"))?,
+        )
     }
 
     /// Get source media length.
@@ -89,35 +138,16 @@ impl Source {
         };
         match unsafe { is_qn.assume_init() } {
             true => {
-                let mut item_ptr = self.item_ptr;
-                if item_ptr.is_none() {
-                    item_ptr = MediaItem::new(unsafe {
-                        Reaper::get()
-                            .low()
-                            .GetMediaItemTake_Item(self.take().as_ptr())
-                    });
-                }
-                let item_ptr =
-                    item_ptr.ok_or(ReaRsError::NullPtr("take item"))?;
-                let item_pos_key = String::from("D_POSITION");
-                let item_start = unsafe {
-                    Reaper::get().low().GetMediaItemInfo_Value(
-                        item_ptr.as_ptr(),
-                        CString::new(item_pos_key)?.as_ptr(),
-                    )
+                let Some(take) = self.take()? else {
+                    return Err(ReaRsError::InvalidObject(
+                        "no take on source",
+                    ));
                 };
-                let offset_key = String::from("D_STARTOFFS");
-                let start_offset = unsafe {
-                    Reaper::get().low().GetMediaItemTakeInfo_Value(
-                        self.take().as_ptr(),
-                        CString::new(offset_key)?.as_ptr(),
-                    )
-                };
-                let project = match self.project_ptr {
-                    Some(ptr) => Project::new(ProjectContext::Proj(ptr)),
-                    None => Project::new(ProjectContext::CurrentProject),
-                };
-                let start = Position::from(item_start - start_offset);
+                let item = take.parent_item()?;
+                let item_start = item.position()?;
+                let start_offset = take.start_offset()?;
+                let project = item.project();
+                let start = Position::from(item_start - start_offset.into());
                 let start_in_qn = start.as_quarters(&project);
                 let end_in_qn = start_in_qn + result;
                 let end = Position::from_quarters(end_in_qn, &project);
@@ -215,8 +245,7 @@ impl Source {
         };
         Ok(Volume::from(result))
     }
-}
-impl Source {
+
     pub fn delete(&mut self) -> ReaperResult<()> {
         unsafe { Reaper::get().low().PCM_Source_Destroy(self.get()?.as_ptr()) }
         Ok(())

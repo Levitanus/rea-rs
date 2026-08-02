@@ -7,6 +7,7 @@ use crate::{
     Position, ProjectContext, ReaRsError, Reaper, ReaperResult, TimeRange,
     TimeRangeKind, TimeSignature, Track, UndoFlags,
 };
+use base64::{engine::general_purpose, Engine as _};
 use c_str_macro::c_str;
 use int_enum::IntEnum;
 use log::{debug, warn};
@@ -44,8 +45,8 @@ pub struct FullRenderSettings {
     pub channels_amount: Option<u32>,
     pub directory: Option<PathBuf>,
     pub file: Option<String>,
-    pub primary_format: Option<String>,
-    pub secondary_format: Option<String>,
+    pub primary_format: Option<RenderFormat>,
+    pub secondary_format: Option<RenderFormat>,
     pub srate: Option<Option<u32>>,
     pub tail: Option<RenderTail>,
 }
@@ -83,78 +84,103 @@ impl FullRenderSettings {
 
     pub fn apply_to_project(&self, project: &mut Project) -> ReaperResult<()> {
         if let Some(settings) = self.settings {
+            debug!("set_render_settings");
             project.set_render_settings(settings)?;
         }
         if let Some((start, end)) = self.bounds {
+            debug!("set_render_bounds");
             project.set_render_bounds(start, end)?;
         }
         if let Some(bounds_mode) = self.bounds_mode {
+            debug!("set_render_bounds_mode");
             project.set_render_bounds_mode(bounds_mode)?;
         }
         if let Some(add_to_project) = self.add_to_project {
+            debug!("set_render_add_to_project");
             project.set_render_add_to_project(add_to_project)?;
         }
         if let Some(dither) = self.dither {
+            debug!("set_render_dither");
             project.set_render_dither(dither)?;
         }
         if let Some(normalize) = self.normalize {
+            debug!("set_render_normalize");
             project.set_render_normalize(normalize)?;
         }
         if let Some(normalize_target) = self.normalize_target {
+            debug!("set_render_normalize_target");
             project.set_render_normalize_target(normalize_target)?;
         }
         if let Some(brickwall) = self.brickwall {
+            debug!("set_render_brickwall");
             project.set_render_brickwall(brickwall)?;
         }
         if let Some(fade_in) = self.fade_in {
+            debug!("set_render_fade_in");
             project.set_render_fade_in(fade_in)?;
         }
         if let Some(fade_out) = self.fade_out {
+            debug!("set_render_fade_out");
             project.set_render_fade_out(fade_out)?;
         }
         if let Some(fade_in_shape) = self.fade_in_shape {
+            debug!("set_render_fade_in_shape");
             project.set_render_fade_in_shape(fade_in_shape)?;
         }
         if let Some(fade_out_shape) = self.fade_out_shape {
+            debug!("set_render_fade_out_shape");
             project.set_render_fade_out_shape(fade_out_shape)?;
         }
         if let Some(fade_lpf) = self.fade_lpf {
+            debug!("set_render_fade_lpf");
             project.set_render_fade_lpf(fade_lpf)?;
         }
         if let Some(pad_start) = self.pad_start {
+            debug!("set_render_pad_start");
             project.set_render_pad_start(pad_start)?;
         }
         if let Some(pad_end) = self.pad_end {
+            debug!("set_render_pad_end");
             project.set_render_pad_end(pad_end)?;
         }
         if let Some(trim_start) = self.trim_start {
+            debug!("set_render_trim_start");
             project.set_render_trim_start(trim_start)?;
         }
         if let Some(trim_end) = self.trim_end {
+            debug!("set_render_trim_end");
             project.set_render_trim_end(trim_end)?;
         }
         if let Some(delay) = self.delay {
+            debug!("set_render_delay");
             project.set_render_delay(delay)?;
         }
         if let Some(channels_amount) = self.channels_amount {
+            debug!("set_render_channels_amount");
             project.set_render_channels_amount(channels_amount)?;
         }
         if let Some(directory) = &self.directory {
+            debug!("set_render_directory");
             project.set_render_directory(directory.clone())?;
         }
         if let Some(file) = &self.file {
+            debug!("set_render_file");
             project.set_render_file(file.clone())?;
         }
         if let Some(primary_format) = &self.primary_format {
+            debug!("set_render_format");
             project.set_render_format(primary_format.clone(), false)?;
         }
         if let Some(secondary_format) = &self.secondary_format {
+            debug!("set_render_format2");
             project.set_render_format(secondary_format.clone(), true)?;
         }
         if let Some(srate) = self.srate {
+            debug!("set_render_srate");
             project.set_render_srate(srate)?;
         }
         if let Some(tail) = self.tail {
+            debug!("set_render_tail");
             project.set_render_tail(tail)?;
         }
         Ok(())
@@ -1096,14 +1122,13 @@ impl<'a> Project {
         param_name: impl Into<String>,
         value: impl Into<String>,
     ) -> ReaperResult<()> {
-        let value: String = value.into();
-        let val = CString::new(value)?.into_raw();
+        let val = CString::new(value.into())?;
         let project = self.get()?;
         let result = unsafe {
             Reaper::get().low().GetSetProjectInfo_String(
                 project.as_ptr(),
                 CString::new(param_name.into())?.as_ptr(),
-                val,
+                val.into_raw(),
                 true,
             )
         };
@@ -1279,12 +1304,13 @@ impl<'a> Project {
     pub fn get_render_format(
         &self,
         secondary_format: bool,
-    ) -> ReaperResult<String> {
+    ) -> ReaperResult<RenderFormat> {
         let param = match secondary_format {
             false => "RENDER_FORMAT",
             true => "RENDER_FORMAT2",
         };
-        self.get_info_string(param)
+        let raw_value = self.get_info_string(param)?;
+        Ok(RenderFormat::from_reaper_format(&raw_value))
     }
 
     /// base64-encoded secondary sink configuration.
@@ -1300,14 +1326,18 @@ impl<'a> Project {
     /// "wave" "aiff" "caff" "iso " "ddp " "flac" "mp3l" "oggv" "OggS"
     pub fn set_render_format(
         &mut self,
-        format: impl Into<String>,
+        format: impl Into<RenderFormat>,
         secondary_format: bool,
     ) -> ReaperResult<()> {
         let param = match secondary_format {
             false => "RENDER_FORMAT",
             true => "RENDER_FORMAT2",
         };
-        self.set_info_string(param, format)
+        // REAPER accepts either a raw 4-byte format id (for the simple formats
+        // exposed by RenderFormat) or a base64-encoded sink configuration.
+        // For the supported simple formats, send the raw id directly.
+        let format_string = format.into().to_reaper_format();
+        self.set_info_string(param, format_string)
     }
 
     /// Filenames, that will be rendered.
@@ -1455,6 +1485,7 @@ impl<'a> Project {
         &mut self,
         settings: &FullRenderSettings,
     ) -> ReaperResult<()> {
+        debug!("applying render settings: {:#?}", settings);
         settings.apply_to_project(self)
     }
 
@@ -1834,10 +1865,10 @@ pub mod project_info {
         pub delay_render_start: bool,
     }
     impl RenderSettings {
-        pub fn new(mode: RenderMode, use_mono: bool) -> Self {
+        pub fn new(mode: RenderMode) -> Self {
             Self {
                 mode,
-                use_mono,
+                use_mono: false,
                 multichannel_tracks_to_multichannel_files: false,
                 selected_media_items: false,
                 selected_media_items_via_master: false,
@@ -2248,11 +2279,194 @@ pub mod project_info {
     }
 }
 
+/// Audio format enum for render settings
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RenderFormat {
+    /// Waveform Audio File Format
+    Wave,
+    /// Audio Interchange File Format
+    Aiff,
+    /// Core Audio Format
+    Caff,
+    /// Free Lossless Audio Codec
+    Flac,
+    /// MPEG-1 Audio Layer III
+    Mp3,
+    /// Ogg Vorbis
+    OggVorbis,
+    /// Ogg Speex
+    OggSpeex,
+    /// WavePack lossless compressor
+    WavePack,
+    /// Raw audio data
+    Raw,
+    /// ISO format
+    Iso,
+    /// DDP format
+    Ddp,
+    /// FFmpeg format
+    FFmpeg,
+    /// Windows Media Format
+    Wmf,
+    /// Graphics Interchange Format (audio)
+    Gif,
+    /// LCF format
+    Lcf,
+    /// Generalized format for unlisted formats
+    Other(String),
+}
+
+impl RenderFormat {
+    fn parse_reaper_format_token(token: &str) -> Option<Self> {
+        let token = token.split('\0').next().unwrap_or(token).trim();
+        debug!("got render format token from Reaper: {token}");
+        match token {
+            "wave" | "wvaw" | "evaw" => Some(RenderFormat::Wave),
+            "aiff" | "ffia" => Some(RenderFormat::Aiff),
+            "caff" | "ffac" => Some(RenderFormat::Caff),
+            "flac" | "calf" => Some(RenderFormat::Flac),
+            "mp3l" | "l3pm" => Some(RenderFormat::Mp3),
+            "OggS" => Some(RenderFormat::OggSpeex),
+            "oggv" => Some(RenderFormat::OggVorbis),
+            "wvpk" | "kpvw" => Some(RenderFormat::WavePack),
+            "raw " => Some(RenderFormat::Raw),
+            "iso " => Some(RenderFormat::Iso),
+            "ddp " => Some(RenderFormat::Ddp),
+            "FFMP" => Some(RenderFormat::FFmpeg),
+            "WMF " => Some(RenderFormat::Wmf),
+            "GIF " => Some(RenderFormat::Gif),
+            "LCF " => Some(RenderFormat::Lcf),
+            _ => None,
+        }
+    }
+
+    fn normalize_reaper_format_input(input: &str) -> String {
+        let trimmed = input.split('\0').next().unwrap_or(input).trim();
+
+        if let Ok(decoded_bytes) = general_purpose::STANDARD.decode(trimmed) {
+            if let Ok(decoded_string) = std::str::from_utf8(&decoded_bytes) {
+                let candidate = decoded_string
+                    .split('\0')
+                    .next()
+                    .unwrap_or(decoded_string)
+                    .trim();
+                if candidate.len() >= 4 {
+                    return candidate.chars().take(4).collect();
+                }
+                return candidate.to_string();
+            }
+
+            if decoded_bytes.len() >= 4 {
+                let mut out = String::with_capacity(4);
+                for &byte in &decoded_bytes[..4] {
+                    out.push(byte as char);
+                }
+                return out;
+            }
+        }
+
+        if trimmed.len() >= 4 {
+            let bytes = trimmed.as_bytes();
+            let mut out = String::with_capacity(4);
+            for &byte in &bytes[..4] {
+                if byte == 0 {
+                    break;
+                }
+                out.push(byte as char);
+            }
+            return out;
+        }
+        trimmed.to_string()
+    }
+
+    /// Returns a hint/description for the audio format
+    pub fn hint(&self) -> &'static str {
+        match self {
+            RenderFormat::Wave => "Waveform Audio File Format",
+            RenderFormat::Aiff => "Audio Interchange File Format",
+            RenderFormat::Caff => "Core Audio Format",
+            RenderFormat::Flac => "Free Lossless Audio Codec",
+            RenderFormat::Mp3 => "MPEG-1 Audio Layer III",
+            RenderFormat::OggVorbis => "Ogg Vorbis",
+            RenderFormat::OggSpeex => "Ogg Speex",
+            RenderFormat::WavePack => "WavePack lossless compressor",
+            RenderFormat::Raw => "Raw audio data",
+            RenderFormat::Iso => "ISO format",
+            RenderFormat::Ddp => "DDP format",
+            RenderFormat::FFmpeg => "FFmpeg format",
+            RenderFormat::Wmf => "Windows Media Format",
+            RenderFormat::Gif => "Graphics Interchange Format (audio)",
+            RenderFormat::Lcf => "LCF format",
+            RenderFormat::Other(_) => "Custom format",
+        }
+    }
+
+    /// Returns the file extension for the audio format
+    pub fn extension(&self) -> &'static str {
+        match self {
+            RenderFormat::Wave => "wav",
+            RenderFormat::Aiff => "aiff",
+            RenderFormat::Caff => "caf",
+            RenderFormat::Flac => "flac",
+            RenderFormat::Mp3 => "mp3",
+            RenderFormat::OggVorbis => "ogg",
+            RenderFormat::OggSpeex => "spx",
+            RenderFormat::WavePack => "wv",
+            RenderFormat::Raw => "raw",
+            RenderFormat::Iso => "iso",
+            RenderFormat::Ddp => "ddp",
+            RenderFormat::FFmpeg => "mp4",
+            RenderFormat::Wmf => "wmf",
+            RenderFormat::Gif => "gif",
+            RenderFormat::Lcf => "lcf",
+            RenderFormat::Other(_) => "dat",
+        }
+    }
+
+    /// Creates an AudioFormat from the 4-byte string representation used by
+    /// REAPER. The input may contain a raw 4-byte token, a token with trailing
+    /// payload, or a string that includes NUL bytes; in all cases we normalize
+    /// to the leading token bytes before matching.
+    pub fn from_reaper_format(format: &str) -> Self {
+        let normalized = Self::normalize_reaper_format_input(format);
+        if let Some(parsed) = Self::parse_reaper_format_token(&normalized) {
+            return parsed;
+        }
+        RenderFormat::Other(normalized)
+    }
+
+    /// Converts the AudioFormat to the 4-byte string representation used by
+    /// REAPER.
+    pub fn to_reaper_format(&self) -> String {
+        let format = match self {
+            RenderFormat::Wave => "wave".to_string(),
+            RenderFormat::Aiff => "aiff".to_string(),
+            RenderFormat::Caff => "caff".to_string(),
+            RenderFormat::Flac => "flac".to_string(),
+            RenderFormat::Mp3 => "mp3l".to_string(),
+            RenderFormat::OggSpeex => "OggS".to_string(),
+            RenderFormat::OggVorbis => "oggv".to_string(),
+            RenderFormat::WavePack => "wvpk".to_string(),
+            RenderFormat::Raw => "raw ".to_string(),
+            RenderFormat::Iso => "iso ".to_string(),
+            RenderFormat::Ddp => "ddp ".to_string(),
+            RenderFormat::FFmpeg => "FFMP".to_string(),
+            RenderFormat::Wmf => "WMF ".to_string(),
+            RenderFormat::Gif => "GIF ".to_string(),
+            RenderFormat::Lcf => "LCF ".to_string(),
+            RenderFormat::Other(s) => s.clone(),
+        };
+        format.chars().rev().collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::RenderFormat;
+
     use super::project_info::{
-        BoundsMode, RenderDitherFlags, RenderLimitMode, RenderMonoAdjustment,
-        RenderMode, RenderNormalize, RenderNormalizeMode,
+        BoundsMode, RenderDitherFlags, RenderLimitMode, RenderMode,
+        RenderMonoAdjustment, RenderNormalize, RenderNormalizeMode,
         RenderNormalizeTargetMode, RenderSettings,
     };
     use super::{FullRenderSettings, Position};
@@ -2265,6 +2479,40 @@ mod tests {
             | RenderDitherFlags::DISABLE_ALL;
         assert_eq!(flags.bits(), 19);
         assert_eq!(RenderDitherFlags::from_bits(19).unwrap(), flags);
+    }
+
+    #[test]
+    fn render_format_parses_raw_and_base64_values() {
+        assert_eq!(
+            RenderFormat::from_reaper_format("evaw"),
+            RenderFormat::Wave
+        );
+        assert_eq!(
+            RenderFormat::from_reaper_format("l3pm"),
+            RenderFormat::Mp3
+        );
+        assert_eq!(
+            RenderFormat::from_reaper_format("d2F2ZQ=="),
+            RenderFormat::Wave
+        );
+        assert_eq!(
+            RenderFormat::from_reaper_format("bDNwbQ=="),
+            RenderFormat::Mp3
+        );
+        assert_eq!(
+            RenderFormat::from_reaper_format("a3B2dwAAAAABAAAAAAAAAAAAAAA="),
+            RenderFormat::WavePack
+        );
+        assert_eq!(
+            RenderFormat::from_reaper_format(
+                "bDNwbUABAAAAAAAAAAAAAP////8EAAAAQAEAAAAAAAA="
+            ),
+            RenderFormat::Mp3
+        );
+        assert_eq!(
+            RenderFormat::from_reaper_format("ZXZhdxgAAQ=="),
+            RenderFormat::Wave
+        );
     }
 
     #[test]
@@ -2340,15 +2588,14 @@ mod tests {
         let settings = FullRenderSettings {
             settings: Some(RenderSettings::new(
                 super::project_info::RenderMode::MasterMix,
-                true,
             )),
             bounds: Some((Position::from(1.0), Position::from(2.0))),
             bounds_mode: Some(BoundsMode::TimeSelection),
             channels_amount: Some(2),
             directory: Some(PathBuf::from("/tmp/render")),
             file: Some("render.wav".to_string()),
-            primary_format: Some("wav".to_string()),
-            secondary_format: Some("wav".to_string()),
+            primary_format: Some(RenderFormat::from_reaper_format("wav")),
+            secondary_format: Some(RenderFormat::from_reaper_format("wav")),
             srate: Some(Some(48000)),
             ..Default::default()
         };
