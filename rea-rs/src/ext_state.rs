@@ -399,11 +399,12 @@ impl HasExtState for Track {
         value: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let c_value = CString::new(value.into())?;
         unsafe {
             Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get()?.as_ptr(),
                 CString::new(category)?.as_ptr(),
-                CString::new(value.into())?.into_raw(),
+                c_value.as_ptr() as *mut i8,
                 true,
             )
         };
@@ -425,11 +426,12 @@ impl HasExtState for Track {
         key: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let c_value = CString::new("")?;
         unsafe {
             Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get()?.as_ptr(),
                 CString::new(category)?.as_ptr(),
-                CString::new("")?.into_raw(),
+                c_value.as_ptr() as *mut i8,
                 true,
             )
         };
@@ -445,13 +447,14 @@ impl<'a> HasExtState for TrackSend<'a> {
         value: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let c_value = CString::new(value.into())?;
         unsafe {
             Reaper::get().low().GetSetTrackSendInfo_String(
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
                 CString::new(category)?.as_ptr(),
-                CString::new(value.into())?.into_raw(),
+                c_value.as_ptr() as *mut i8,
                 true,
             );
         }
@@ -495,7 +498,7 @@ impl<'a> HasExtState for TrackSend<'a> {
                 self.as_int(),
                 self.index() as i32,
                 CString::new(category)?.as_ptr(),
-                empty.into_raw(),
+                empty.as_ptr() as *mut i8,
                 true,
             )
         };
@@ -511,11 +514,12 @@ impl<'a, P: KnowsProject> HasExtState for Envelope<'a, P> {
         value: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let c_value = CString::new(value.into())?;
         unsafe {
             Reaper::get().low().GetSetEnvelopeInfo_String(
                 self.get()?.as_ptr(),
                 CString::new(category)?.as_ptr(),
-                CString::new(value.into())?.into_raw(),
+                c_value.as_ptr() as *mut i8,
                 true,
             );
         }
@@ -555,7 +559,7 @@ impl<'a, P: KnowsProject> HasExtState for Envelope<'a, P> {
             Reaper::get().low().GetSetEnvelopeInfo_String(
                 self.get()?.as_ptr(),
                 CString::new(category)?.as_ptr(),
-                empty.into_raw(),
+                empty.as_ptr() as *mut i8,
                 true,
             )
         };
@@ -571,11 +575,12 @@ impl HasExtState for Item {
         value: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let c_value = CString::new(value.into())?;
         unsafe {
             Reaper::get().low().GetSetMediaItemInfo_String(
                 self.get()?.as_ptr(),
                 CString::new(category)?.as_ptr(),
-                CString::new(value.into())?.into_raw(),
+                c_value.as_ptr() as *mut i8,
                 true,
             );
         }
@@ -615,7 +620,7 @@ impl HasExtState for Item {
             Reaper::get().low().GetSetMediaItemInfo_String(
                 self.get()?.as_ptr(),
                 CString::new(category)?.as_ptr(),
-                empty.into_raw(),
+                empty.as_ptr() as *mut i8,
                 true,
             )
         };
@@ -631,11 +636,12 @@ impl HasExtState for Take {
         value: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let c_value = CString::new(value.into())?;
         unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
                 self.get()?.as_ptr(),
                 CString::new(category)?.as_ptr(),
-                CString::new(value.into())?.into_raw(),
+                c_value.as_ptr() as *mut i8,
                 true,
             );
         }
@@ -675,7 +681,7 @@ impl HasExtState for Take {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
                 self.get()?.as_ptr(),
                 CString::new(category)?.as_ptr(),
-                empty.into_raw(),
+                empty.as_ptr() as *mut i8,
                 true,
             )
         };

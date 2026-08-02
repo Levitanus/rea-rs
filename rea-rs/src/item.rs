@@ -536,12 +536,12 @@ impl Item {
     ) -> ReaperResult<()> {
         let category = category.into();
         let value = value.into();
-        let buf = CString::new(value)?.into_raw();
+        let buf = CString::new(value)?;
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemInfo_String(
                 self.get()?.as_ptr(),
                 CString::new(category)?.as_ptr(),
-                buf,
+                buf.as_ptr() as *mut i8,
                 true,
             )
         };

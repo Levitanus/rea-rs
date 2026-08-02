@@ -146,8 +146,9 @@ impl Reaper {
         let path = file
             .to_str()
             .ok_or(ReaRsError::Str("can not use this path"))?;
+        let c_path = CString::new(path)?;
         unsafe {
-            self.low().Main_openProject(CString::new(path)?.into_raw());
+            self.low().Main_openProject(c_path.as_ptr());
         }
         let project = self.current_project();
         if !make_current_project {
@@ -197,15 +198,15 @@ impl Reaper {
         }
         let abs = canonicalize(file)
             .map_err(|e| ReaRsError::UnderlyingError(e.into()))?;
+        let c_scriptfn = CString::new(
+            abs.to_str()
+                .ok_or(ReaRsError::Str("can not resolve path"))?,
+        )?;
         unsafe {
             let id = self.low().AddRemoveReaScript(
                 add,
                 section.id() as i32,
-                CString::new(
-                    abs.to_str()
-                        .ok_or(ReaRsError::Str("can not resolve path"))?,
-                )?
-                .into_raw(),
+                c_scriptfn.as_ptr(),
                 commit,
             );
             if id <= 0 {
@@ -229,12 +230,14 @@ impl Reaper {
         window_title: impl Into<String>,
         extension: impl Into<String>,
     ) -> ReaperResult<Box<Path>> {
+        let c_title = CString::new(window_title.into())?;
+        let c_extension = CString::new(extension.into())?;
         unsafe {
             let mut buf = vec![0_i8; 4096];
             let result = self.low().GetUserFileNameForRead(
                 buf.as_mut_ptr(),
-                CString::new(window_title.into())?.into_raw(),
-                CString::new(extension.into())?.into_raw(),
+                c_title.as_ptr(),
+                c_extension.as_ptr(),
             );
             match result {
                 false => Err(ReaRsError::UserAborted),

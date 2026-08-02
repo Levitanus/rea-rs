@@ -230,9 +230,10 @@ impl<'a> Project {
         unsafe {
             let pointer = match context {
                 ProjectContext::CurrentProject => {
+                    let empty = CString::from(c_str!(""));
                     let ptr = rpr.low().EnumProjects(
                         -1,
-                        CString::from(c_str!("")).into_raw(),
+                        empty.as_ptr() as *mut i8,
                         0,
                     );
                     NonNull::new(ptr).expect("expect project")
@@ -282,8 +283,9 @@ impl<'a> Project {
     /// If the project tab is active.
     pub fn is_current_project(&self) -> bool {
         let low = Reaper::get().low();
+        let empty = CString::from(c_str!(""));
         let ptr = unsafe {
-            low.EnumProjects(-1, CString::from(c_str!("")).into_raw(), 0)
+            low.EnumProjects(-1, empty.as_ptr() as *mut i8, 0)
         };
         self.pointer.as_ptr() == ptr
     }
@@ -1128,7 +1130,7 @@ impl<'a> Project {
             Reaper::get().low().GetSetProjectInfo_String(
                 project.as_ptr(),
                 CString::new(param_name.into())?.as_ptr(),
-                val.into_raw(),
+                val.as_ptr() as *mut i8,
                 true,
             )
         };

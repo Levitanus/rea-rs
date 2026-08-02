@@ -857,11 +857,12 @@ impl Track {
         let category = category.into();
         let value = value.into();
         debug!("set_info_string: category: {category}, value: {value}");
+        let c_value = CString::new(value)?;
         let result = unsafe {
             Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get()?.as_ptr(),
                 CString::new(category)?.as_ptr(),
-                CString::new(value)?.into_raw(),
+                c_value.as_ptr() as *mut i8,
                 true,
             )
         };

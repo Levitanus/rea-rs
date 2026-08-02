@@ -557,12 +557,12 @@ impl Take {
         category: impl Into<String>,
         string: impl Into<String>,
     ) -> ReaperResult<()> {
-        let buf = CString::new(string.into())?.into_raw();
+        let c_buf = CString::new(string.into())?;
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
                 self.get()?.as_ptr(),
                 CString::new(category.into())?.as_ptr(),
-                buf,
+                c_buf.as_ptr() as *mut i8,
                 true,
             )
         };
