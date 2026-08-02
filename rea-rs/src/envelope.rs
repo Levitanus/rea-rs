@@ -1,8 +1,7 @@
 use crate::{
-    ptr_wrappers::TrackEnvelope,
-    utils::{string_from_buf},
-    GetLength, KnowsProject, Position, ReaRsError, Reaper, ReaperResult,
-    WithReaperPtr, GUID,
+    ptr_wrappers::TrackEnvelope, utils::string_from_buf, GetLength,
+    KnowsProject, Position, ReaRsError, Reaper, ReaperResult, WithReaperPtr,
+    GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
@@ -200,6 +199,9 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         match result {
             true => unsafe {
                 Ok(EnvelopePoint {
+                    position: Position::new(Duration::from_secs_f64(
+                        time.assume_init(),
+                    )),
                     value: self.scale_from(value.assume_init())?,
                     shape: EnvelopePointShape::from_int(shape.assume_init())
                         .map_err(|_| {
@@ -213,7 +215,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
                 })
             },
             false => Err(ReaRsError::UnsuccessfulOperation(
-                "Can not set envelope point!",
+                "Can not get envelope point!",
             )
             .into()),
         }
@@ -560,27 +562,25 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     pub fn set_point(
         &mut self,
         point_index: usize,
-        position: Option<Position>,
+        // position: Option<Position>,
         point: EnvelopePoint,
         sort: bool,
     ) -> ReaperResult<()> {
-        self.set_point_ex(None, false, point_index, position, point, sort)
+        self.set_point_ex(None, false, point_index, point, sort)
     }
     fn set_point_ex(
         &self,
         automation_item_index: Option<usize>,
         only_visible: bool,
         point_index: usize,
-        position: Option<Position>,
+        // position: Option<Position>,
         point: EnvelopePoint,
         sort: bool,
     ) -> ReaperResult<()> {
         let mut sort = MaybeUninit::new(!sort);
         let a_itm = automation_item_idx(only_visible, automation_item_index);
-        let mut time = match position {
-            Some(pos) => MaybeUninit::new(pos.as_duration().as_secs_f64()),
-            None => MaybeUninit::zeroed(),
-        };
+        let mut time =
+            MaybeUninit::new(point.position.as_duration().as_secs_f64());
         let mut value = MaybeUninit::new(self.scale_to(point.value)?);
         let mut shape = MaybeUninit::new(point.shape.int_value());
         let mut tension = MaybeUninit::new(point.tension.into());
@@ -609,17 +609,17 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
 
     pub fn insert_point(
         &mut self,
-        position: Position,
+        // position: Position,
         point: EnvelopePoint,
         sort: bool,
     ) -> ReaperResult<()> {
-        self.insert_point_ex(None, false, position, point, sort)
+        self.insert_point_ex(None, false, point, sort)
     }
-    fn insert_point_ex(
+    pub fn insert_point_ex(
         &self,
         automation_item_index: Option<usize>,
         only_visible: bool,
-        position: Position,
+        // position: Position,
         point: EnvelopePoint,
         sort: bool,
     ) -> ReaperResult<()> {
@@ -629,7 +629,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
             Reaper::get().low().InsertEnvelopePointEx(
                 self.get()?.as_ptr(),
                 a_itm,
-                position.into(),
+                point.position.into(),
                 self.scale_to(point.value)?,
                 point.shape.int_value(),
                 point.tension.into(),
@@ -649,7 +649,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     pub fn delete_point(&mut self, index: usize) -> ReaperResult<()> {
         self.delete_point_ex(None, false, index)
     }
-    fn delete_point_ex(
+    pub fn delete_point_ex(
         &self,
         automation_item_index: Option<usize>,
         only_visible: bool,
@@ -748,6 +748,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EnvelopePoint {
+    pub position: Position,
     pub value: f64,
     pub shape: EnvelopePointShape,
     // from -1.0 to 1.0
@@ -756,12 +757,14 @@ pub struct EnvelopePoint {
 }
 impl EnvelopePoint {
     pub fn new(
+        position: Position,
         value: f64,
         shape: EnvelopePointShape,
         tension: f64,
         selected: bool,
     ) -> Self {
         Self {
+            position,
             value,
             shape,
             tension,
@@ -1019,7 +1022,7 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
         &mut self,
         only_visible: bool,
         point_index: usize,
-        position: Option<Position>,
+        // position: Option<Position>,
         point: EnvelopePoint,
         sort: bool,
     ) -> ReaperResult<()> {
@@ -1028,7 +1031,6 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
             Some(index),
             only_visible,
             point_index,
-            position,
             point,
             sort,
         )
@@ -1042,18 +1044,13 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
     pub fn insert_point(
         &mut self,
         only_visible: bool,
-        position: Position,
+        // position: Position,
         point: EnvelopePoint,
         sort: bool,
     ) -> ReaperResult<()> {
         let index = self.index();
-        self.envelope().insert_point_ex(
-            Some(index),
-            only_visible,
-            position,
-            point,
-            sort,
-        )
+        self.envelope()
+            .insert_point_ex(Some(index), only_visible, point, sort)
     }
 
     /// if `only_visible == true`, points will be presented as they are seen in
