@@ -119,10 +119,11 @@ impl Item {
         category: impl Into<String>,
     ) -> ReaperResult<f64> {
         let category = category.into();
+        let category_cstring = CString::new(category)?;
         Ok(unsafe {
             Reaper::get().low().GetMediaItemInfo_Value(
                 self.get()?.as_ptr(),
-                CString::new(category)?.as_ptr(),
+                category_cstring.as_ptr(),
             )
         })
     }
@@ -426,10 +427,11 @@ impl Item {
         value: f64,
     ) -> ReaperResult<()> {
         let category = category.into();
+        let category_cstring = CString::new(category)?;
         let result = unsafe {
             Reaper::get().low().SetMediaItemInfo_Value(
                 self.get()?.as_ptr(),
-                CString::new(category)?.as_ptr(),
+                category_cstring.as_ptr(),
                 value,
             )
         };

@@ -10,12 +10,7 @@ use crate::{
 use int_enum::IntEnum;
 use log::{debug, error};
 use std::{
-    collections::HashMap,
-    ffi::CString,
-    fs::canonicalize,
-    marker::PhantomData,
-    path::Path,
-    ptr::{null_mut, NonNull},
+    collections::HashMap, ffi::CString, fs::canonicalize, marker::PhantomData, path::{Path, PathBuf}, ptr::{NonNull, null_mut},
 };
 
 pub fn linear_to_db(value: f64) -> f64 {
@@ -132,10 +127,11 @@ impl Reaper {
     /// Open project from the filename.
     pub fn open_project(
         &self,
-        file: &Path,
+        file: impl Into<PathBuf>,
         in_new_tab: bool,
         make_current_project: bool,
     ) -> ReaperResult<Project> {
+        let file = file.into();
         let current_project = self.current_project();
         if in_new_tab {
             self.add_project_tab(true);
@@ -320,8 +316,9 @@ impl Reaper {
                 name = String::from("_") + &name;
             }
             // debug!("action name: {:?}", name);
+            let name_cstring = CString::new(name)?;
             let id =
-                self.low().NamedCommandLookup(CString::new(name)?.as_ptr());
+                self.low().NamedCommandLookup(name_cstring.as_ptr());
             // debug!("got action id: {:?}", id);
             match id {
                 x if x <= 0 => Ok(None),
@@ -558,9 +555,10 @@ impl Reaper {
     ) -> ReaperResult<()> {
         let name = name.into().unwrap_or(String::from(""));
         let page = page.into().unwrap_or(0_u32);
+        let name_cstring = CString::new(name)?;
         unsafe {
             self.low()
-                .ViewPrefs(page as i32, CString::new(name)?.as_ptr());
+                .ViewPrefs(page as i32, name_cstring.as_ptr());
         }
         Ok(())
     }

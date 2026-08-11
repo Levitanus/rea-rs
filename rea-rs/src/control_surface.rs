@@ -29,7 +29,7 @@ pub trait ControlSurface: Debug {
         Ok(())
     }
     /// called ~30 times per second
-    fn run(&mut self) -> Result<()> {
+    fn run(&self) -> Result<()> {
         Ok(())
     }
     fn set_track_list_change(&self) -> Result<()> {
@@ -243,28 +243,89 @@ pub enum CSurfPan {
 #[derive(Debug)]
 pub(crate) struct ControlSurfaceWrap {
     child: Arc<RefCell<dyn ControlSurface>>,
-    type_string: Option<CString>,
-    desc_string: Option<CString>,
-    config_string: Option<CString>,
+    // Cache static CStrings since they rarely change
+    // This avoids memory leaks while ensuring pointer validity
+    type_string_cache: Option<CString>,
+    desc_string_cache: Option<CString>,
+    config_string_cache: Option<CString>,
+    // Store the last values to detect when we need to regenerate
+    last_type_string: Option<String>,
+    last_desc_string: Option<String>,
+    last_config_string: Option<String>,
 }
 impl ControlSurfaceWrap {
     pub fn new(child: Arc<RefCell<dyn ControlSurface>>) -> Self {
         Self {
             child,
-            type_string: None,
-            desc_string: None,
-            config_string: None,
+            type_string_cache: None,
+            desc_string_cache: None,
+            config_string_cache: None,
+            last_type_string: None,
+            last_desc_string: None,
+            last_config_string: None,
         }
+    }
+    
+    // Helper function to get or create a cached CString
+    // Since these are typically static, we cache them to avoid memory leaks
+    fn get_cached_cstring(cache: &mut Option<CString>, last_value: &mut Option<String>, new_value: String) -> *const std::os::raw::c_char {
+        // Check if we need to regenerate the CString
+        if last_value.as_ref() != Some(&new_value) {
+            // Create new CString and update cache
+            match CString::new(new_value.clone()) {
+                Ok(cstring) => {
+                    *cache = Some(cstring);
+                    *last_value = Some(new_value);
+                }
+                Err(_) => {
+                    return std::ptr::null();
+                }
+            }
+        }
+        
+        // Return pointer to cached CString
+        cache.as_ref().map(|s| s.as_ptr()).unwrap_or(std::ptr::null())
     }
     fn error(&self, error: Error) {
         let formatted = format!("Error in control surface:\n{:#?}", error);
         log::error!("{:?}", error);
         Reaper::get().show_console_msg(formatted)
     }
+    
     fn check_for_error(&self, result: Result<()>) {
         match result {
             Ok(_) => (),
             Err(e) => self.error(e),
+        }
+    }
+    
+    // Helper function for safe pointer dereferencing with null checks
+    fn safe_deref_i32(&self, ptr: *mut std::os::raw::c_void) -> Option<i32> {
+        if ptr.is_null() {
+            self.error(ReaRsError::UnexpectedAPI("Null pointer dereference attempted".to_string()).into());
+            None
+        } else {
+            Some(unsafe { *(ptr as *mut i32) })
+        }
+    }
+    
+    // Helper function for safe pointer dereferencing with null checks
+    fn safe_deref_f64(&self, ptr: *mut std::os::raw::c_void) -> Option<f64> {
+        if ptr.is_null() {
+            self.error(ReaRsError::UnexpectedAPI("Null pointer dereference attempted".to_string()).into());
+            None
+        } else {
+            Some(unsafe { *(ptr as *mut f64) })
+        }
+    }
+    
+    // Helper function for safe slice creation with bounds checking
+    fn safe_slice_f64(&self, ptr: *mut std::os::raw::c_void, len: usize) -> Option<&mut [f64]> {
+        if ptr.is_null() {
+            self.error(ReaRsError::UnexpectedAPI("Null pointer dereference attempted".to_string()).into());
+            None
+        } else {
+            Some(unsafe { slice::from_raw_parts_mut(ptr as *mut f64, len) })
         }
     }
     fn track_from_mut(
@@ -287,30 +348,21 @@ impl ControlSurfaceWrap {
 impl IReaperControlSurface for ControlSurfaceWrap {
     fn GetTypeString(&mut self) -> *const std::os::raw::c_char {
         println!("get_type_string");
-        self.type_string = Some(
-            CString::new(self.child.borrow().get_type_string())
-                .expect("fail to make cstring"),
-        );
-        self.type_string.as_ref().unwrap().as_ptr()
+        let new_value = self.child.borrow().get_type_string();
+        Self::get_cached_cstring(&mut self.type_string_cache, &mut self.last_type_string, new_value)
     }
 
     fn GetDescString(&mut self) -> *const std::os::raw::c_char {
         println!("get_desc_string");
-        self.desc_string = Some(
-            CString::new(self.child.borrow().get_desc_string())
-                .expect("fail to make cstring"),
-        );
-        self.desc_string.as_ref().unwrap().as_ptr()
+        let new_value = self.child.borrow().get_desc_string();
+        Self::get_cached_cstring(&mut self.desc_string_cache, &mut self.last_desc_string, new_value)
     }
 
     fn GetConfigString(&mut self) -> *const std::os::raw::c_char {
         println!("get_config_string");
-        match self.child.borrow().get_config_string() {
-            Some(line) => {
-                self.config_string =
-                    Some(CString::new(line).expect("fail to make cstring"));
-                self.config_string.as_ref().unwrap().as_ptr()
-            }
+        let new_value = self.child.borrow().get_config_string();
+        match new_value {
+            Some(line) => Self::get_cached_cstring(&mut self.config_string_cache, &mut self.last_config_string, line),
             None => null(),
         }
     }
@@ -321,7 +373,7 @@ impl IReaperControlSurface for ControlSurfaceWrap {
 
     fn Run(&mut self) {
         // println!("run");
-        self.check_for_error(self.child.borrow_mut().run())
+        self.check_for_error(self.child.borrow().run())
     }
 
     fn SetTrackListChange(&self) {
@@ -502,7 +554,10 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                     None => return 0,
                     Some(track) => track,
                 };
-                let monitor = unsafe { *(parm2 as *mut i32) };
+                let monitor = match self.safe_deref_i32(parm2) {
+                    Some(val) => val,
+                    None => return 0,
+                };
                 CSurfExtended::SetInputMonitor(track, monitor)
             }
             raw::CSURF_EXT_SETMETRONOME => {
@@ -512,10 +567,10 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 CSurfExtended::SetAutoRecArm((parm1 as usize) != 0)
             }
             raw::CSURF_EXT_SETRECMODE => CSurfExtended::SetRecMode(
-                match unsafe { *(parm1 as *mut i32) } {
-                    0 => CSurfRecMode::SplitForTakes,
-                    1 => CSurfRecMode::Replace,
-                    m => {
+                match self.safe_deref_i32(parm1) {
+                    Some(0) => CSurfRecMode::SplitForTakes,
+                    Some(1) => CSurfRecMode::Replace,
+                    Some(m) => {
                         self.error(
                             ReaRsError::UnexpectedAPI(format!(
                                 "unknown rec mode: {m}."
@@ -524,6 +579,7 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                         );
                         return 0;
                     }
+                    None => return 0,
                 },
             ),
             raw::CSURF_EXT_SETSENDVOLUME => {
@@ -536,8 +592,14 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 };
                 CSurfExtended::SetSendVolume {
                     track,
-                    send_idx: unsafe { *(parm2 as *mut i32) } as usize,
-                    volume: unsafe { *(parm3 as *mut f64) },
+                    send_idx: match self.safe_deref_i32(parm2) {
+                        Some(val) => val as usize,
+                        None => return 0,
+                    },
+                    volume: match self.safe_deref_f64(parm3) {
+                        Some(val) => val,
+                        None => return 0,
+                    },
                 }
             }
             raw::CSURF_EXT_SETSENDPAN => {
@@ -550,8 +612,14 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 };
                 CSurfExtended::SetSendPan {
                     track,
-                    send_idx: unsafe { *(parm2 as *mut i32) } as usize,
-                    pan: unsafe { *(parm3 as *mut f64) },
+                    send_idx: match self.safe_deref_i32(parm2) {
+                        Some(val) => val as usize,
+                        None => return 0,
+                    },
+                    pan: match self.safe_deref_f64(parm3) {
+                        Some(val) => val,
+                        None => return 0,
+                    },
                 }
             }
             raw::CSURF_EXT_SETFXENABLED => {
@@ -564,7 +632,10 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 };
                 CSurfExtended::SetFxEnabled {
                     track,
-                    fx_idx: unsafe { *(parm2 as *mut i32) } as usize,
+                    fx_idx: match self.safe_deref_i32(parm2) {
+                        Some(val) => val as usize,
+                        None => return 0,
+                    },
                     enabled: (parm3 as usize) != 0,
                 }
             }
@@ -576,14 +647,21 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                     None => return 0,
                     Some(track) => track,
                 };
-                let fx_idx = unsafe { *(parm2 as *mut i32) } >> 16;
-                let param_idx =
-                    unsafe { *(parm2 as *mut i32) } / 0b1000000000000000;
+                let param_value = match self.safe_deref_i32(parm2) {
+                    Some(val) => val,
+                    None => return 0,
+                };
+                let fx_idx = param_value >> 16;
+                let param_idx = param_value / 0b1000000000000000;
+                let val = match self.safe_deref_f64(parm3) {
+                    Some(val) => val,
+                    None => return 0,
+                };
                 CSurfExtended::SetFxParam {
                     track,
                     fx_idx: fx_idx as usize,
                     param_idx: param_idx as usize,
-                    val: unsafe { *(parm3 as *mut f64) },
+                    val,
                 }
             }
             raw::CSURF_EXT_SETFXPARAM_RECFX => {
@@ -594,24 +672,37 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                     None => return 0,
                     Some(track) => track,
                 };
-                let fx_idx = unsafe { *(parm2 as *mut i32) } >> 16;
-                let param_idx =
-                    unsafe { *(parm2 as *mut i32) } / 0b1000000000000000;
+                let param_value = match self.safe_deref_i32(parm2) {
+                    Some(val) => val,
+                    None => return 0,
+                };
+                let fx_idx = param_value >> 16;
+                let param_idx = param_value / 0b1000000000000000;
+                let val = match self.safe_deref_f64(parm3) {
+                    Some(val) => val,
+                    None => return 0,
+                };
                 CSurfExtended::SetFxParamRecfx {
                     track,
                     fx_idx: fx_idx as usize,
                     param_idx: param_idx as usize,
-                    val: unsafe { *(parm3 as *mut f64) },
+                    val,
                 }
             }
             raw::CSURF_EXT_SETBPMANDPLAYRATE => {
                 let bpm = match parm1.is_null() {
                     true => None,
-                    false => Some(unsafe { *(parm1 as *mut f64) }),
+                    false => Some(match self.safe_deref_f64(parm1) {
+                        Some(val) => val,
+                        None => return 0,
+                    }),
                 };
                 let playrate = match parm2.is_null() {
                     true => None,
-                    false => Some(unsafe { *(parm2 as *mut f64) }),
+                    false => Some(match self.safe_deref_f64(parm2) {
+                        Some(val) => val,
+                        None => return 0,
+                    }),
                 };
                 CSurfExtended::SetBpmAndPlayrate { bpm, playrate }
             }
@@ -630,11 +721,17 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 };
                 let item_idx = match parm2.is_null() {
                     true => None,
-                    false => Some(unsafe { *(parm2 as *mut i32) } as usize),
+                    false => Some(match self.safe_deref_i32(parm2) {
+                        Some(val) => val as usize,
+                        None => return 0,
+                    }),
                 };
                 let fx_idx = match parm3.is_null() {
                     true => None,
-                    false => Some(unsafe { *(parm3 as *mut i32) } as usize),
+                    false => Some(match self.safe_deref_i32(parm3) {
+                        Some(val) => val as usize,
+                        None => return 0,
+                    }),
                 };
                 CSurfExtended::SetLastTouchedFx {
                     track,
@@ -657,11 +754,17 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 };
                 let item_idx = match parm2.is_null() {
                     true => None,
-                    false => Some(unsafe { *(parm2 as *mut i32) } as usize),
+                    false => Some(match self.safe_deref_i32(parm2) {
+                        Some(val) => val as usize,
+                        None => return 0,
+                    }),
                 };
                 let fx_idx = match parm3.is_null() {
                     true => None,
-                    false => Some(unsafe { *(parm3 as *mut i32) } as usize),
+                    false => Some(match self.safe_deref_i32(parm3) {
+                        Some(val) => val as usize,
+                        None => return 0,
+                    }),
                 };
                 CSurfExtended::SetFocusedFx {
                     track,
@@ -697,23 +800,35 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                     None => return 0,
                     Some(track) => track,
                 };
-                let mode: i32 = unsafe { *(parm3 as *mut i32) };
+                let mode = match self.safe_deref_i32(parm3) {
+                    Some(val) => val,
+                    None => return 0,
+                };
                 match mode {
-                    0 => CSurfExtended::SetpanEx {
-                        track,
-                        pan: CSurfPan::Balance(unsafe {
-                            *(parm2 as *mut f64)
-                        }),
+                    0 => {
+                        let val = match self.safe_deref_f64(parm2) {
+                            Some(val) => val,
+                            None => return 0,
+                        };
+                        CSurfExtended::SetpanEx {
+                            track,
+                            pan: CSurfPan::Balance(val),
+                        }
                     },
-                    3 => CSurfExtended::SetpanEx {
-                        track,
-                        pan: CSurfPan::BalanceV4(unsafe {
-                            *(parm2 as *mut f64)
-                        }),
+                    3 => {
+                        let val = match self.safe_deref_f64(parm2) {
+                            Some(val) => val,
+                            None => return 0,
+                        };
+                        CSurfExtended::SetpanEx {
+                            track,
+                            pan: CSurfPan::BalanceV4(val),
+                        }
                     },
                     5 => {
-                        let pan: &mut [f64] = unsafe {
-                            slice::from_raw_parts_mut(parm2 as _, 2)
+                        let pan = match self.safe_slice_f64(parm2, 2) {
+                            Some(slice) => slice,
+                            None => return 0,
                         };
                         CSurfExtended::SetpanEx {
                             track,
@@ -721,8 +836,9 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                         }
                     }
                     6 => {
-                        let pan: &mut [f64] = unsafe {
-                            slice::from_raw_parts_mut(parm2 as _, 2)
+                        let pan = match self.safe_slice_f64(parm2, 2) {
+                            Some(slice) => slice,
+                            None => return 0,
                         };
                         CSurfExtended::SetpanEx {
                             track,
@@ -750,8 +866,14 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 };
                 CSurfExtended::SetRecvVolume {
                     track,
-                    recv_idx: unsafe { *(parm2 as *mut i32) } as usize,
-                    volume: unsafe { *(parm3 as *mut f64) },
+                    recv_idx: match self.safe_deref_i32(parm2) {
+                        Some(val) => val as usize,
+                        None => return 0,
+                    },
+                    volume: match self.safe_deref_f64(parm3) {
+                        Some(val) => val,
+                        None => return 0,
+                    },
                 }
             }
             raw::CSURF_EXT_SETRECVPAN => {
@@ -764,8 +886,14 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 };
                 CSurfExtended::SetRecvPan {
                     track,
-                    recv_idx: unsafe { *(parm2 as *mut i32) } as usize,
-                    pan: unsafe { *(parm3 as *mut f64) },
+                    recv_idx: match self.safe_deref_i32(parm2) {
+                        Some(val) => val as usize,
+                        None => return 0,
+                    },
+                    pan: match self.safe_deref_f64(parm3) {
+                        Some(val) => val,
+                        None => return 0,
+                    },
                 }
             }
             raw::CSURF_EXT_SETFXOPEN => CSurfExtended::SetFxOpen {
@@ -776,7 +904,10 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                     None => return 0,
                     Some(track) => track,
                 },
-                fx_idx: unsafe { *(parm2 as *mut i32) } as usize,
+                fx_idx: match self.safe_deref_i32(parm2) {
+                    Some(val) => val as usize,
+                    None => return 0,
+                },
                 opened: (parm3 as usize) != 0,
             },
             raw::CSURF_EXT_SETFXCHANGE => {
@@ -805,7 +936,10 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                         None => return 0,
                         Some(track) => track,
                     },
-                    fx_idx: unsafe { *(parm2 as *mut i32) } as usize,
+                    fx_idx: match self.safe_deref_i32(parm2) {
+                        Some(val) => val as usize,
+                        None => return 0,
+                    },
                 }
             }
             raw::CSURF_EXT_SUPPORTS_EXTENDED_TOUCH => {

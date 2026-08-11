@@ -273,9 +273,13 @@ impl DockableEguiWindow {
 
     /// Programmatically close the window (no-op if already closed).
     pub fn close(&mut self) {
+        log::debug!("close: closing window");
         match std::mem::replace(&mut self.state, DockWindowRunState::Closed) {
-            DockWindowRunState::Closed => {}
+            DockWindowRunState::Closed => {
+                log::debug!("close: window already closed");
+            }
             DockWindowRunState::Floating { close_tx, _thread } => {
+                log::debug!("close: closing floating window");
                 let _ = close_tx.try_send(());
                 // We do not join – the thread will self-terminate on the next
                 // egui frame after it receives the signal.
@@ -285,16 +289,24 @@ impl DockableEguiWindow {
                 window_handle,
                 bridge_hwnd,
             } => {
+                log::debug!("close: closing docked window");
                 window_handle.close();
                 let reaper_low = crate::Reaper::get().low();
                 let swell = rea_rs_low::Swell::get();
+                
+                // Check if the handle is still valid before use
+                // NonNull::as_ptr() is never null, but the underlying resource might be
+                let hwnd_ptr = bridge_hwnd.as_ptr();
+                log::debug!("close: destroying bridge window");
                 unsafe {
-                    reaper_low.DockWindowRemove(bridge_hwnd.as_ptr());
-                    swell.DestroyWindow(bridge_hwnd.as_ptr());
+                    reaper_low.DockWindowRemove(hwnd_ptr);
+                    swell.DestroyWindow(hwnd_ptr);
                 }
+                log::debug!("close: bridge window destroyed");
             }
         }
         self.current_dock = None;
+        log::debug!("close: window closed");
     }
 
     /// Call this from a REAPER timer (or any main-thread periodic callback) to
@@ -306,13 +318,25 @@ impl DockableEguiWindow {
     pub fn poll_resize(&self) {
         #[cfg(target_os = "linux")]
         if let DockWindowRunState::Docked { bridge_hwnd, .. } = &self.state {
+            log::trace!("poll_resize: triggering resize for docked window");
+            // Also send a console message for debugging since logs might not appear
             unsafe {
+                let msg = std::ffi::CString::new("poll_resize: triggering resize for docked window").unwrap();
+                rea_rs_low::Reaper::get().ShowConsoleMsg(msg.as_ptr());
+                
                 rea_rs_low::Swell::get().SetTimer(
                     bridge_hwnd.as_ptr(),
                     1010,
                     50,
                     None,
                 );
+            }
+        } else {
+            log::trace!("poll_resize: window not docked, skipping resize");
+            // Also send a console message for debugging since logs might not appear
+            unsafe {
+                let msg = std::ffi::CString::new("poll_resize: window not docked, skipping resize").unwrap();
+                rea_rs_low::Reaper::get().ShowConsoleMsg(msg.as_ptr());
             }
         }
     }
@@ -451,6 +475,8 @@ impl DockableEguiWindow {
             right: w,
             bottom: h,
         };
+        
+        log::debug!("open_docked_linux: creating bridge window with size {}x{}", w, h);
 
         let mut x11_wref: *mut std::ffi::c_void = std::ptr::null_mut();
 
@@ -463,17 +489,39 @@ impl DockableEguiWindow {
                 &rect,
             )
         };
+        
+        // Check if bridge window creation was successful
+        if bridge_raw.is_null() {
+            log::error!("open_docked_linux: SWELL_CreateXBridgeWindow returned NULL");
+            // Also send a console message for debugging since logs might not appear
+            unsafe {
+                let msg = std::ffi::CString::new("open_docked_linux: SWELL_CreateXBridgeWindow returned NULL").unwrap();
+                rea_rs_low::Reaper::get().ShowConsoleMsg(msg.as_ptr());
+            }
+            return Err("SWELL_CreateXBridgeWindow returned NULL".into());
+        }
+        
+        log::debug!("open_docked_linux: bridge window created successfully");
 
+        // Wrap the raw pointer in NonNull for safer handling
         let bridge_hwnd = std::ptr::NonNull::new(bridge_raw)
             .ok_or("SWELL_CreateXBridgeWindow returned NULL")?;
 
         let x11_xid = x11_wref as u64;
         if x11_xid == 0 {
+            log::error!("open_docked_linux: SWELL_CreateXBridgeWindow gave a zero X11 window ID");
+            // Also send a console message for debugging since logs might not appear
+            unsafe {
+                let msg = std::ffi::CString::new("open_docked_linux: SWELL_CreateXBridgeWindow gave a zero X11 window ID").unwrap();
+                rea_rs_low::Reaper::get().ShowConsoleMsg(msg.as_ptr());
+            }
             unsafe { swell.DestroyWindow(bridge_raw) };
             return Err(
                 "SWELL_CreateXBridgeWindow gave a zero X11 window ID".into()
             );
         }
+        
+        log::debug!("open_docked_linux: X11 window ID: {}", x11_xid);
 
         // Register this HWND with REAPER's docker system.
         let c_title =
@@ -481,6 +529,7 @@ impl DockableEguiWindow {
         let c_ident =
             std::ffi::CString::new(self.ident.as_str()).unwrap_or_default();
         unsafe {
+            log::debug!("open_docked_linux: registering window with REAPER docker system");
             reaper_low.DockWindowAddEx(
                 bridge_raw,
                 c_title.as_ptr(),
@@ -491,6 +540,7 @@ impl DockableEguiWindow {
             reaper_low.Dock_UpdateDockID(c_ident.as_ptr(), slot as i32);
             // Ask REAPER to show/place the window.
             swell.ShowWindow(bridge_raw, raw::SW_SHOW as i32);
+            log::debug!("open_docked_linux: window registered and shown");
         }
 
         // Open the egui-baseview window parented to the X11 bridge window.
@@ -501,19 +551,26 @@ impl DockableEguiWindow {
             .with_scale_policy(baseview::WindowScalePolicy::SystemScaleFactor)
             .with_graphics_config(egui_baseview::GraphicsConfig::default());
 
+        // Add error handling for window creation
+        log::debug!("open_docked_linux: creating egui-baseview window");
         let window_handle = egui_baseview::EguiWindow::open_parented(
             &xlib_parent,
             settings,
             state,
             build,
-            |_full_output, _viewport_output, _state| {},
+            |_full_output, _viewport_output, _state| {
+                log::trace!("open_docked_linux: egui window full output callback");
+            },
             update,
         );
+        log::debug!("open_docked_linux: egui-baseview window created successfully");
 
         // Trigger initial resize so the egui viewport fills the bridge window.
+        log::debug!("open_docked_linux: triggering initial resize");
         unsafe {
             swell.SetTimer(bridge_raw, 1010, 100, None);
         }
+        log::debug!("open_docked_linux: initial resize triggered");
 
         self.state = DockWindowRunState::Docked {
             window_handle,

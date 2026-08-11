@@ -326,10 +326,11 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         category: impl Into<String>,
     ) -> ReaperResult<f64> {
         let category = category.into();
+        let category_cstring = CString::new(category)?;
         Ok(unsafe {
             Reaper::get().low().GetEnvelopeInfo_Value(
                 self.get()?.as_ptr(),
-                CString::new(category)?.as_ptr(),
+                category_cstring.as_ptr(),
             )
         })
     }
@@ -568,7 +569,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     ) -> ReaperResult<()> {
         self.set_point_ex(None, false, point_index, point, sort)
     }
-    fn set_point_ex(
+    pub fn set_point_ex(
         &self,
         automation_item_index: Option<usize>,
         only_visible: bool,
@@ -679,7 +680,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     ) -> ReaperResult<()> {
         self.delete_point_range_ex(None, false, start, end)
     }
-    fn delete_point_range_ex(
+    pub fn delete_point_range_ex(
         &self,
         automation_item_index: Option<usize>,
         only_visible: bool,
@@ -707,7 +708,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     pub fn sort_points(&mut self) -> ReaperResult<()> {
         self.sort_points_ex(None)
     }
-    fn sort_points_ex(
+    pub fn sort_points_ex(
         &self,
         automation_item_index: Option<usize>,
     ) -> ReaperResult<()> {
@@ -938,11 +939,12 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
         value: f64,
     ) -> ReaperResult<()> {
         let category = category.into();
+        let category_cstring = CString::new(category)?;
         unsafe {
             Reaper::get().low().GetSetAutomationItemInfo(
                 self.envelope().get()?.as_ptr(),
                 self.index() as i32,
-                CString::new(category)?.as_ptr(),
+                category_cstring.as_ptr(),
                 value,
                 true,
             );

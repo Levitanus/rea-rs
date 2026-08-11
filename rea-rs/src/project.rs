@@ -13,7 +13,10 @@ use int_enum::IntEnum;
 use log::{debug, warn};
 use serde_derive::{Deserialize, Serialize};
 use std::{
-    ffi::CString, mem::MaybeUninit, path::PathBuf, ptr::NonNull,
+    ffi::{CStr, CString},
+    mem::MaybeUninit,
+    path::PathBuf,
+    ptr::NonNull,
     time::Duration,
 };
 
@@ -171,10 +174,10 @@ impl FullRenderSettings {
             debug!("set_render_format");
             project.set_render_format(primary_format.clone(), false)?;
         }
-        if let Some(secondary_format) = &self.secondary_format {
-            debug!("set_render_format2");
-            project.set_render_format(secondary_format.clone(), true)?;
-        }
+        // if let Some(secondary_format) = &self.secondary_format {
+        //     debug!("set_render_format2");
+        //     project.set_render_format(secondary_format.clone(), true)?;
+        // }
         if let Some(srate) = self.srate {
             debug!("set_render_srate");
             project.set_render_srate(srate)?;
@@ -284,9 +287,8 @@ impl<'a> Project {
     pub fn is_current_project(&self) -> bool {
         let low = Reaper::get().low();
         let empty = CString::from(c_str!(""));
-        let ptr = unsafe {
-            low.EnumProjects(-1, empty.as_ptr() as *mut i8, 0)
-        };
+        let ptr =
+            unsafe { low.EnumProjects(-1, empty.as_ptr() as *mut i8, 0) };
         self.pointer.as_ptr() == ptr
     }
 
@@ -1092,10 +1094,11 @@ impl<'a> Project {
                 .into());
             }
             let mut buf = vec![0_i8; self.info_buf_size];
+            let param_name_cstring = CString::new(param_name.into())?;
             let project = self.get()?;
             let result = Reaper::get().low().GetSetProjectInfo_String(
                 project.as_ptr(),
-                CString::new(param_name.into())?.as_ptr(),
+                param_name_cstring.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             );
@@ -1125,11 +1128,12 @@ impl<'a> Project {
         value: impl Into<String>,
     ) -> ReaperResult<()> {
         let val = CString::new(value.into())?;
+        let param_name_cstring = CString::new(param_name.into())?;
         let project = self.get()?;
         let result = unsafe {
             Reaper::get().low().GetSetProjectInfo_String(
                 project.as_ptr(),
-                CString::new(param_name.into())?.as_ptr(),
+                param_name_cstring.as_ptr(),
                 val.as_ptr() as *mut i8,
                 true,
             )
@@ -1339,7 +1343,36 @@ impl<'a> Project {
         // exposed by RenderFormat) or a base64-encoded sink configuration.
         // For the supported simple formats, send the raw id directly.
         let format_string = format.into().to_reaper_format();
-        self.set_info_string(param, format_string)
+        debug!("got reaper format string: {format_string}");
+        let c_string = CString::new(format_string.clone())?;
+        let mut value = match format_string.len() {
+            4 => {
+                debug!("making slice from string");
+                format_string.into_bytes()
+            }
+            _ => {
+                debug!("making slice from cstring");
+                c_string.into_bytes()
+            }
+        };
+        // debug!("value to pass: {:?}", value);
+        let param_name_cstring = CString::new(param.to_string())?;
+        let project = self.get()?;
+        let result = unsafe {
+            Reaper::get().low().GetSetProjectInfo_String(
+                project.as_ptr(),
+                param_name_cstring.as_ptr(),
+                value.as_mut_ptr() as *mut i8,
+                true,
+            )
+        };
+        match result {
+            false => {
+                Err(ReaRsError::InvalidObject("can not set value to project.")
+                    .into())
+            }
+            true => Ok(()),
+        }
     }
 
     /// Filenames, that will be rendered.
@@ -1434,10 +1467,11 @@ impl<'a> Project {
         param_name: impl Into<String>,
     ) -> ReaperResult<f64> {
         let project = self.get()?;
+        let param_name_c_string = CString::new(param_name.into())?;
         Ok(unsafe {
             Reaper::get().low().GetSetProjectInfo(
                 project.as_ptr(),
-                CString::new(param_name.into())?.as_ptr(),
+                param_name_c_string.as_ptr(),
                 0.0,
                 false,
             )
@@ -1449,11 +1483,12 @@ impl<'a> Project {
         param_name: impl Into<String>,
         value: f64,
     ) -> ReaperResult<()> {
+        let param_name_cstring = CString::new(param_name.into())?;
         let project = self.get()?;
         unsafe {
             Reaper::get().low().GetSetProjectInfo(
                 project.as_ptr(),
-                CString::new(param_name.into())?.as_ptr(),
+                param_name_cstring.as_ptr(),
                 value,
                 true,
             );
@@ -2430,35 +2465,35 @@ impl RenderFormat {
     /// payload, or a string that includes NUL bytes; in all cases we normalize
     /// to the leading token bytes before matching.
     pub fn from_reaper_format(format: &str) -> Self {
-        let normalized = Self::normalize_reaper_format_input(format);
-        if let Some(parsed) = Self::parse_reaper_format_token(&normalized) {
-            return parsed;
-        }
-        RenderFormat::Other(normalized)
+        // let normalized = Self::normalize_reaper_format_input(format);
+        // if let Some(parsed) = Self::parse_reaper_format_token(&normalized) {
+        //     return parsed;
+        // }
+        RenderFormat::Other(format.into())
     }
 
     /// Converts the AudioFormat to the 4-byte string representation used by
     /// REAPER.
     pub fn to_reaper_format(&self) -> String {
         let format = match self {
-            RenderFormat::Wave => "wave".to_string(),
-            RenderFormat::Aiff => "aiff".to_string(),
-            RenderFormat::Caff => "caff".to_string(),
-            RenderFormat::Flac => "flac".to_string(),
-            RenderFormat::Mp3 => "mp3l".to_string(),
-            RenderFormat::OggSpeex => "OggS".to_string(),
-            RenderFormat::OggVorbis => "oggv".to_string(),
-            RenderFormat::WavePack => "wvpk".to_string(),
-            RenderFormat::Raw => "raw ".to_string(),
-            RenderFormat::Iso => "iso ".to_string(),
-            RenderFormat::Ddp => "ddp ".to_string(),
-            RenderFormat::FFmpeg => "FFMP".to_string(),
-            RenderFormat::Wmf => "WMF ".to_string(),
-            RenderFormat::Gif => "GIF ".to_string(),
-            RenderFormat::Lcf => "LCF ".to_string(),
+            RenderFormat::Wave => "evaw".to_string(),
+            RenderFormat::Aiff => "ffia".to_string(),
+            RenderFormat::Caff => "ffac".to_string(),
+            RenderFormat::Flac => "calf".to_string(),
+            RenderFormat::Mp3 => "l3pm".to_string(),
+            RenderFormat::OggSpeex => "SggO".to_string(),
+            RenderFormat::OggVorbis => "vggo".to_string(),
+            RenderFormat::WavePack => "kpvw".to_string(),
+            RenderFormat::Raw => " war".to_string(),
+            RenderFormat::Iso => " osi".to_string(),
+            RenderFormat::Ddp => " pdd".to_string(),
+            RenderFormat::FFmpeg => "PMFF".to_string(),
+            RenderFormat::Wmf => " FMW".to_string(),
+            RenderFormat::Gif => " FIG".to_string(),
+            RenderFormat::Lcf => " FCL".to_string(),
             RenderFormat::Other(s) => s.clone(),
         };
-        format.chars().rev().collect()
+        format
     }
 }
 

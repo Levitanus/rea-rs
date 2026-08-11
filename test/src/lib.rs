@@ -152,6 +152,7 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
         envelopes(),
         items(),
         takes(),
+        render_settings(),
     ]
     .into_iter();
     let user_interaction =
@@ -316,16 +317,12 @@ fn projects() -> TestStep {
         debug!("render settings");
         assert_eq!(
             pr.get_render_settings()?,
-            RenderSettings::new(RenderMode::MasterMix, false, false)
+            RenderSettings::new(RenderMode::MasterMix)
         );
-        pr.set_render_settings(RenderSettings::new(
-            RenderMode::RenderMatrix,
-            true,
-            true,
-        ))?;
+        pr.set_render_settings(RenderSettings::new(RenderMode::RenderMatrix))?;
         assert_eq!(
             pr.get_render_settings()?,
-            RenderSettings::new(RenderMode::RenderMatrix, true, true)
+            RenderSettings::new(RenderMode::RenderMatrix)
         );
 
         debug!("Render channels amount");
@@ -828,7 +825,7 @@ fn tracks() -> TestStep {
         assert!(!tr2.rec_armed()?);
 
         debug!("VUMode");
-        assert_eq!(tr2.vu_mode()?, VUMode::MultichannelPeaks);
+        assert_eq!(tr2.vu_mode()?, VUMode::StereoPeaks);
         tr2.set_vu_mode(VUMode::LUFS_M)?;
         assert_eq!(tr2.vu_mode()?, VUMode::LUFS_M);
 
@@ -1068,7 +1065,7 @@ fn tracks() -> TestStep {
         assert_eq!(tr.n_items()?, 1);
 
         debug!("midi hash");
-        assert!(tr.midi_hash(false)?.is_none());
+        assert!(tr.midi_hash(false, 128)?.is_none());
 
         debug!("peak");
         assert_eq!(tr.peak(0)?, Volume::from(0.0));
@@ -1215,8 +1212,8 @@ fn envelopes() -> TestStep {
         let times = [1.1, 1.12, 1.5, 2.0];
         for (v, t) in values.iter().zip(times.iter()) {
             env.insert_point(
-                Position::from(*t),
                 EnvelopePoint::new(
+                    Position::from(*t),
                     *v,
                     rea_rs::EnvelopePointShape::SlowStartEnd,
                     0.0,
@@ -1266,17 +1263,21 @@ fn envelopes() -> TestStep {
         let mut point = env.get_point(0).unwrap();
         point.shape = EnvelopePointShape::Linear;
         point.value = 0.2;
-        env.set_point(0, Some(1.2.into()), point, false)?;
+        point.position = 1.2.into();
+        env.set_point(0, point, false)?;
         let mut point = env.get_point(1).unwrap();
         point.shape = EnvelopePointShape::Linear;
         point.value = 0.4;
-        env.set_point(1, Some(1.4.into()), point, true)?;
+        point.position = 1.4.into();
+        env.set_point(1, point, true)?;
         assert_eq!(env.n_points()?, 4);
 
         assert_float_eq!(
             env.get_point_by_time(1.2).unwrap().value,
             0.2,
-            r2nd <= 0.01
+            r2nd <= 0.01,
+            "point is {:?}",
+            point
         );
         assert_float_eq!(
             env.get_point_by_time(1.4).unwrap().value,
@@ -1293,11 +1294,13 @@ fn envelopes() -> TestStep {
 
         let mut point = env.get_point(1).unwrap();
         point.value = 0.2;
-        env.set_point(1, Some(1.4.into()), point, true)?;
+        env.set_point(1, point, true)?;
         assert_float_eq!(
             env.get_point_by_time(1.2).unwrap().value,
             0.2,
-            r2nd <= 0.01
+            r2nd <= 0.01,
+            "point is {:?}",
+            point
         );
         assert_float_eq!(
             env.get_point_by_time(1.4).unwrap().value,
@@ -1630,6 +1633,16 @@ fn takes() -> TestStep {
 
         assert!(take.delete_stretch_marker(marker_index)?);
         assert_eq!(take.n_stretch_markers()?, 0);
+
+        Ok(())
+    })
+}
+
+fn render_settings() -> TestStep {
+    step("render settings", |reaper| {
+        let mut pr = reaper.current_project();
+        let full_settings = pr.get_full_render_settings()?;
+        pr.apply_full_render_settings(&full_settings)?;
 
         Ok(())
     })

@@ -41,10 +41,11 @@ impl MarkerRegionInfo {
                 );
                 return Err(crate::ReaRsError::InvalidObject("Marker"));
             }
+            let parameter_name_cstring = CString::new(parameter_name)?;
             Ok(low.GetRegionOrMarkerInfo_Value(
                 project.context().to_raw(),
                 marker,
-                CString::new(parameter_name)?.as_ptr(),
+                parameter_name_cstring.as_ptr(),
             ))
         }
     }
@@ -72,11 +73,12 @@ impl MarkerRegionInfo {
             );
             return Err(ReaRsError::InvalidObject("Marker"));
         }
+        let parameter_name_cstring = CString::new(parameter_name)?;
         unsafe {
             low.SetRegionOrMarkerInfo_Value(
                 project.context().to_raw(),
                 marker,
-                CString::new(parameter_name)?.as_ptr(),
+                parameter_name_cstring.as_ptr(),
                 value,
             );
         }

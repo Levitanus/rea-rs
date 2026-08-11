@@ -739,10 +739,11 @@ impl GUID {
     pub fn from_string(value: String) -> ReaperResult<Self> {
         let mut g = MaybeUninit::zeroed();
         // debug!("GUID.from_string(): {value}");
+        let value_cstring = CString::new(value)?;
         unsafe {
             Reaper::get()
                 .low()
-                .stringToGuid(CString::new(value)?.as_ptr(), g.as_mut_ptr());
+                .stringToGuid(value_cstring.as_ptr(), g.as_mut_ptr());
             let g = g.assume_init();
             match g {
                 ZERO_GUID => {
