@@ -4,20 +4,19 @@ use c_str_macro::c_str;
 use float_eq::assert_float_eq;
 use log::{debug, info, warn};
 use rea_rs::gui::{baseview, egui, DockableEguiWindow};
-use rea_rs::project_info::{
-    BoundsMode, RenderMode, RenderSettings, RenderTail, RenderTailFlags,
-};
 use rea_rs::{
-    ActionHook, ActionKind, AutomationMode, Color, CommandId, EnvelopeChunk,
-    EnvelopePoint, EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo,
-    ExtState, GenericSend, GenericSendMut, HardwareSocket, ItemFade,
-    MarkerRegionInfo, MessageBoxValue, Pan, PanLaw, Pitch, PlayRate,
+    ActionHook, ActionKind, AutomationMode, BoundsMode, Color, CommandId,
+    EnvelopeChunk, EnvelopePoint, EnvelopePointShape, EnvelopeSelector,
+    EnvelopeSendInfo, ExtState, GenericSend, GenericSendMut, HardwareSocket,
+    ItemFade, MarkerRegionInfo, MessageBoxValue, Pan, PanLaw, Pitch, PlayRate,
     PluginContext, Position, Project, RazorEdit, ReaRsError, Reaper, RecInput,
-    RecMode, RecMonitoring, RecOutMode, SampleAmount, SendDestChannels,
-    SendMIDIProps, SendMode, SendSourceChannels, SoloMode, SourceOffset,
-    TakeChannelMode, TakePitchMode, TimeMode, Track, TrackFolderState,
-    TrackGroupParam, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
-    TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX, GUID,
+    RecMode, RecMonitoring, RecOutMode, RenderFormat, RenderMode,
+    RenderSettings, RenderTail, RenderTailFlags, SampleAmount,
+    SendDestChannels, SendMIDIProps, SendMode, SendSourceChannels, SoloMode,
+    SourceOffset, TakeChannelMode, TakePitchMode, TimeMode, Track,
+    TrackFolderState, TrackGroupParam, TrackPan, TrackPerformanceFlags,
+    TrackPlayOffset, TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX,
+    GUID,
 };
 use rea_rs_macros::reaper_extension_plugin;
 use rea_rs_test::{TestStep, TestStepResult};
@@ -270,7 +269,7 @@ fn projects() -> TestStep {
 
         let mut pr = rpr.current_project();
         debug!("Getting render format:");
-        debug!("{:?}", pr.get_render_format(false)?);
+        debug!("{:?}", pr.get_render_format(false, true)?);
         debug!("Setting render directory…");
         pr.set_render_directory("my_directory")?;
         debug!("Getting render directory…");
@@ -344,6 +343,11 @@ fn projects() -> TestStep {
         );
         pr.set_render_tail(tail)?;
         assert_eq!(pr.get_render_tail()?, tail);
+
+        let format = pr.get_render_format(false, false)?;
+        assert_eq!(format, RenderFormat::Wave);
+        pr.set_render_format(RenderFormat::WavePack, true)?;
+        assert_eq!(pr.get_render_format(true, false)?, RenderFormat::WavePack);
         Ok(())
     })
 }

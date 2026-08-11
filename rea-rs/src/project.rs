@@ -7,22 +7,14 @@ use crate::{
     Position, ProjectContext, ReaRsError, Reaper, ReaperResult, TimeRange,
     TimeRangeKind, TimeSignature, Track, UndoFlags,
 };
-use base64::{engine::general_purpose, Engine as _};
+use bitflags::bitflags;
 use c_str_macro::c_str;
 use int_enum::IntEnum;
 use log::{debug, warn};
 use serde_derive::{Deserialize, Serialize};
 use std::{
-    ffi::{CStr, CString},
-    mem::MaybeUninit,
-    path::PathBuf,
-    ptr::NonNull,
+    ffi::CString, mem::MaybeUninit, path::PathBuf, ptr::NonNull,
     time::Duration,
-};
-
-use self::project_info::{
-    BoundsMode, RenderDitherFlags, RenderFadeLowPassFlags, RenderFadeShape,
-    RenderNormalize, RenderSettings, RenderTail, RenderTailFlags,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -78,8 +70,8 @@ impl FullRenderSettings {
             channels_amount: Some(project.get_render_channels_amount()?),
             directory: Some(project.get_render_directory()?),
             file: Some(project.get_render_file()?),
-            primary_format: Some(project.get_render_format(false)?),
-            secondary_format: Some(project.get_render_format(true)?),
+            primary_format: Some(project.get_render_format(false, true)?),
+            secondary_format: Some(project.get_render_format(true, true)?),
             srate: Some(project.get_render_srate()?),
             tail: Some(project.get_render_tail()?),
         })
@@ -1307,16 +1299,21 @@ impl<'a> Project {
     ///
     /// Set secondary_format to true, if you want the secondary render section
     /// format.
+    /// If raw_base64_string is true - will be returned RenderFormat::Unknown
+    /// with the full raw string of the render format settings
     pub fn get_render_format(
         &self,
         secondary_format: bool,
+        raw_base64_string: bool,
     ) -> ReaperResult<RenderFormat> {
         let param = match secondary_format {
             false => "RENDER_FORMAT",
             true => "RENDER_FORMAT2",
         };
-        let raw_value = self.get_info_string(param)?;
-        Ok(RenderFormat::from_reaper_format(&raw_value))
+        match raw_base64_string {
+            true => Ok(RenderFormat::Other(self.get_info_string(param)?)),
+            false => Ok(RenderFormat::from(self.get_info_string(param)?)),
+        }
     }
 
     /// base64-encoded secondary sink configuration.
@@ -1339,40 +1336,7 @@ impl<'a> Project {
             false => "RENDER_FORMAT",
             true => "RENDER_FORMAT2",
         };
-        // REAPER accepts either a raw 4-byte format id (for the simple formats
-        // exposed by RenderFormat) or a base64-encoded sink configuration.
-        // For the supported simple formats, send the raw id directly.
-        let format_string = format.into().to_reaper_format();
-        debug!("got reaper format string: {format_string}");
-        let c_string = CString::new(format_string.clone())?;
-        let mut value = match format_string.len() {
-            4 => {
-                debug!("making slice from string");
-                format_string.into_bytes()
-            }
-            _ => {
-                debug!("making slice from cstring");
-                c_string.into_bytes()
-            }
-        };
-        // debug!("value to pass: {:?}", value);
-        let param_name_cstring = CString::new(param.to_string())?;
-        let project = self.get()?;
-        let result = unsafe {
-            Reaper::get().low().GetSetProjectInfo_String(
-                project.as_ptr(),
-                param_name_cstring.as_ptr(),
-                value.as_mut_ptr() as *mut i8,
-                true,
-            )
-        };
-        match result {
-            false => {
-                Err(ReaRsError::InvalidObject("can not set value to project.")
-                    .into())
-            }
-            true => Ok(()),
-        }
+        self.set_info_string(param, format.into().to_string())
     }
 
     /// Filenames, that will be rendered.
@@ -1540,9 +1504,9 @@ impl<'a> Project {
 
     pub fn get_render_add_to_project_flags(
         &self,
-    ) -> ReaperResult<self::project_info::RenderAddToProjectFlags> {
+    ) -> ReaperResult<self::RenderAddToProjectFlags> {
         let raw = self.get_info_value("RENDER_ADDTOPROJ")? as u32;
-        self::project_info::RenderAddToProjectFlags::from_bits(raw).ok_or(
+        self::RenderAddToProjectFlags::from_bits(raw).ok_or(
             ReaRsError::InvalidObject(
                 "Can not get render add-to-project flags",
             ),
@@ -1550,15 +1514,15 @@ impl<'a> Project {
     }
     pub fn set_render_add_to_project_flags(
         &mut self,
-        flags: self::project_info::RenderAddToProjectFlags,
+        flags: self::RenderAddToProjectFlags,
     ) -> ReaperResult<()> {
         self.set_info_value("RENDER_ADDTOPROJ", flags.bits() as f64)
     }
 
     pub fn get_render_add_to_project(&self) -> ReaperResult<bool> {
-        Ok(self.get_render_add_to_project_flags()?.contains(
-            self::project_info::RenderAddToProjectFlags::ADD_TO_PROJECT,
-        ))
+        Ok(self
+            .get_render_add_to_project_flags()?
+            .contains(self::RenderAddToProjectFlags::ADD_TO_PROJECT))
     }
     pub fn set_render_add_to_project(
         &mut self,
@@ -1566,13 +1530,9 @@ impl<'a> Project {
     ) -> ReaperResult<()> {
         let mut flags = self.get_render_add_to_project_flags()?;
         if add_to_project {
-            flags.insert(
-                self::project_info::RenderAddToProjectFlags::ADD_TO_PROJECT,
-            );
+            flags.insert(self::RenderAddToProjectFlags::ADD_TO_PROJECT);
         } else {
-            flags.remove(
-                self::project_info::RenderAddToProjectFlags::ADD_TO_PROJECT,
-            );
+            flags.remove(self::RenderAddToProjectFlags::ADD_TO_PROJECT);
         }
         self.set_render_add_to_project_flags(flags)
     }
@@ -1841,422 +1801,412 @@ impl<'a> Project {
     }
 }
 
-pub mod project_info {
-    use std::time::Duration;
+#[repr(u32)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, IntEnum, Serialize, Deserialize,
+)]
+pub enum BoundsMode {
+    Custom = 0,
+    EntireProject = 1,
+    TimeSelection = 2,
+    AllRegions = 3,
+    SelectedItems = 4,
+    SelectedRegions = 5,
+}
 
-    use bitflags::bitflags;
-    use int_enum::IntEnum;
-    use serde_derive::{Deserialize, Serialize};
-
-    #[repr(u32)]
-    #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, IntEnum, Serialize, Deserialize,
-    )]
-    pub enum BoundsMode {
-        Custom = 0,
-        EntireProject = 1,
-        TimeSelection = 2,
-        AllRegions = 3,
-        SelectedItems = 4,
-        SelectedRegions = 5,
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    pub struct RenderSettings {
-        pub mode: RenderMode,
-        /// Render tracks with mono media to mono files.
-        pub use_mono: bool,
-        /// Render multichannel tracks to multichannel files.
-        pub multichannel_tracks_to_multichannel_files: bool,
-        /// Render selected media items.
-        pub selected_media_items: bool,
-        /// Render selected media items via master.
-        pub selected_media_items_via_master: bool,
-        /// Render selected tracks via master.
-        pub selected_tracks_via_master: bool,
-        /// Embed transients if the format supports it.
-        pub embed_transients: bool,
-        /// Embed metadata if the format supports it.
-        pub embed_metadata: bool,
-        /// Embed take markers if the format supports it.
-        pub embed_take_markers: bool,
-        /// Render a second pass.
-        pub second_pass_render: bool,
-        /// Render razor edits.
-        pub render_razor_edits: bool,
-        /// Use pre-fader stems.
-        pub pre_fader_stems: bool,
-        /// Only send stem channels to the parent.
-        pub only_stem_channels_sent_to_parent: bool,
-        /// Preserve source metadata when possible.
-        pub preserve_source_metadata: bool,
-        /// Preserve source start offset when possible.
-        pub preserve_source_start_offset: bool,
-        /// Preserve source media sample rate when possible.
-        pub preserve_source_media_sample_rate: bool,
-        /// Render selected items or razor edits as a single file.
-        pub render_as_single_file: bool,
-        /// Render in parallel via master.
-        pub parallel_render_via_master: bool,
-        /// Delay render start to allow FX to initialize and load samples.
-        pub delay_render_start: bool,
-    }
-    impl RenderSettings {
-        pub fn new(mode: RenderMode) -> Self {
-            Self {
-                mode,
-                use_mono: false,
-                multichannel_tracks_to_multichannel_files: false,
-                selected_media_items: false,
-                selected_media_items_via_master: false,
-                selected_tracks_via_master: false,
-                embed_transients: false,
-                embed_metadata: false,
-                embed_take_markers: false,
-                second_pass_render: false,
-                render_razor_edits: false,
-                pre_fader_stems: false,
-                only_stem_channels_sent_to_parent: false,
-                preserve_source_metadata: false,
-                preserve_source_start_offset: false,
-                preserve_source_media_sample_rate: false,
-                render_as_single_file: false,
-                parallel_render_via_master: false,
-                delay_render_start: false,
-            }
-        }
-
-        pub(crate) fn to_raw(&self) -> f64 {
-            let mut val = self.mode.int_value();
-            if self.use_mono {
-                val |= 16;
-            }
-            if self.multichannel_tracks_to_multichannel_files {
-                val |= 4;
-            }
-            if self.selected_media_items {
-                val |= 32;
-            }
-            if self.selected_media_items_via_master {
-                val |= 64;
-            }
-            if self.selected_tracks_via_master {
-                val |= 128;
-            }
-            if self.embed_transients {
-                val |= 256;
-            }
-            if self.embed_metadata {
-                val |= 512;
-            }
-            if self.embed_take_markers {
-                val |= 1024;
-            }
-            if self.second_pass_render {
-                val |= 2048;
-            }
-            if self.render_razor_edits {
-                val |= 4096;
-            }
-            if self.pre_fader_stems {
-                val |= 8192;
-            }
-            if self.only_stem_channels_sent_to_parent {
-                val |= 16384;
-            }
-            if self.preserve_source_metadata {
-                val |= 32768;
-            }
-            if self.preserve_source_start_offset {
-                val |= 1 << 16;
-            }
-            if self.preserve_source_media_sample_rate {
-                val |= 2 << 16;
-            }
-            if self.render_as_single_file {
-                val |= 4 << 16;
-            }
-            if self.parallel_render_via_master {
-                val |= 8 << 16;
-            }
-            if self.delay_render_start {
-                val |= 16 << 16;
-            }
-            val as f64
-        }
-        pub(crate) fn from_raw(value: f64) -> Self {
-            let raw = value as u32;
-            let mode = if raw & 8 != 0 && raw & 0x03 == 0 {
-                RenderMode::RenderMatrix
-            } else if raw & 64 != 0 && raw & 0x03 == 0 {
-                RenderMode::SelectedItemsViaMaster
-            } else if raw & 32 != 0 && raw & 0x03 == 0 {
-                RenderMode::SelectedItems
-            } else if raw & 0x03 == 2 {
-                RenderMode::Stems
-            } else if raw & 0x03 == 1 {
-                RenderMode::MasterAndStems
-            } else {
-                RenderMode::MasterMix
-            };
-            let use_mono = raw & 16 != 0;
-            let multichannel_tracks_to_multichannel_files = raw & 4 != 0;
-            let selected_media_items = raw & 32 != 0;
-            let selected_media_items_via_master = raw & 64 != 0;
-            let selected_tracks_via_master = raw & 128 != 0;
-            let embed_transients = raw & 256 != 0;
-            let embed_metadata = raw & 512 != 0;
-            let embed_take_markers = raw & 1024 != 0;
-            let second_pass_render = raw & 2048 != 0;
-            let render_razor_edits = raw & 4096 != 0;
-            let pre_fader_stems = raw & 8192 != 0;
-            let only_stem_channels_sent_to_parent = raw & 16384 != 0;
-            let preserve_source_metadata = raw & 32768 != 0;
-            let preserve_source_start_offset = raw & (1 << 16) != 0;
-            let preserve_source_media_sample_rate = raw & (2 << 16) != 0;
-            let render_as_single_file = raw & (4 << 16) != 0;
-            let parallel_render_via_master = raw & (8 << 16) != 0;
-            let delay_render_start = raw & (16 << 16) != 0;
-            Self {
-                mode,
-                use_mono,
-                multichannel_tracks_to_multichannel_files,
-                selected_media_items,
-                selected_media_items_via_master,
-                selected_tracks_via_master,
-                embed_transients,
-                embed_metadata,
-                embed_take_markers,
-                second_pass_render,
-                render_razor_edits,
-                pre_fader_stems,
-                only_stem_channels_sent_to_parent,
-                preserve_source_metadata,
-                preserve_source_start_offset,
-                preserve_source_media_sample_rate,
-                render_as_single_file,
-                parallel_render_via_master,
-                delay_render_start,
-            }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderSettings {
+    pub mode: RenderMode,
+    /// Render tracks with mono media to mono files.
+    pub use_mono: bool,
+    /// Render multichannel tracks to multichannel files.
+    pub multichannel_tracks_to_multichannel_files: bool,
+    /// Render selected media items.
+    pub selected_media_items: bool,
+    /// Render selected media items via master.
+    pub selected_media_items_via_master: bool,
+    /// Render selected tracks via master.
+    pub selected_tracks_via_master: bool,
+    /// Embed transients if the format supports it.
+    pub embed_transients: bool,
+    /// Embed metadata if the format supports it.
+    pub embed_metadata: bool,
+    /// Embed take markers if the format supports it.
+    pub embed_take_markers: bool,
+    /// Render a second pass.
+    pub second_pass_render: bool,
+    /// Render razor edits.
+    pub render_razor_edits: bool,
+    /// Use pre-fader stems.
+    pub pre_fader_stems: bool,
+    /// Only send stem channels to the parent.
+    pub only_stem_channels_sent_to_parent: bool,
+    /// Preserve source metadata when possible.
+    pub preserve_source_metadata: bool,
+    /// Preserve source start offset when possible.
+    pub preserve_source_start_offset: bool,
+    /// Preserve source media sample rate when possible.
+    pub preserve_source_media_sample_rate: bool,
+    /// Render selected items or razor edits as a single file.
+    pub render_as_single_file: bool,
+    /// Render in parallel via master.
+    pub parallel_render_via_master: bool,
+    /// Delay render start to allow FX to initialize and load samples.
+    pub delay_render_start: bool,
+}
+impl RenderSettings {
+    pub fn new(mode: RenderMode) -> Self {
+        Self {
+            mode,
+            use_mono: false,
+            multichannel_tracks_to_multichannel_files: false,
+            selected_media_items: false,
+            selected_media_items_via_master: false,
+            selected_tracks_via_master: false,
+            embed_transients: false,
+            embed_metadata: false,
+            embed_take_markers: false,
+            second_pass_render: false,
+            render_razor_edits: false,
+            pre_fader_stems: false,
+            only_stem_channels_sent_to_parent: false,
+            preserve_source_metadata: false,
+            preserve_source_start_offset: false,
+            preserve_source_media_sample_rate: false,
+            render_as_single_file: false,
+            parallel_render_via_master: false,
+            delay_render_start: false,
         }
     }
 
-    #[repr(u32)]
-    #[derive(
-        Debug, Clone, Copy, IntEnum, PartialEq, Eq, Serialize, Deserialize,
-    )]
-    pub enum RenderMode {
-        MasterMix = 0,
-        MasterAndStems = 1,
-        Stems = 2,
-        RenderMatrix = 8,
-        SelectedItems = 32,
-        SelectedItemsViaMaster = 64,
+    pub(crate) fn to_raw(&self) -> f64 {
+        let mut val = self.mode.int_value();
+        if self.use_mono {
+            val |= 16;
+        }
+        if self.multichannel_tracks_to_multichannel_files {
+            val |= 4;
+        }
+        if self.selected_media_items {
+            val |= 32;
+        }
+        if self.selected_media_items_via_master {
+            val |= 64;
+        }
+        if self.selected_tracks_via_master {
+            val |= 128;
+        }
+        if self.embed_transients {
+            val |= 256;
+        }
+        if self.embed_metadata {
+            val |= 512;
+        }
+        if self.embed_take_markers {
+            val |= 1024;
+        }
+        if self.second_pass_render {
+            val |= 2048;
+        }
+        if self.render_razor_edits {
+            val |= 4096;
+        }
+        if self.pre_fader_stems {
+            val |= 8192;
+        }
+        if self.only_stem_channels_sent_to_parent {
+            val |= 16384;
+        }
+        if self.preserve_source_metadata {
+            val |= 32768;
+        }
+        if self.preserve_source_start_offset {
+            val |= 1 << 16;
+        }
+        if self.preserve_source_media_sample_rate {
+            val |= 2 << 16;
+        }
+        if self.render_as_single_file {
+            val |= 4 << 16;
+        }
+        if self.parallel_render_via_master {
+            val |= 8 << 16;
+        }
+        if self.delay_render_start {
+            val |= 16 << 16;
+        }
+        val as f64
     }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    pub struct RenderTail {
-        pub tail: Duration,
-        pub flags: RenderTailFlags,
-    }
-    impl RenderTail {
-        pub fn new(tail: Duration, flags: RenderTailFlags) -> Self {
-            Self { tail, flags }
+    pub(crate) fn from_raw(value: f64) -> Self {
+        let raw = value as u32;
+        let mode = if raw & 8 != 0 && raw & 0x03 == 0 {
+            RenderMode::RenderMatrix
+        } else if raw & 64 != 0 && raw & 0x03 == 0 {
+            RenderMode::SelectedItemsViaMaster
+        } else if raw & 32 != 0 && raw & 0x03 == 0 {
+            RenderMode::SelectedItems
+        } else if raw & 0x03 == 2 {
+            RenderMode::Stems
+        } else if raw & 0x03 == 1 {
+            RenderMode::MasterAndStems
+        } else {
+            RenderMode::MasterMix
+        };
+        let use_mono = raw & 16 != 0;
+        let multichannel_tracks_to_multichannel_files = raw & 4 != 0;
+        let selected_media_items = raw & 32 != 0;
+        let selected_media_items_via_master = raw & 64 != 0;
+        let selected_tracks_via_master = raw & 128 != 0;
+        let embed_transients = raw & 256 != 0;
+        let embed_metadata = raw & 512 != 0;
+        let embed_take_markers = raw & 1024 != 0;
+        let second_pass_render = raw & 2048 != 0;
+        let render_razor_edits = raw & 4096 != 0;
+        let pre_fader_stems = raw & 8192 != 0;
+        let only_stem_channels_sent_to_parent = raw & 16384 != 0;
+        let preserve_source_metadata = raw & 32768 != 0;
+        let preserve_source_start_offset = raw & (1 << 16) != 0;
+        let preserve_source_media_sample_rate = raw & (2 << 16) != 0;
+        let render_as_single_file = raw & (4 << 16) != 0;
+        let parallel_render_via_master = raw & (8 << 16) != 0;
+        let delay_render_start = raw & (16 << 16) != 0;
+        Self {
+            mode,
+            use_mono,
+            multichannel_tracks_to_multichannel_files,
+            selected_media_items,
+            selected_media_items_via_master,
+            selected_tracks_via_master,
+            embed_transients,
+            embed_metadata,
+            embed_take_markers,
+            second_pass_render,
+            render_razor_edits,
+            pre_fader_stems,
+            only_stem_channels_sent_to_parent,
+            preserve_source_metadata,
+            preserve_source_start_offset,
+            preserve_source_media_sample_rate,
+            render_as_single_file,
+            parallel_render_via_master,
+            delay_render_start,
         }
     }
+}
 
-    bitflags! {
-        #[derive(Serialize, Deserialize)]
-        pub struct RenderTailFlags:u32{
-            const IN_CUSTOM_BOUNDS=1;
-            const IN_ENTIRE_PROJECT=2;
-            const IN_TIME_SELECTION=4;
-            const IN_ALL_REGIONS=8;
-            const IN_SELECTED_ITEMS=16;
-            const IN_SELECTED_REGIONS=32;
+#[repr(u32)]
+#[derive(
+    Debug, Clone, Copy, IntEnum, PartialEq, Eq, Serialize, Deserialize,
+)]
+pub enum RenderMode {
+    MasterMix = 0,
+    MasterAndStems = 1,
+    Stems = 2,
+    RenderMatrix = 8,
+    SelectedItems = 32,
+    SelectedItemsViaMaster = 64,
+}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderTail {
+    pub tail: Duration,
+    pub flags: RenderTailFlags,
+}
+impl RenderTail {
+    pub fn new(tail: Duration, flags: RenderTailFlags) -> Self {
+        Self { tail, flags }
+    }
+}
+
+bitflags! {
+    #[derive(Serialize, Deserialize)]
+    pub struct RenderTailFlags:u32{
+        const IN_CUSTOM_BOUNDS=1;
+        const IN_ENTIRE_PROJECT=2;
+        const IN_TIME_SELECTION=4;
+        const IN_ALL_REGIONS=8;
+        const IN_SELECTED_ITEMS=16;
+        const IN_SELECTED_REGIONS=32;
+
+    }
+}
+
+bitflags! {
+    #[derive(Serialize, Deserialize)]
+    pub struct RenderDitherFlags: u32 {
+        const DITHER = 1;
+        const NOISE_SHAPING = 2;
+        const DITHER_STEMS = 4;
+        const NOISE_SHAPING_STEMS = 8;
+        const DISABLE_ALL = 16;
+    }
+}
+
+bitflags! {
+    #[derive(Serialize, Deserialize)]
+    pub struct RenderAddToProjectFlags: u32 {
+        const ADD_TO_PROJECT = 1;
+        const SKIP_LIKELY_SILENT_FILES = 2;
+    }
+}
+
+#[repr(u32)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, IntEnum, Serialize, Deserialize,
+)]
+pub enum RenderNormalizeMode {
+    LufsI = 0,
+    Rms = 2,
+    Peak = 4,
+    TruePeak = 6,
+    LufsMMax = 8,
+    LufsSMax = 10,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RenderMonoAdjustment {
+    None,
+    Minus3Db,
+    Plus3Db,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RenderNormalizeTargetMode {
+    None,
+    AsIfFilesPlayTogether,
+    ToLoudestFile,
+    AsIfFilesPlayTogetherCommonGain,
+    ToMasterMix,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RenderLimitMode {
+    None,
+    AsIfFilesPlayTogether,
+    ToMasterMix,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderNormalize {
+    pub enabled: bool,
+    pub mode: RenderNormalizeMode,
+    pub mono_adjustment: RenderMonoAdjustment,
+    pub target_mode: RenderNormalizeTargetMode,
+    pub brickwall_limit: bool,
+    pub brickwall_limit_true_peak: bool,
+    pub only_normalize_too_loud: bool,
+    pub only_normalize_too_quiet: bool,
+    pub apply_fade_in: bool,
+    pub apply_fade_out: bool,
+    pub trim_start_silence: bool,
+    pub trim_end_silence: bool,
+    pub pad_start_silence: bool,
+    pub pad_end_silence: bool,
+    pub disable_all_postprocessing: bool,
+    pub limit_mode: RenderLimitMode,
+}
+
+impl Default for RenderNormalize {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: RenderNormalizeMode::LufsI,
+            mono_adjustment: RenderMonoAdjustment::None,
+            target_mode: RenderNormalizeTargetMode::None,
+            brickwall_limit: false,
+            brickwall_limit_true_peak: false,
+            only_normalize_too_loud: false,
+            only_normalize_too_quiet: false,
+            apply_fade_in: false,
+            apply_fade_out: false,
+            trim_start_silence: false,
+            trim_end_silence: false,
+            pad_start_silence: false,
+            pad_end_silence: false,
+            disable_all_postprocessing: false,
+            limit_mode: RenderLimitMode::None,
         }
     }
+}
 
-    bitflags! {
-        #[derive(Serialize, Deserialize)]
-        pub struct RenderDitherFlags: u32 {
-            const DITHER = 1;
-            const NOISE_SHAPING = 2;
-            const DITHER_STEMS = 4;
-            const NOISE_SHAPING_STEMS = 8;
-            const DISABLE_ALL = 16;
+impl RenderNormalize {
+    pub fn to_raw(&self) -> f64 {
+        let mut raw = 0_u32;
+        if self.enabled {
+            raw |= 1;
         }
-    }
+        raw |= self.mode.int_value();
 
-    bitflags! {
-        #[derive(Serialize, Deserialize)]
-        pub struct RenderAddToProjectFlags: u32 {
-            const ADD_TO_PROJECT = 1;
-            const SKIP_LIKELY_SILENT_FILES = 2;
-        }
-    }
-
-    #[repr(u32)]
-    #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, IntEnum, Serialize, Deserialize,
-    )]
-    pub enum RenderNormalizeMode {
-        LufsI = 0,
-        Rms = 2,
-        Peak = 4,
-        TruePeak = 6,
-        LufsMMax = 8,
-        LufsSMax = 10,
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    pub enum RenderMonoAdjustment {
-        None,
-        Minus3Db,
-        Plus3Db,
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    pub enum RenderNormalizeTargetMode {
-        None,
-        AsIfFilesPlayTogether,
-        ToLoudestFile,
-        AsIfFilesPlayTogetherCommonGain,
-        ToMasterMix,
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    pub enum RenderLimitMode {
-        None,
-        AsIfFilesPlayTogether,
-        ToMasterMix,
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    pub struct RenderNormalize {
-        pub enabled: bool,
-        pub mode: RenderNormalizeMode,
-        pub mono_adjustment: RenderMonoAdjustment,
-        pub target_mode: RenderNormalizeTargetMode,
-        pub brickwall_limit: bool,
-        pub brickwall_limit_true_peak: bool,
-        pub only_normalize_too_loud: bool,
-        pub only_normalize_too_quiet: bool,
-        pub apply_fade_in: bool,
-        pub apply_fade_out: bool,
-        pub trim_start_silence: bool,
-        pub trim_end_silence: bool,
-        pub pad_start_silence: bool,
-        pub pad_end_silence: bool,
-        pub disable_all_postprocessing: bool,
-        pub limit_mode: RenderLimitMode,
-    }
-
-    impl Default for RenderNormalize {
-        fn default() -> Self {
-            Self {
-                enabled: false,
-                mode: RenderNormalizeMode::LufsI,
-                mono_adjustment: RenderMonoAdjustment::None,
-                target_mode: RenderNormalizeTargetMode::None,
-                brickwall_limit: false,
-                brickwall_limit_true_peak: false,
-                only_normalize_too_loud: false,
-                only_normalize_too_quiet: false,
-                apply_fade_in: false,
-                apply_fade_out: false,
-                trim_start_silence: false,
-                trim_end_silence: false,
-                pad_start_silence: false,
-                pad_end_silence: false,
-                disable_all_postprocessing: false,
-                limit_mode: RenderLimitMode::None,
-            }
-        }
-    }
-
-    impl RenderNormalize {
-        pub fn to_raw(&self) -> f64 {
-            let mut raw = 0_u32;
-            if self.enabled {
-                raw |= 1;
-            }
-            raw |= self.mode.int_value();
-
-            match self.mono_adjustment {
-                RenderMonoAdjustment::Minus3Db => raw |= 16,
-                RenderMonoAdjustment::Plus3Db => raw |= 16 | (8 << 16),
-                RenderMonoAdjustment::None => {}
-            }
-
-            match self.target_mode {
-                RenderNormalizeTargetMode::AsIfFilesPlayTogether => raw |= 32,
-                RenderNormalizeTargetMode::ToLoudestFile => raw |= 4096,
-                RenderNormalizeTargetMode::AsIfFilesPlayTogetherCommonGain => {
-                    raw |= 32 | 4096;
-                }
-                RenderNormalizeTargetMode::ToMasterMix => raw |= 16 << 16,
-                RenderNormalizeTargetMode::None => {}
-            }
-
-            if self.brickwall_limit {
-                raw |= 64;
-            }
-            if self.brickwall_limit_true_peak {
-                raw |= 128;
-            }
-            if self.only_normalize_too_loud {
-                raw |= 256;
-            }
-            if self.only_normalize_too_quiet {
-                raw |= 2048;
-            }
-            if self.apply_fade_in {
-                raw |= 512;
-            }
-            if self.apply_fade_out {
-                raw |= 1024;
-            }
-            if self.trim_start_silence {
-                raw |= 16_384;
-            }
-            if self.trim_end_silence {
-                raw |= 32_768;
-            }
-            if self.pad_start_silence {
-                raw |= 1 << 16;
-            }
-            if self.pad_end_silence {
-                raw |= 2 << 16;
-            }
-            if self.disable_all_postprocessing {
-                raw |= 4 << 16;
-            }
-            match self.limit_mode {
-                RenderLimitMode::AsIfFilesPlayTogether => raw |= 32 << 16,
-                RenderLimitMode::ToMasterMix => raw |= 64 << 16,
-                RenderLimitMode::None => {}
-            }
-            raw as f64
+        match self.mono_adjustment {
+            RenderMonoAdjustment::Minus3Db => raw |= 16,
+            RenderMonoAdjustment::Plus3Db => raw |= 16 | (8 << 16),
+            RenderMonoAdjustment::None => {}
         }
 
-        pub fn from_raw(value: f64) -> Self {
-            let raw = value as u32;
-            let mode = RenderNormalizeMode::from_int(raw & 0x0e)
-                .unwrap_or(RenderNormalizeMode::LufsI);
-            let mono_adjustment = if raw & (8 << 16) != 0 {
-                RenderMonoAdjustment::Plus3Db
-            } else if raw & 16 != 0 {
-                RenderMonoAdjustment::Minus3Db
-            } else {
-                RenderMonoAdjustment::None
-            };
-            let target_mode = match (
-                raw & 32 != 0,
-                raw & 4096 != 0,
-                raw & (16 << 16) != 0,
-            ) {
+        match self.target_mode {
+            RenderNormalizeTargetMode::AsIfFilesPlayTogether => raw |= 32,
+            RenderNormalizeTargetMode::ToLoudestFile => raw |= 4096,
+            RenderNormalizeTargetMode::AsIfFilesPlayTogetherCommonGain => {
+                raw |= 32 | 4096;
+            }
+            RenderNormalizeTargetMode::ToMasterMix => raw |= 16 << 16,
+            RenderNormalizeTargetMode::None => {}
+        }
+
+        if self.brickwall_limit {
+            raw |= 64;
+        }
+        if self.brickwall_limit_true_peak {
+            raw |= 128;
+        }
+        if self.only_normalize_too_loud {
+            raw |= 256;
+        }
+        if self.only_normalize_too_quiet {
+            raw |= 2048;
+        }
+        if self.apply_fade_in {
+            raw |= 512;
+        }
+        if self.apply_fade_out {
+            raw |= 1024;
+        }
+        if self.trim_start_silence {
+            raw |= 16_384;
+        }
+        if self.trim_end_silence {
+            raw |= 32_768;
+        }
+        if self.pad_start_silence {
+            raw |= 1 << 16;
+        }
+        if self.pad_end_silence {
+            raw |= 2 << 16;
+        }
+        if self.disable_all_postprocessing {
+            raw |= 4 << 16;
+        }
+        match self.limit_mode {
+            RenderLimitMode::AsIfFilesPlayTogether => raw |= 32 << 16,
+            RenderLimitMode::ToMasterMix => raw |= 64 << 16,
+            RenderLimitMode::None => {}
+        }
+        raw as f64
+    }
+
+    pub fn from_raw(value: f64) -> Self {
+        let raw = value as u32;
+        let mode = RenderNormalizeMode::from_int(raw & 0x0e)
+            .unwrap_or(RenderNormalizeMode::LufsI);
+        let mono_adjustment = if raw & (8 << 16) != 0 {
+            RenderMonoAdjustment::Plus3Db
+        } else if raw & 16 != 0 {
+            RenderMonoAdjustment::Minus3Db
+        } else {
+            RenderMonoAdjustment::None
+        };
+        let target_mode =
+            match (raw & 32 != 0, raw & 4096 != 0, raw & (16 << 16) != 0) {
                 (true, false, false) => {
                     RenderNormalizeTargetMode::AsIfFilesPlayTogether
                 }
@@ -2269,50 +2219,48 @@ pub mod project_info {
                 (false, false, true) => RenderNormalizeTargetMode::ToMasterMix,
                 _ => RenderNormalizeTargetMode::None,
             };
-            let limit_mode =
-                match (raw & (32 << 16) != 0, raw & (64 << 16) != 0) {
-                    (true, false) => RenderLimitMode::AsIfFilesPlayTogether,
-                    (false, true) => RenderLimitMode::ToMasterMix,
-                    _ => RenderLimitMode::None,
-                };
-            Self {
-                enabled: raw & 1 != 0,
-                mode,
-                mono_adjustment,
-                target_mode,
-                brickwall_limit: raw & 64 != 0,
-                brickwall_limit_true_peak: raw & 128 != 0,
-                only_normalize_too_loud: raw & 256 != 0,
-                only_normalize_too_quiet: raw & 2048 != 0,
-                apply_fade_in: raw & 512 != 0,
-                apply_fade_out: raw & 1024 != 0,
-                trim_start_silence: raw & 16_384 != 0,
-                trim_end_silence: raw & 32_768 != 0,
-                pad_start_silence: raw & (1 << 16) != 0,
-                pad_end_silence: raw & (2 << 16) != 0,
-                disable_all_postprocessing: raw & (4 << 16) != 0,
-                limit_mode,
-            }
+        let limit_mode = match (raw & (32 << 16) != 0, raw & (64 << 16) != 0) {
+            (true, false) => RenderLimitMode::AsIfFilesPlayTogether,
+            (false, true) => RenderLimitMode::ToMasterMix,
+            _ => RenderLimitMode::None,
+        };
+        Self {
+            enabled: raw & 1 != 0,
+            mode,
+            mono_adjustment,
+            target_mode,
+            brickwall_limit: raw & 64 != 0,
+            brickwall_limit_true_peak: raw & 128 != 0,
+            only_normalize_too_loud: raw & 256 != 0,
+            only_normalize_too_quiet: raw & 2048 != 0,
+            apply_fade_in: raw & 512 != 0,
+            apply_fade_out: raw & 1024 != 0,
+            trim_start_silence: raw & 16_384 != 0,
+            trim_end_silence: raw & 32_768 != 0,
+            pad_start_silence: raw & (1 << 16) != 0,
+            pad_end_silence: raw & (2 << 16) != 0,
+            disable_all_postprocessing: raw & (4 << 16) != 0,
+            limit_mode,
         }
     }
+}
 
-    #[repr(u32)]
-    #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, IntEnum, Serialize, Deserialize,
-    )]
-    pub enum RenderFadeShape {
-        Linear = 0,
-        EqualPower = 1,
-        EqualGain = 2,
-        SShape = 3,
-    }
+#[repr(u32)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, IntEnum, Serialize, Deserialize,
+)]
+pub enum RenderFadeShape {
+    Linear = 0,
+    EqualPower = 1,
+    EqualGain = 2,
+    SShape = 3,
+}
 
-    bitflags! {
-        #[derive(Serialize, Deserialize)]
-        pub struct RenderFadeLowPassFlags: u32 {
-            const FADE_IN = 1;
-            const FADE_OUT = 2;
-        }
+bitflags! {
+    #[derive(Serialize, Deserialize)]
+    pub struct RenderFadeLowPassFlags: u32 {
+        const FADE_IN = 1;
+        const FADE_OUT = 2;
     }
 }
 
@@ -2343,8 +2291,6 @@ pub enum RenderFormat {
     Ddp,
     /// FFmpeg format
     FFmpeg,
-    /// Windows Media Format
-    Wmf,
     /// Graphics Interchange Format (audio)
     Gif,
     /// LCF format
@@ -2352,70 +2298,7 @@ pub enum RenderFormat {
     /// Generalized format for unlisted formats
     Other(String),
 }
-
 impl RenderFormat {
-    fn parse_reaper_format_token(token: &str) -> Option<Self> {
-        let token = token.split('\0').next().unwrap_or(token).trim();
-        debug!("got render format token from Reaper: {token}");
-        match token {
-            "wave" | "wvaw" | "evaw" => Some(RenderFormat::Wave),
-            "aiff" | "ffia" => Some(RenderFormat::Aiff),
-            "caff" | "ffac" => Some(RenderFormat::Caff),
-            "flac" | "calf" => Some(RenderFormat::Flac),
-            "mp3l" | "l3pm" => Some(RenderFormat::Mp3),
-            "OggS" => Some(RenderFormat::OggSpeex),
-            "oggv" => Some(RenderFormat::OggVorbis),
-            "wvpk" | "kpvw" => Some(RenderFormat::WavePack),
-            "raw " => Some(RenderFormat::Raw),
-            "iso " => Some(RenderFormat::Iso),
-            "ddp " => Some(RenderFormat::Ddp),
-            "FFMP" => Some(RenderFormat::FFmpeg),
-            "WMF " => Some(RenderFormat::Wmf),
-            "GIF " => Some(RenderFormat::Gif),
-            "LCF " => Some(RenderFormat::Lcf),
-            _ => None,
-        }
-    }
-
-    fn normalize_reaper_format_input(input: &str) -> String {
-        let trimmed = input.split('\0').next().unwrap_or(input).trim();
-
-        if let Ok(decoded_bytes) = general_purpose::STANDARD.decode(trimmed) {
-            if let Ok(decoded_string) = std::str::from_utf8(&decoded_bytes) {
-                let candidate = decoded_string
-                    .split('\0')
-                    .next()
-                    .unwrap_or(decoded_string)
-                    .trim();
-                if candidate.len() >= 4 {
-                    return candidate.chars().take(4).collect();
-                }
-                return candidate.to_string();
-            }
-
-            if decoded_bytes.len() >= 4 {
-                let mut out = String::with_capacity(4);
-                for &byte in &decoded_bytes[..4] {
-                    out.push(byte as char);
-                }
-                return out;
-            }
-        }
-
-        if trimmed.len() >= 4 {
-            let bytes = trimmed.as_bytes();
-            let mut out = String::with_capacity(4);
-            for &byte in &bytes[..4] {
-                if byte == 0 {
-                    break;
-                }
-                out.push(byte as char);
-            }
-            return out;
-        }
-        trimmed.to_string()
-    }
-
     /// Returns a hint/description for the audio format
     pub fn hint(&self) -> &'static str {
         match self {
@@ -2431,7 +2314,6 @@ impl RenderFormat {
             RenderFormat::Iso => "ISO format",
             RenderFormat::Ddp => "DDP format",
             RenderFormat::FFmpeg => "FFmpeg format",
-            RenderFormat::Wmf => "Windows Media Format",
             RenderFormat::Gif => "Graphics Interchange Format (audio)",
             RenderFormat::Lcf => "LCF format",
             RenderFormat::Other(_) => "Custom format",
@@ -2453,55 +2335,60 @@ impl RenderFormat {
             RenderFormat::Iso => "iso",
             RenderFormat::Ddp => "ddp",
             RenderFormat::FFmpeg => "mp4",
-            RenderFormat::Wmf => "wmf",
             RenderFormat::Gif => "gif",
             RenderFormat::Lcf => "lcf",
             RenderFormat::Other(_) => "dat",
         }
     }
+}
 
-    /// Creates an AudioFormat from the 4-byte string representation used by
-    /// REAPER. The input may contain a raw 4-byte token, a token with trailing
-    /// payload, or a string that includes NUL bytes; in all cases we normalize
-    /// to the leading token bytes before matching.
-    pub fn from_reaper_format(format: &str) -> Self {
-        // let normalized = Self::normalize_reaper_format_input(format);
-        // if let Some(parsed) = Self::parse_reaper_format_token(&normalized) {
-        //     return parsed;
-        // }
-        RenderFormat::Other(format.into())
+impl ToString for RenderFormat {
+    fn to_string(&self) -> String {
+        let str = match self {
+                RenderFormat::Wave => "ZXZhdxgAAQ==",
+                RenderFormat::Aiff => "ZmZpYRgAAA==",
+                RenderFormat::Caff => "ZmZhYxgAAA==",
+                RenderFormat::Flac => "Y2FsZhAAAAAFAAAA",
+                RenderFormat::Mp3 => "bDNwbYAAAAAAAAAAAgAAAP////8EAAAAgAAAAAAAAAA=",
+                RenderFormat::OggSpeex => "U2dnTwAAAEMACgAAAAAAAAA=",
+                RenderFormat::OggVorbis => "dmdnbwAAAD8AgAAAAIAAAAAgAAAAAAEAAA==",
+                RenderFormat::WavePack => "a3B2dwAAAAABAAAAAAAAAAAAAAA=",
+                RenderFormat::Raw => "IHdhchAA",
+                RenderFormat::Iso => "IG9zaQAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                RenderFormat::Ddp => "IHBkZA==",
+                RenderFormat::FFmpeg => "UE1GRgcAAAAAAAAAAAgAAAAAAACAAAAAgAcAADgEAAAAAPBBAQAAAF8AAAAAAA==",
+                RenderFormat::Gif => "IEZJR4ACAABoAQAAAADwQQAA",
+                RenderFormat::Lcf => "IEZDTIACAABoAQAAAADwQQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                RenderFormat::Other(s) => s
+            };
+        str.to_string()
     }
-
-    /// Converts the AudioFormat to the 4-byte string representation used by
-    /// REAPER.
-    pub fn to_reaper_format(&self) -> String {
-        let format = match self {
-            RenderFormat::Wave => "evaw".to_string(),
-            RenderFormat::Aiff => "ffia".to_string(),
-            RenderFormat::Caff => "ffac".to_string(),
-            RenderFormat::Flac => "calf".to_string(),
-            RenderFormat::Mp3 => "l3pm".to_string(),
-            RenderFormat::OggSpeex => "SggO".to_string(),
-            RenderFormat::OggVorbis => "vggo".to_string(),
-            RenderFormat::WavePack => "kpvw".to_string(),
-            RenderFormat::Raw => " war".to_string(),
-            RenderFormat::Iso => " osi".to_string(),
-            RenderFormat::Ddp => " pdd".to_string(),
-            RenderFormat::FFmpeg => "PMFF".to_string(),
-            RenderFormat::Wmf => " FMW".to_string(),
-            RenderFormat::Gif => " FIG".to_string(),
-            RenderFormat::Lcf => " FCL".to_string(),
-            RenderFormat::Other(s) => s.clone(),
-        };
-        format
+}
+impl From<String> for RenderFormat {
+    fn from(value: String) -> Self {
+        match &value[0..4] {
+            "ZXZh" => RenderFormat::Wave,
+            "ZmZp" => RenderFormat::Aiff,
+            "ZmZh" => RenderFormat::Caff,
+            "Y2Fs" => RenderFormat::Flac,
+            "bDNw" => RenderFormat::Mp3,
+            "U2dn" => RenderFormat::OggSpeex,
+            "dmdn" => RenderFormat::OggVorbis,
+            "a3B2" => RenderFormat::WavePack,
+            "IHdh" => RenderFormat::Raw,
+            "IG9z" => RenderFormat::Iso,
+            "IHBk" => RenderFormat::Ddp,
+            "UE1G" => RenderFormat::FFmpeg,
+            "IEZJ" => RenderFormat::Gif,
+            "IEZD" => RenderFormat::Lcf,
+            _ => RenderFormat::Other(value),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::RenderFormat;
-
-    use super::project_info::{
+    use super::{
         BoundsMode, RenderDitherFlags, RenderLimitMode, RenderMode,
         RenderMonoAdjustment, RenderNormalize, RenderNormalizeMode,
         RenderNormalizeTargetMode, RenderSettings,
@@ -2516,40 +2403,6 @@ mod tests {
             | RenderDitherFlags::DISABLE_ALL;
         assert_eq!(flags.bits(), 19);
         assert_eq!(RenderDitherFlags::from_bits(19).unwrap(), flags);
-    }
-
-    #[test]
-    fn render_format_parses_raw_and_base64_values() {
-        assert_eq!(
-            RenderFormat::from_reaper_format("evaw"),
-            RenderFormat::Wave
-        );
-        assert_eq!(
-            RenderFormat::from_reaper_format("l3pm"),
-            RenderFormat::Mp3
-        );
-        assert_eq!(
-            RenderFormat::from_reaper_format("d2F2ZQ=="),
-            RenderFormat::Wave
-        );
-        assert_eq!(
-            RenderFormat::from_reaper_format("bDNwbQ=="),
-            RenderFormat::Mp3
-        );
-        assert_eq!(
-            RenderFormat::from_reaper_format("a3B2dwAAAAABAAAAAAAAAAAAAAA="),
-            RenderFormat::WavePack
-        );
-        assert_eq!(
-            RenderFormat::from_reaper_format(
-                "bDNwbUABAAAAAAAAAAAAAP////8EAAAAQAEAAAAAAAA="
-            ),
-            RenderFormat::Mp3
-        );
-        assert_eq!(
-            RenderFormat::from_reaper_format("ZXZhdxgAAQ=="),
-            RenderFormat::Wave
-        );
     }
 
     #[test]
@@ -2623,16 +2476,12 @@ mod tests {
     #[test]
     fn full_render_settings_serialization_round_trip() {
         let settings = FullRenderSettings {
-            settings: Some(RenderSettings::new(
-                super::project_info::RenderMode::MasterMix,
-            )),
+            settings: Some(RenderSettings::new(super::RenderMode::MasterMix)),
             bounds: Some((Position::from(1.0), Position::from(2.0))),
             bounds_mode: Some(BoundsMode::TimeSelection),
             channels_amount: Some(2),
             directory: Some(PathBuf::from("/tmp/render")),
             file: Some("render.wav".to_string()),
-            primary_format: Some(RenderFormat::from_reaper_format("wav")),
-            secondary_format: Some(RenderFormat::from_reaper_format("wav")),
             srate: Some(Some(48000)),
             ..Default::default()
         };
