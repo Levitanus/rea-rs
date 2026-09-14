@@ -116,7 +116,7 @@ pub trait ControlSurface: Debug {
     }
 
     /// stop control surface and unregister it from reaper.
-    fn stop(&mut self) {
+    fn stop(&self) {
         let id_string = self.get_type_string();
         if let Err(e) = Reaper::get_mut().unregister_control_surface(id_string)
         {
@@ -265,10 +265,14 @@ impl ControlSurfaceWrap {
             last_config_string: None,
         }
     }
-    
+
     // Helper function to get or create a cached CString
     // Since these are typically static, we cache them to avoid memory leaks
-    fn get_cached_cstring(cache: &mut Option<CString>, last_value: &mut Option<String>, new_value: String) -> *const std::os::raw::c_char {
+    fn get_cached_cstring(
+        cache: &mut Option<CString>,
+        last_value: &mut Option<String>,
+        new_value: String,
+    ) -> *const std::os::raw::c_char {
         // Check if we need to regenerate the CString
         if last_value.as_ref() != Some(&new_value) {
             // Create new CString and update cache
@@ -282,47 +286,69 @@ impl ControlSurfaceWrap {
                 }
             }
         }
-        
+
         // Return pointer to cached CString
-        cache.as_ref().map(|s| s.as_ptr()).unwrap_or(std::ptr::null())
+        cache
+            .as_ref()
+            .map(|s| s.as_ptr())
+            .unwrap_or(std::ptr::null())
     }
     fn error(&self, error: Error) {
         let formatted = format!("Error in control surface:\n{:#?}", error);
         log::error!("{:?}", error);
         Reaper::get().show_console_msg(formatted)
     }
-    
+
     fn check_for_error(&self, result: Result<()>) {
         match result {
             Ok(_) => (),
             Err(e) => self.error(e),
         }
     }
-    
+
     // Helper function for safe pointer dereferencing with null checks
     fn safe_deref_i32(&self, ptr: *mut std::os::raw::c_void) -> Option<i32> {
         if ptr.is_null() {
-            self.error(ReaRsError::UnexpectedAPI("Null pointer dereference attempted".to_string()).into());
+            self.error(
+                ReaRsError::UnexpectedAPI(
+                    "Null pointer dereference attempted".to_string(),
+                )
+                .into(),
+            );
             None
         } else {
             Some(unsafe { *(ptr as *mut i32) })
         }
     }
-    
+
     // Helper function for safe pointer dereferencing with null checks
     fn safe_deref_f64(&self, ptr: *mut std::os::raw::c_void) -> Option<f64> {
         if ptr.is_null() {
-            self.error(ReaRsError::UnexpectedAPI("Null pointer dereference attempted".to_string()).into());
+            self.error(
+                ReaRsError::UnexpectedAPI(
+                    "Null pointer dereference attempted".to_string(),
+                )
+                .into(),
+            );
             None
         } else {
             Some(unsafe { *(ptr as *mut f64) })
         }
     }
-    
+
     // Helper function for safe slice creation with bounds checking
-    fn safe_slice_f64(&self, ptr: *mut std::os::raw::c_void, len: usize) -> Option<&mut [f64]> {
+    fn safe_slice_f64(
+        &self,
+        ptr: *mut std::os::raw::c_void,
+        len: usize,
+    ) -> Option<&mut [f64]> {
         if ptr.is_null() {
-            self.error(ReaRsError::UnexpectedAPI("Null pointer dereference attempted".to_string()).into());
+            self.error(
+                ReaRsError::UnexpectedAPI(
+                    "Null pointer dereference attempted".to_string(),
+                )
+                .into(),
+            );
             None
         } else {
             Some(unsafe { slice::from_raw_parts_mut(ptr as *mut f64, len) })
@@ -349,20 +375,32 @@ impl IReaperControlSurface for ControlSurfaceWrap {
     fn GetTypeString(&mut self) -> *const std::os::raw::c_char {
         println!("get_type_string");
         let new_value = self.child.borrow().get_type_string();
-        Self::get_cached_cstring(&mut self.type_string_cache, &mut self.last_type_string, new_value)
+        Self::get_cached_cstring(
+            &mut self.type_string_cache,
+            &mut self.last_type_string,
+            new_value,
+        )
     }
 
     fn GetDescString(&mut self) -> *const std::os::raw::c_char {
         println!("get_desc_string");
         let new_value = self.child.borrow().get_desc_string();
-        Self::get_cached_cstring(&mut self.desc_string_cache, &mut self.last_desc_string, new_value)
+        Self::get_cached_cstring(
+            &mut self.desc_string_cache,
+            &mut self.last_desc_string,
+            new_value,
+        )
     }
 
     fn GetConfigString(&mut self) -> *const std::os::raw::c_char {
         println!("get_config_string");
         let new_value = self.child.borrow().get_config_string();
         match new_value {
-            Some(line) => Self::get_cached_cstring(&mut self.config_string_cache, &mut self.last_config_string, line),
+            Some(line) => Self::get_cached_cstring(
+                &mut self.config_string_cache,
+                &mut self.last_config_string,
+                line,
+            ),
             None => null(),
         }
     }
@@ -566,8 +604,8 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             raw::CSURF_EXT_SETAUTORECARM => {
                 CSurfExtended::SetAutoRecArm((parm1 as usize) != 0)
             }
-            raw::CSURF_EXT_SETRECMODE => CSurfExtended::SetRecMode(
-                match self.safe_deref_i32(parm1) {
+            raw::CSURF_EXT_SETRECMODE => {
+                CSurfExtended::SetRecMode(match self.safe_deref_i32(parm1) {
                     Some(0) => CSurfRecMode::SplitForTakes,
                     Some(1) => CSurfRecMode::Replace,
                     Some(m) => {
@@ -580,8 +618,8 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                         return 0;
                     }
                     None => return 0,
-                },
-            ),
+                })
+            }
             raw::CSURF_EXT_SETSENDVOLUME => {
                 let track = match self.track_from_mut(
                     parm1 as *mut rea_rs_low::raw::MediaTrack,
@@ -814,7 +852,7 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                             track,
                             pan: CSurfPan::Balance(val),
                         }
-                    },
+                    }
                     3 => {
                         let val = match self.safe_deref_f64(parm2) {
                             Some(val) => val,
@@ -824,7 +862,7 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                             track,
                             pan: CSurfPan::BalanceV4(val),
                         }
-                    },
+                    }
                     5 => {
                         let pan = match self.safe_slice_f64(parm2, 2) {
                             Some(slice) => slice,
