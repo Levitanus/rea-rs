@@ -90,12 +90,14 @@
 //! Use crates `log` and `env_logger` for printing to stdio. integration test
 //! turns env logger on by itself.
 
-use rea_rs::{
-    ActionHook, ActionKind, PluginContext, ReaRsError, Reaper, Timer,
-};
+use rea_rs::{ActionHook, ActionKind, PluginContext, Reaper, Timer};
 use rea_rs_low::register_plugin_destroy_hook;
 use std::{
-    cell::RefCell, error::Error, fmt::Debug, panic, process, sync::Arc,
+    cell::RefCell,
+    fmt::Debug,
+    panic::{self, AssertUnwindSafe},
+    process,
+    sync::Arc,
 };
 
 pub mod integration_test;
@@ -216,47 +218,46 @@ impl ReaperTest {
 
     fn test(&mut self) {
         println!("# Testing reaper-rs\n");
-        let result = panic::catch_unwind(|| -> TestStepResult {
-            // let r_test = ReaperTest::get_mut();
-            // let rpr = &mut r_test.reaper;
-            // for step in r_test.steps.iter() {
-            //     println!("Testing step: {}", step.name);
-            //     (step.operation)(rpr)?;
-            // }
-            ReaperTest::get()
-                .steps
-                .iter()
-                .map(|step| -> Result<(), anyhow::Error> {
-                    println!("Testing step: {}", step.name);
-                    (step.operation)(Reaper::get_mut())?;
-                    Ok(())
-                })
-                .count();
-            Ok(())
-        });
-        let final_result = match result.is_err() {
-            false => result.unwrap(),
-            true => Err(ReaRsError::Str("Reaper panicked!").into()),
-        };
-        match final_result {
-            Ok(_) => {
+        let mut is_err = false;
+        for step in ReaperTest::get().steps.iter() {
+            println!("Testing step: {}", step.name);
+            // let operation = step.operation;
+            match panic::catch_unwind(AssertUnwindSafe(
+                || -> TestStepResult { (step.operation)(Reaper::get_mut()) },
+            )) {
+                Ok(result) => match result {
+                    Ok(_) => println!("passed!"),
+                    Err(e) => {
+                        is_err = true;
+                        eprintln!("error occured: {}", e)
+                    }
+                },
+                Err(reason) => {
+                    is_err = true;
+                    eprintln!("paniced: {:?}", reason)
+                }
+            }
+        }
+        match is_err {
+            false => {
                 println!("From REAPER: reaper-rs integration test executed successfully");
                 if self.is_integration_test {
                     process::exit(0)
                 }
             }
-            Err(reason) => {
+            true => {
                 // We use a particular exit code to distinguish test
                 // failure from other possible
                 // exit paths.
                 match self.is_integration_test {
                     true => {
-                        eprintln!("From REAPER: reaper-rs integration test failed: {}", reason);
+                        eprintln!(
+                            "From REAPER: reaper-rs integration test failed"
+                        );
                         process::exit(172)
                     }
                     false => panic!(
-                        "From REAPER: reaper-rs integration test failed: {}",
-                        reason
+                        "From REAPER: reaper-rs integration test failed. panic!"
                     ),
                 }
             }

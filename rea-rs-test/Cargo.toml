@@ -22,6 +22,7 @@ tar = "0.4.26"
 wait-timeout = "0.1.5"
 xz2 = "0.1"
 anyhow = {workspace = true}
+rust-ini = "0.21.3"
 
 [dev-dependencies]
 rea-rs-macros = {version = "=0.2.0", path = "../macros"}

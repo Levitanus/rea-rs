@@ -1,7 +1,6 @@
 use super::raw::{reaper_plugin_info_t, HINSTANCE};
 use super::PluginContext;
 use crate::StaticExtensionPluginContext;
-use std::error::Error;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 /// This function catches panics before they reach REAPER.

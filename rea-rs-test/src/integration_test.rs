@@ -1,4 +1,6 @@
+// use anyhow::Result;
 use fs_extra::dir::CopyOptions;
+use ini::Ini;
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
@@ -63,7 +65,7 @@ impl ReaperVersion {
 }
 
 pub fn run_integration_test(reaper_version: ReaperVersion) {
-    env_logger::init();
+    // env_logger::init();
     let executable_path = match build_integration_test(reaper_version) {
         Some(result) => result.expect("Can not build test environment"),
         None => return (),
@@ -184,10 +186,15 @@ fn install_plugin(
 }
 
 fn run_integration_test_in_reaper(reaper_executable: &Path) -> Result<()> {
+    write_reaper_config(
+        &reaper_executable
+            .parent()
+            .ok_or("can not find parent dir of reaper executable")?,
+    )?;
     println!("Starting REAPER ({:?})...", &reaper_executable);
     let mut child = Command::new(reaper_executable)
         .env("RUN_REAPER_INTEGRATION_TEST", "true")
-        .env("RUST_LOG", "debug")
+        // .env("RUST_LOG", "debug")
         .arg("-newinst")
         .arg("-new")
         // .arg("-splashlog")
@@ -239,7 +246,6 @@ fn setup_reaper_for_linux(
     }
     println!("Unpacking REAPER tarball...");
     unpack_tar_xz(&reaper_tarball_path, &reaper_download_dir_path)?;
-    write_reaper_config(&reaper_home_path)?;
     println!("REAPER home directory is {:?}", &reaper_home_path);
     Ok(reaper_home_path)
 }
@@ -284,20 +290,19 @@ fn setup_reaper_for_macos(
 
 fn write_reaper_config(reaper_home_path: &Path) -> Result<()> {
     println!("Writing REAPER configuration...");
-    let content = r#"
-[audioconfig]
-; For dummy audio on Windows
-mode=4
-
-[REAPER]
-; For dummy audio on Linux
-linux_audio_mode=2
-; For <none> audio on macOS
-coreaudiobs=512
-coreaudioindevnew=<none>
-coreaudiooutdevnew=<none>
-"#;
-    fs::write(reaper_home_path.join("reaper.ini"), content)?;
+    let config_path = reaper_home_path.join("reaper.ini");
+    let mut ini = Ini::load_from_file(config_path.clone())?;
+    ini.with_section(Some("REAOER"))
+        .set("linux_audio_mode", "2")
+        .set("coreaudiobs", "512")
+        .set("coreaudioindevnew", "<none>")
+        .set("coreaudiooutdevnew", "<none>")
+        .set("vst_scan", "2")
+        .set("vstpath", "")
+        .set("lv2path_linux", "")
+        .set("clap_path_linux-x86_64", "");
+    ini.with_section(Some("audioconfig")).set("mode", "4");
+    ini.write_to_file(config_path)?;
     Ok(())
 }
 
