@@ -31,6 +31,7 @@ impl ProjectContext {
     }
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Section {
     Main,
     MainAlt,

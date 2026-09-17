@@ -5,10 +5,11 @@ use float_eq::assert_float_eq;
 use log::{debug, info, warn};
 use rea_rs::gui::{baseview, egui, DockableEguiWindow};
 use rea_rs::{
-    ActionHook, ActionKind, AutomationMode, BoundsMode, Color, CommandId,
-    EnvelopeChunk, EnvelopePoint, EnvelopePointShape, EnvelopeSelector,
-    EnvelopeSendInfo, ExtState, GenericSend, GenericSendMut, HardwareSocket,
-    ItemFade, MarkerRegionInfo, MessageBoxValue, Pan, PanLaw, Pitch, PlayRate,
+    ActionHook, ActionKind, ActionRegistrationOptions, ActionSections,
+    AutomationMode, BoundsMode, Color, CommandId, EnvelopeChunk,
+    EnvelopePoint, EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo,
+    ExtState, GenericSend, GenericSendMut, HardwareSocket, ItemFade,
+    MarkerRegionInfo, MessageBoxValue, Pan, PanLaw, Pitch, PlayRate,
     PluginContext, Position, Project, RazorEdit, ReaRsError, Reaper, RecInput,
     RecMode, RecMonitoring, RecOutMode, RenderFormat, RenderMode,
     RenderSettings, RenderTail, RenderTailFlags, SampleAmount,

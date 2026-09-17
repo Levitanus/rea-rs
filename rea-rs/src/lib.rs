@@ -32,7 +32,7 @@
 //! The Common entry point should look like this:
 //!
 //! ```no_run
-//! use rea_rs::{ActionKind, Reaper, PluginContext};
+//! use rea_rs::{ActionKind, ActionSections, Reaper, PluginContext};
 //! use rea_rs_macros::reaper_extension_plugin;
 //! use std::error::Error;
 //!
@@ -89,7 +89,7 @@
 //!         ActionKind::NotToggleable,
 //!         my_action_func,
 //!         // Only type currently supported
-//!         None
+//!         ActionSections::Global
 //!     )?;
 //!
 //!     reaper.register_timer(Arc::new(RefCell::new(Listener{action})));

@@ -90,7 +90,10 @@
 //! Use crates `log` and `env_logger` for printing to stdio. integration test
 //! turns env logger on by itself.
 
-use rea_rs::{ActionHook, ActionKind, PluginContext, Reaper, Timer};
+use rea_rs::{
+    ActionHook, ActionKind, ActionRegistrationOptions, ActionSections,
+    PluginContext, Reaper, Timer,
+};
 use rea_rs_low::register_plugin_destroy_hook;
 use std::{
     cell::RefCell,
@@ -183,7 +186,7 @@ impl ReaperTest {
                 action_name,
                 ActionKind::NotToggleable,
                 test,
-                None,
+                ActionRegistrationOptions::default(),
             )
             .expect("Can not reigister test action");
         Self::make_available_globally(instance);

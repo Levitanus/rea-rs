@@ -1,13 +1,14 @@
 use log::debug;
 use rea_rs_low::{
-    create_cpp_to_rust_control_surface,
-    raw::{self, gaccel_register_t},
-    register_plugin_destroy_hook, IReaperControlSurface, PluginContext, Swell,
+    create_cpp_to_rust_control_surface, raw, register_plugin_destroy_hook,
+    IReaperControlSurface, PluginContext, Swell,
 };
 
 use crate::{
-    keys::KeyBinding, ControlSurface, ControlSurfaceWrap, ReaRsError,
-    ReaperResult,
+    keys::{FVirt, KeyBinding},
+    misc_enums::Section,
+    ptr_wrappers::{Hwnd, KbdSectionInfo},
+    ControlSurface, ControlSurfaceWrap, ReaRsError, ReaperResult,
 };
 use c_str_macro::c_str;
 use serde_derive::{Deserialize, Serialize};
@@ -25,9 +26,112 @@ static mut INSTANCE: Option<Reaper> = None;
 type ActionCallback = dyn Fn(&mut ActionHook) -> Result<(), anyhow::Error>;
 
 pub struct Action {
-    command_id: CommandId,
+    bindings: Vec<ActionBinding>,
     operation: Box<ActionCallback>,
     kind: ActionKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ActionBinding {
+    section: Section,
+    command_id: CommandId,
+}
+
+struct ActionRegistration {
+    _section: Section,
+    _id: CString,
+    _name: CString,
+    registration: raw::custom_action_register_t,
+}
+
+struct DefaultKeyBindingRegistration {
+    _description: CString,
+    registration: raw::gaccel_register_t,
+    global_text: bool,
+}
+
+/// Selects the REAPER action sections in which a custom action is registered.
+///
+/// `Global` registers the action in every built-in section currently supported
+/// by this crate. REAPER does not make a custom action globally available by
+/// registering it only with `gaccel_global`; section registrations are needed
+/// for editor-independent invocation.
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub enum ActionSections {
+    #[default]
+    Global,
+    Section(Section),
+    Sections(Vec<Section>),
+}
+
+impl ActionSections {
+    fn into_vec(self) -> Vec<Section> {
+        let sections = match self {
+            Self::Global => vec![
+                Section::Main,
+                // Section::MainAlt,
+                Section::MediaExplorer,
+                Section::MidiEditor,
+                Section::MidiEventListEditor,
+                Section::MidiInlineEditor,
+            ],
+            Self::Section(section) => vec![section],
+            Self::Sections(sections) => sections,
+        };
+
+        let mut unique_sections = Vec::with_capacity(sections.len());
+        for section in sections {
+            if !unique_sections
+                .iter()
+                .any(|existing: &Section| existing.id() == section.id())
+            {
+                unique_sections.push(section);
+            }
+        }
+        unique_sections
+    }
+}
+
+impl From<Section> for ActionSections {
+    fn from(section: Section) -> Self {
+        Self::Section(section)
+    }
+}
+
+impl From<Vec<Section>> for ActionSections {
+    fn from(sections: Vec<Section>) -> Self {
+        Self::Sections(sections)
+    }
+}
+
+/// Options controlling custom action registration.
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub struct ActionRegistrationOptions {
+    pub sections: ActionSections,
+    pub default_key_binding: Option<KeyBinding>,
+}
+
+impl ActionRegistrationOptions {
+    pub fn new(sections: impl Into<ActionSections>) -> Self {
+        Self {
+            sections: sections.into(),
+            default_key_binding: None,
+        }
+    }
+
+    pub fn with_default_key_binding(
+        mut self,
+        key_binding: KeyBinding,
+    ) -> Self {
+        self.default_key_binding = Some(key_binding);
+        self
+    }
+}
+
+impl From<ActionSections> for ActionRegistrationOptions {
+    fn from(sections: ActionSections) -> Self {
+        Self::new(sections)
+    }
 }
 impl Action {
     pub fn call(&self, hook: &mut ActionHook) -> Result<(), anyhow::Error> {
@@ -35,7 +139,17 @@ impl Action {
     }
 
     pub fn command_id(&self) -> CommandId {
-        self.command_id
+        self.bindings
+            .first()
+            .expect("an action must have at least one binding")
+            .command_id
+    }
+
+    pub fn command_id_for(&self, section: &Section) -> Option<CommandId> {
+        self.bindings
+            .iter()
+            .find(|binding| binding.section == *section)
+            .map(|binding| binding.command_id)
     }
 
     pub fn kind(&self) -> &ActionKind {
@@ -48,13 +162,61 @@ impl Action {
 }
 
 pub struct ActionHook<'a> {
+    section: KbdSectionInfo,
+    command_id: CommandId,
+    val: i32,
+    val2: i32,
+    relmode: i32,
+    hwnd: Option<Hwnd>,
     flag: i32,
     kind: &'a mut ActionKind,
 }
 
 impl<'a> ActionHook<'a> {
-    fn new(flag: i32, kind: &'a mut ActionKind) -> Self {
-        Self { flag, kind }
+    fn new(
+        section: KbdSectionInfo,
+        command_id: CommandId,
+        val: i32,
+        val2: i32,
+        relmode: i32,
+        hwnd: Option<Hwnd>,
+        flag: i32,
+        kind: &'a mut ActionKind,
+    ) -> Self {
+        Self {
+            section,
+            command_id,
+            val,
+            val2,
+            relmode,
+            hwnd,
+            flag,
+            kind,
+        }
+    }
+
+    pub fn section(&self) -> &KbdSectionInfo {
+        &self.section
+    }
+
+    pub fn command_id(&self) -> CommandId {
+        self.command_id
+    }
+
+    pub fn val(&self) -> i32 {
+        self.val
+    }
+
+    pub fn val2(&self) -> i32 {
+        self.val2
+    }
+
+    pub fn relmode(&self) -> i32 {
+        self.relmode
+    }
+
+    pub fn hwnd(&self) -> Option<Hwnd> {
+        self.hwnd
     }
 
     pub fn flag(&self) -> i32 {
@@ -92,16 +254,39 @@ fn action_error(error: anyhow::Error) {
     ));
 }
 
-extern "C" fn action_hook(command_id: i32, flag: i32) -> bool {
+extern "C" fn hookcommand2(
+    section: *mut raw::KbdSectionInfo,
+    command_id: i32,
+    val: i32,
+    val2: i32,
+    relmode: i32,
+    hwnd: raw::HWND,
+) -> bool {
+    let Some(section) = KbdSectionInfo::from_raw(section) else {
+        return false;
+    };
+    let section_id = section.unique_id();
     let actions = &mut Reaper::get_mut().actions;
     for action in actions.iter_mut() {
-        if action.command_id.get() == command_id as u32 {
+        if action.bindings.iter().any(|binding| {
+            binding.section.id() == section_id.get()
+                && binding.command_id.get() == command_id as u32
+        }) {
             let operation = &action.operation;
-            let mut hook = ActionHook::new(flag, &mut action.kind);
+            let mut hook = ActionHook::new(
+                section,
+                CommandId::new(command_id as u32),
+                val,
+                val2,
+                relmode,
+                NonNull::new(hwnd),
+                0,
+                &mut action.kind,
+            );
             match operation(&mut hook) {
                 Ok(_) => (),
                 Err(e) => action_error(e),
-            };
+            }
             return true;
         }
     }
@@ -111,7 +296,11 @@ extern "C" fn action_hook(command_id: i32, flag: i32) -> bool {
 extern "C" fn toggle_action_hook(command_id: i32) -> i32 {
     let actions = &Reaper::get().actions;
     for action in actions.iter() {
-        if action.command_id.get() == command_id as u32 {
+        if action
+            .bindings
+            .iter()
+            .any(|binding| binding.command_id.get() == command_id as u32)
+        {
             return match action.kind.toggle_state() {
                 Some(true) => 1,
                 Some(false) => 0,
@@ -140,9 +329,17 @@ pub struct Reaper {
     low: rea_rs_low::Reaper,
     swell: Swell,
     actions: Vec<Action>,
-    hook: extern "C" fn(i32, i32) -> bool,
+    hook2: extern "C" fn(
+        *mut raw::KbdSectionInfo,
+        i32,
+        i32,
+        i32,
+        i32,
+        raw::HWND,
+    ) -> bool,
     toggle_action_hook: extern "C" fn(i32) -> i32,
-    accels: Vec<Gaccel>,
+    registrations: Vec<ActionRegistration>,
+    default_key_bindings: Vec<DefaultKeyBindingRegistration>,
     timers: HashMap<String, (Instant, Arc<RefCell<dyn Timer>>)>,
     csurfases: HashMap<
         String,
@@ -157,7 +354,7 @@ impl Reaper {
     pub fn load(context: PluginContext) -> Reaper {
         let low = rea_rs_low::Reaper::load(context);
         let actions = Vec::new();
-        let hook = action_hook;
+        let hook2 = hookcommand2;
         let swell = Swell::load(context);
         Swell::make_available_globally(swell);
         let toggle_action_hook = toggle_action_hook;
@@ -165,8 +362,8 @@ impl Reaper {
         Swell::make_available_globally(swell);
         unsafe {
             low.plugin_register(
-                c_str!("hookcommand").as_ptr(),
-                hook as *mut _,
+                c_str!("hookcommand2").as_ptr(),
+                hook2 as *mut _,
             );
             low.plugin_register(
                 c_str!("toggleaction").as_ptr(),
@@ -177,9 +374,10 @@ impl Reaper {
             low,
             swell: swell,
             actions,
-            hook,
+            hook2,
             toggle_action_hook,
-            accels: Vec::new(),
+            registrations: Vec::new(),
+            default_key_bindings: Vec::new(),
             timers: HashMap::new(),
             csurfases: HashMap::new(),
         }
@@ -267,77 +465,122 @@ impl Reaper {
         }
     }
 
-    /// Register action in the section and set default keybinding to it
-    pub fn register_gaccel(
-        &mut self,
-        id_string: &'static str,
-        description: &'static str,
-        key_binding: impl Into<Option<KeyBinding>>,
-    ) -> Result<RegisteredAccel, anyhow::Error> {
-        let kb: Option<KeyBinding> = key_binding.into();
-        let low = self.low();
-        let id_string = id_string.replace(" ", "_");
-        let id_string = CString::new(id_string.as_str())?;
-
-        let command_id = unsafe {
-            low.plugin_register(
-                c_str!("command_id").as_ptr(),
-                id_string.as_ptr() as _,
-            )
-        };
-        let accel = match kb {
-            Some(kb) => raw::ACCEL {
-                fVirt: kb.fvirt.bits(),
-                key: kb.key,
-                cmd: command_id as u16,
-            },
-            None => raw::ACCEL {
-                fVirt: 0,
-                key: 0,
-                cmd: command_id as u16,
-            },
-        };
-        // let mut description = description.to_string();
-        let desc = CString::new(description)?;
-        let reg_str = c_str!("gaccel");
-        let mut gaccel = raw::gaccel_register_t {
-            accel,
-            desc: desc.as_c_str().as_ptr(),
-        };
-        unsafe {
-            low.plugin_register(
-                reg_str.as_ptr(),
-                &mut gaccel as *mut raw::gaccel_register_t as _,
-            )
-        };
-        self.accels.push(Gaccel {
-            _desc: desc,
-            gaccel,
-        });
-        let reg = RegisteredAccel {
-            command_id: CommandId::new(command_id as u32),
-        };
-        Ok(reg)
-    }
-
     pub fn register_action(
         &mut self,
         id_string: &'static str,
         description: &'static str,
         kind: ActionKind,
         operation: impl Fn(&mut ActionHook) -> Result<(), anyhow::Error> + 'static,
-        key_binding: impl Into<Option<KeyBinding>>,
-    ) -> Result<RegisteredAccel, anyhow::Error> {
-        let accel =
-            self.register_gaccel(id_string, description, key_binding)?;
+        options: impl Into<Option<ActionRegistrationOptions>>,
+    ) -> Result<RegisteredAction, anyhow::Error> {
+        let options = options.into().unwrap_or_default();
+        let sections = options.sections.into_vec();
+        let name = CString::new(description)?;
+        let mut bindings = Vec::new();
+        for section in sections {
+            let binding_id = CString::new(format!(
+                "{}_section_{}",
+                id_string,
+                section.id()
+            ))?;
+            let is_main_default_binding = section == Section::Main
+                && options.default_key_binding.is_some();
+            if is_main_default_binding {
+                let command_id = unsafe {
+                    self.low.plugin_register(
+                        c_str!("command_id").as_ptr(),
+                        binding_id.as_ptr() as _,
+                    )
+                };
+                if command_id == 0 {
+                    return Err(anyhow::anyhow!(
+                        "failed to register action command in section {}",
+                        section.id()
+                    ));
+                }
+                bindings.push(ActionBinding {
+                    section,
+                    command_id: CommandId::new(command_id as u32),
+                });
+                continue;
+            }
+            let mut registration = raw::custom_action_register_t {
+                uniqueSectionId: section.id() as i32,
+                idStr: binding_id.as_ptr(),
+                name: name.as_ptr(),
+                extra: std::ptr::null_mut(),
+            };
+            let command_id = unsafe {
+                self.low.plugin_register(
+                    c_str!("custom_action").as_ptr(),
+                    &mut registration as *mut _ as _,
+                )
+            };
+            if command_id == 0 {
+                return Err(anyhow::anyhow!(
+                    "failed to register action in section {}",
+                    section.id()
+                ));
+            }
+            bindings.push(ActionBinding {
+                section: section.clone(),
+                command_id: CommandId::new(command_id as u32),
+            });
+            self.registrations.push(ActionRegistration {
+                _section: section,
+                _id: binding_id,
+                _name: name.clone(),
+                registration,
+            });
+        }
+        if let Some(key_binding) = options.default_key_binding {
+            let main_command_id = bindings
+                .iter()
+                .find(|binding| binding.section == Section::Main)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "a default key binding requires the Main section"
+                    )
+                })?
+                .command_id;
+            let description = CString::new(description)?;
+            let registration = raw::gaccel_register_t {
+                accel: raw::ACCEL {
+                    fVirt: key_binding.fvirt.bits(),
+                    key: key_binding.key,
+                    cmd: main_command_id.get() as u16,
+                },
+                desc: description.as_ptr(),
+            };
+            let registration_name = c_str!("gaccel");
+
+            //     if key_binding.fvirt.contains(FVirt::FVIRTKEY) {
+            //         c_str!("gaccel_global")
+            //     } else {
+            //         c_str!("gaccel_globaltext")
+            //     };
+            unsafe {
+                self.low.plugin_register(
+                    registration_name.as_ptr(),
+                    &registration as *const _ as _,
+                );
+            }
+            self.default_key_bindings
+                .push(DefaultKeyBindingRegistration {
+                    _description: description,
+                    registration,
+                    global_text: !key_binding.fvirt.contains(FVirt::FVIRTKEY),
+                });
+        }
         let action = Action {
-            command_id: accel.command_id,
+            bindings,
             operation: Box::new(operation),
             kind,
         };
         self.actions.push(action);
-
-        Ok(accel)
+        Ok(RegisteredAction {
+            command_id: self.actions.last().unwrap().command_id(),
+        })
     }
 
     pub fn register_control_surface(
@@ -399,21 +642,35 @@ impl Drop for Reaper {
         let low = self.low().clone();
         unsafe {
             low.plugin_register(
-                c_str!("-hookcommand").as_ptr(),
-                self.hook as *mut _,
+                c_str!("-hookcommand2").as_ptr(),
+                self.hook2 as *mut _,
             );
             low.plugin_register(
                 c_str!("-toggleaction").as_ptr(),
                 self.toggle_action_hook as *mut _,
             );
         }
-        for accel in self.accels.iter_mut() {
+        for registration in self.registrations.iter_mut() {
             unsafe {
                 low.plugin_register(
-                    c_str!("-gaccel").as_ptr(),
-                    &mut accel.gaccel as *mut raw::gaccel_register_t as _,
+                    c_str!("-custom_action").as_ptr(),
+                    &mut registration.registration as *mut _ as _,
                 )
             };
+        }
+        for registration in self.default_key_bindings.iter_mut() {
+            let registration_name = c_str!("-gaccel_globaltext");
+            // if registration.global_text {
+            //     c_str!("-gaccel_globaltext")
+            // } else {
+            //     c_str!("-gaccel_global")
+            // };
+            unsafe {
+                low.plugin_register(
+                    registration_name.as_ptr(),
+                    &mut registration.registration as *mut _ as _,
+                );
+            }
         }
     }
 }
@@ -534,9 +791,4 @@ impl ActionKind {
 #[derive(Debug, PartialEq, Eq)]
 pub struct RegisteredAccel {
     pub command_id: CommandId,
-}
-
-struct Gaccel {
-    _desc: CString,
-    gaccel: gaccel_register_t,
 }

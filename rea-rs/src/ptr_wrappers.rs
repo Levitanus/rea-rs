@@ -139,6 +139,12 @@ pub type Hinstance = NonNull<c_void>;
 pub struct KbdSectionInfo(pub(crate) NonNull<raw::KbdSectionInfo>);
 
 impl KbdSectionInfo {
+    pub(crate) fn from_raw(
+        ptr: *mut raw::KbdSectionInfo,
+    ) -> Option<Self> {
+        NonNull::new(ptr).map(Self)
+    }
+
     /// Returns the number of actions in this section.
     pub fn action_list_cnt(&self) -> u32 {
         unsafe { self.0.as_ref() }.action_list_cnt as u32
