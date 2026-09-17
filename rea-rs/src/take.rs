@@ -1,6 +1,7 @@
 use std::{
     ffi::{c_char, CString},
     mem::MaybeUninit,
+    vec::IntoIter,
 };
 
 use crate::{
@@ -176,7 +177,7 @@ impl Take {
     pub fn iter_midi(
         &self,
         buf_size_override: impl Into<Option<i32>>,
-    ) -> ReaperResult<MidiEventBuilder> {
+    ) -> ReaperResult<MidiEventBuilder<IntoIter<u8>>> {
         let buf = self.get_midi(buf_size_override)?;
         Ok(MidiEventBuilder::new(buf.into_iter()))
     }
