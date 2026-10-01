@@ -5,16 +5,16 @@ publish = false
 version = "0.2.0"
 
 [dependencies]
+anyhow = {workspace = true}
 bitvec = "1.0"
 c_str_macro = "1.0.2"
 float_eq = "1.0"
 log = "0.4"
-rea-rs = { version = "=0.2.0", path = "../rea-rs", features = ["egui-baseview"] }
-rea-rs-low = { version = "=0.2.0", path = "../low" }
-rea-rs-macros = { version = "=0.2.0", path = "../macros" }
-rea-rs-test = { version = "=0.2.0", path = "../rea-rs-test" }
+rea-rs = {version = "=0.2.0", path = "../rea-rs"}
+rea-rs-low = {version = "=0.2.0", path = "../low"}
+rea-rs-macros = {version = "=0.2.0", path = "../macros"}
+rea-rs-test = {version = "=0.2.0", path = "../rea-rs-test"}
 thiserror = {workspace = true}
-anyhow = {workspace = true}
 
 [lib]
 crate-type = ["cdylib"]

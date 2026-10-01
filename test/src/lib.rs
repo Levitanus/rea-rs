@@ -3,7 +3,6 @@ use bitvec::prelude::*;
 use c_str_macro::c_str;
 use float_eq::assert_float_eq;
 use log::{debug, info, warn};
-use rea_rs::gui::{baseview, egui, DockableEguiWindow};
 use rea_rs::{
     ActionHook, ActionKind, ActionRegistrationOptions, ActionSections,
     AutomationMode, BoundsMode, Color, CommandId, EnvelopeChunk,
@@ -29,87 +28,7 @@ use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::Duration;
 
-#[derive(Default)]
-struct EguiWindowState {
-    clicks: usize,
-    dock_requested: Option<u32>,
-}
 
-// Global window descriptor; created on first action call
-static mut EGUI_WINDOW: Option<DockableEguiWindow> = None;
-// Global flag to signal the main REAPER timer to poll dock state
-static EGUI_WINDOW_DOCK_REQUEST: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(u32::MAX);
-
-fn open_egui_baseview_window_action(_: &mut ActionHook) -> TestStepResult {
-    unsafe {
-        let win = EGUI_WINDOW.get_or_insert_with(|| {
-            DockableEguiWindow::new(
-                "rea-rs egui-baseview (dockable)",
-                "rea_rs_egui_baseview_demo",
-                baseview::dpi::Size::new(baseview::dpi::LogicalSize::new(
-                    520.0, 340.0,
-                )),
-            )
-        });
-
-        // Read the dock request set by the UI
-        let req = EGUI_WINDOW_DOCK_REQUEST
-            .load(std::sync::atomic::Ordering::Relaxed);
-        win.set_dock(
-            if req == u32::MAX {
-                None
-            } else {
-                Some(req as u32)
-            },
-            EguiWindowState::default(),
-            |_ctx, _queue, _state| {},
-            |ui, _queue, state| {
-                ui.heading("egui-baseview Window (Dockable)");
-                if state.dock_requested.is_none() {
-                    ui.label("This window is floating.");
-                } else {
-                    ui.label(format!(
-                        "This window is docked in slot {}",
-                        state.dock_requested.unwrap_or(0)
-                    ));
-                }
-
-                ui.separator();
-
-                if ui.button("🔗 Dock to slot 0").clicked() {
-                    EGUI_WINDOW_DOCK_REQUEST
-                        .store(0, std::sync::atomic::Ordering::Relaxed);
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-                if ui.button("🔗 Dock to slot 1").clicked() {
-                    EGUI_WINDOW_DOCK_REQUEST
-                        .store(1, std::sync::atomic::Ordering::Relaxed);
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-                if ui.button("⛓️ Float").clicked() {
-                    EGUI_WINDOW_DOCK_REQUEST
-                        .store(u32::MAX, std::sync::atomic::Ordering::Relaxed);
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-
-                ui.separator();
-
-                if ui.button("Click me").clicked() {
-                    state.clicks += 1;
-                }
-                ui.label(format!("Clicks: {}", state.clicks));
-
-                if ui.button("Close").clicked() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            },
-        );
-    }
-    Ok(())
-}
-
-//
 #[reaper_extension_plugin]
 fn test_main(context: PluginContext) -> TestStepResult {
     let test =
@@ -118,13 +37,6 @@ fn test_main(context: PluginContext) -> TestStepResult {
     for step in steps {
         test.push_test_step(step);
     }
-    Reaper::get_mut().register_action(
-        "open_egui_baseview_test_window",
-        "Open egui-baseview test window (dockable)",
-        ActionKind::NotToggleable,
-        open_egui_baseview_window_action,
-        None,
-    )?;
     Ok(())
 }
 

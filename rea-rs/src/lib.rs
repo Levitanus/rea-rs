@@ -235,9 +235,6 @@ pub use control_surface::*;
 
 pub mod socket;
 
-#[cfg(feature = "egui-baseview")]
-pub mod gui;
-
 #[derive(thiserror::Error, Debug)]
 pub enum ReaRsError {
     #[error("The pointer to {0} is null.")]

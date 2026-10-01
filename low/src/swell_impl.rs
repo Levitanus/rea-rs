@@ -597,3 +597,216 @@ fn menu_item_needs_string_conversion(mi: root::MENUITEMINFO) -> bool {
     use crate::raw;
     (mi.fMask & raw::MIIM_TYPE) != 0 && (mi.fMask & raw::MIIM_DATA) != 0
 }
+
+/// Creates a top-level window (owned by the given parent) without requiring a
+/// dialog template and returns its handle, or `None` if creation failed or the
+/// window was destroyed during creation.
+///
+/// On Unix (SWELL), this uses `SWELL_CreateDialog` with the magic resource ID
+/// `0x400000 | flags` (see `swell-dlg-generic.cpp` and `swell-dlg.mm`). The
+/// given `proc` is installed as window procedure and receives `WM_CREATE`
+/// synchronously (with `param` as `lParam`). Any nonzero flag bit forces the
+/// window to be top-level (owned by `parent`) instead of a child window.
+///
+/// On Windows, this uses one-time `RegisterClassExW` plus `CreateWindowExW`.
+/// The given `proc` is used as window procedure as well. `WM_CREATE` receives
+/// a `CREATESTRUCTW` pointer as `lParam` (the `param` value is available via
+/// `lpCreateParams`).
+///
+/// The window is created hidden. Show it via `ShowWindow` afterwards.
+///
+/// # Arguments
+///
+/// * `parent` - Window which will own the new window (typically REAPER's main
+///   window).
+/// * `title` - UTF-8 encoded title of the window.
+/// * `width` - Requested client area width in pixels.
+/// * `height` - Requested client area height in pixels.
+/// * `resizable` - Whether the window has a resizable border.
+/// * `hinstance` - Module handle of the plugin (used on Windows for class
+///   registration; ignored on Unix).
+/// * `proc` - Window/dialog procedure which receives all window messages.
+/// * `param` - Value passed to `WM_CREATE` (Unix: as `lParam`; Windows: via
+///   `CREATESTRUCTW.lpCreateParams`).
+///
+/// # Safety
+///
+/// `parent` must be a valid window handle and `proc` must be a valid function
+/// pointer. Both are usually obtained from REAPER.
+impl Swell {
+    pub unsafe fn create_window(
+        &self,
+        parent: root::HWND,
+        title: &str,
+        width: i32,
+        height: i32,
+        resizable: bool,
+        hinstance: root::HINSTANCE,
+        proc_: root::DLGPROC,
+        param: root::LPARAM,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            // Any nonzero flag bit forces a top-level (owned) window instead
+            // of a child window. Bit 0 additionally makes it resizable. We
+            // always set bit 1 ("no minimize") as the top-level forcing bit
+            // and rely on post-creation style adjustment for the resizable
+            // case:
+            //
+            // - Linux/GDK: bit 0 => WS_THICKFRAME|WS_CAPTION (close/min/max +
+            //   resize), otherwise WS_CAPTION (title + minimize, fixed size).
+            //   Bits 1 and 2 are ignored.
+            // - macOS: bit 0 => +NSResizableWindowMask, bit 1 =>
+            //   -Miniaturizable, bit 2 => -Closable.
+            //
+            // Because the desired style differs per platform and SWELL applies
+            // styles only at creation time, we create with bit 0 set
+            // (resizable) and, for non-resizable windows, strip WS_THICKFRAME
+            // afterwards via SetWindowLong(GWL_STYLE). On Linux this updates
+            // the GDK decorations (swell_oswindow_update_style), on macOS it
+            // recreates the window frame with the right style mask.
+            let flags = crate::raw::SWELL_DLG_FORCE_RESIZABLE
+                | crate::raw::SWELL_DLG_NO_MINIMIZE;
+            let resid =
+                (crate::raw::SWELL_CREATE_DIALOG_MAGIC | flags) as usize;
+            let hwnd = self.SWELL_CreateDialog(
+                std::ptr::null_mut(),
+                resid as *const ::std::os::raw::c_char,
+                parent,
+                proc_,
+                param,
+            );
+            if hwnd.is_null() {
+                return None;
+            }
+            // Title must be set after creation. SWELL's template-less mode
+            // doesn't take a title.
+            let title_c = std::ffi::CString::new(title).ok()?;
+            self.SetWindowText(hwnd, title_c.as_ptr());
+            if !resizable {
+                // Strip the resizable border. Keep WS_CAPTION.
+                let style = self.GetWindowLong(hwnd, crate::raw::GWL_STYLE);
+                self.SetWindowLong(
+                    hwnd,
+                    crate::raw::GWL_STYLE,
+                    style & !(crate::raw::WS_THICKFRAME as isize),
+                );
+            }
+            // Apply the requested size. SWELL's template-less mode starts with
+            // a default size (300x200 UI-scaled on Linux, 10x10 on macOS).
+            self.SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                width,
+                height,
+                (crate::raw::SWP_NOMOVE | crate::raw::SWP_NOZORDER) as i32,
+            );
+            Some(hwnd)
+        }
+        #[cfg(target_family = "windows")]
+        {
+            use winapi::um::winuser;
+            // Register the window class once per process. The class stores a
+            // fallback procedure; the real procedure is installed via
+            // SetWindowLongPtrW(GWLP_WNDPROC) after creation because WM_CREATE
+            // is delivered during CreateWindowExW and must not crash if the
+            // real procedure is not yet reachable.
+            static REGISTER_CLASS: std::sync::Once = std::sync::Once::new();
+            static CLASS_REGISTERED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            REGISTER_CLASS.call_once(|| {
+                let class_name = windows_class_name();
+                let wc = winuser::WNDCLASSEXW {
+                    cbSize: std::mem::size_of::<winuser::WNDCLASSEXW>() as u32,
+                    style: winuser::CS_HREDRAW | winuser::CS_VREDRAW,
+                    lpfnWndProc: Some(windows_default_wndproc),
+                    cbClsExtra: 0,
+                    cbWndExtra: 0,
+                    hInstance: hinstance as _,
+                    hIcon: std::ptr::null_mut(),
+                    hCursor: winuser::LoadCursorW(
+                        std::ptr::null_mut(),
+                        winuser::IDC_ARROW,
+                    ),
+                    hbrBackground: winuser::GetSysColorBrush(
+                        winuser::COLOR_BTNFACE,
+                    ),
+                    lpszMenuName: std::ptr::null(),
+                    lpszClassName: class_name.as_ptr(),
+                    hIconSm: std::ptr::null_mut(),
+                };
+                let atom = winuser::RegisterClassExW(&wc);
+                CLASS_REGISTERED.store(
+                    atom != 0,
+                    std::sync::atomic::Ordering::Release,
+                );
+            });
+            if !CLASS_REGISTERED.load(std::sync::atomic::Ordering::Acquire) {
+                return None;
+            }
+            let style = if resizable {
+                winuser::WS_OVERLAPPEDWINDOW
+            } else {
+                winuser::WS_OVERLAPPEDWINDOW
+                    & !(winuser::WS_THICKFRAME | winuser::WS_MAXIMIZEBOX)
+            };
+            let title_utf16 = windows_title_utf16(title);
+            let hwnd = winuser::CreateWindowExW(
+                0,
+                windows_class_name().as_ptr(),
+                title_utf16.as_ptr(),
+                style,
+                winuser::CW_USEDEFAULT,
+                winuser::CW_USEDEFAULT,
+                width,
+                height,
+                parent as _,
+                std::ptr::null_mut(),
+                hinstance as _,
+                param as _,
+            );
+            if hwnd.is_null() {
+                return None;
+            }
+            // Install the actual window procedure. WM_CREATE has already been
+            // delivered to the fallback procedure above.
+            if let Some(real_proc) = proc_ {
+                winuser::SetWindowLongPtrW(
+                    hwnd as _,
+                    winuser::GWLP_WNDPROC,
+                    std::mem::transmute(real_proc),
+                );
+            }
+            Some(hwnd as _)
+        }
+    }
+}
+
+/// Fallback window procedure used on Windows until the real procedure is
+/// installed after `CreateWindowExW` returns.
+#[cfg(target_family = "windows")]
+unsafe extern "system" fn windows_default_wndproc(
+    hwnd: winapi::shared::windef::HWND,
+    msg: winapi::shared::minwindef::UINT,
+    w_param: winapi::shared::minwindef::WPARAM,
+    l_param: winapi::shared::minwindef::LPARAM,
+) -> winapi::shared::minwindef::LRESULT {
+    winapi::um::winuser::DefWindowProcW(hwnd, msg, w_param, l_param)
+}
+
+#[cfg(target_family = "windows")]
+fn windows_class_name() -> std::vec::Vec<u16> {
+    use std::iter::once;
+    "ReaRsWindow"
+        .encode_utf16()
+        .chain(once(0))
+        .collect()
+}
+
+#[cfg(target_family = "windows")]
+fn windows_title_utf16(title: &str) -> std::vec::Vec<u16> {
+    use std::iter::once;
+    title.encode_utf16().chain(once(0)).collect()
+}

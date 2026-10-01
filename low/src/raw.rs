@@ -115,6 +115,67 @@ pub const TBM_SETPOS: u32 = WM_USER + 5;
 pub const TBM_SETRANGE: u32 = WM_USER + 6;
 pub const TBM_SETSEL: u32 = WM_USER + 10;
 
+// Window style and window-long constants. Not picked up by bindgen because
+// they are defined in swell-types.h only as macros (SWELL) resp. are needed on
+// Windows as well. Values must match swell-types.h (SWELL) and winuser.h
+// (Windows).
+/// Window style: child window.
+pub const WS_CHILD: i32 = 0x40000000;
+/// Window style: has a title bar. Includes WS_DLGFRAME and WS_BORDER.
+pub const WS_CAPTION: i32 = 0x00C00000;
+/// Window style: has a sizing border.
+pub const WS_THICKFRAME: i32 = 0x00040000;
+/// Window style: has a system menu in its title bar.
+pub const WS_SYSMENU: i32 = 0x00080000;
+/// Window style: the window is initially visible.
+pub const WS_VISIBLE: i32 = 0x02000000;
+/// Window style: the window is initially disabled.
+pub const WS_DISABLED: i32 = 0x08000000;
+/// Window style: clips child windows relative to each other.
+pub const WS_CLIPSIBLINGS: i32 = 0x04000000;
+/// Set of styles which identify a typical resizable top-level window.
+pub const WS_OVERLAPPEDWINDOW: i32 = WS_CAPTION
+    | WS_SYSMENU
+    | WS_THICKFRAME
+    | 0x00010000 /* WS_TABSTOP, unused but keeps the set aligned with Win32 */
+    | 0x00020000 /* WS_GROUP */;
+
+/// `GetWindowLong`/`SetWindowLong` index: window procedure.
+pub const GWL_WNDPROC: i32 = -4;
+/// `GetWindowLong`/`SetWindowLong` index: window style.
+pub const GWL_STYLE: i32 = -16;
+// Note: `GWL_ID` (-12) is already re-exported from `bindings::root` above.
+/// `GetWindowLong`/`SetWindowLong` index: extended window style.
+pub const GWL_EXSTYLE: i32 = -20;
+/// `GetWindowLong`/`SetWindowLong` index: user data.
+pub const GWL_USERDATA: i32 = -21;
+/// `GetWindowLong`/`SetWindowLong` index: dialog procedure.
+pub const DWL_DLGPROC: i32 = -8;
+/// `GetWindowLong`/`SetWindowLong` index: parent window handle (SWELL-specific).
+pub const GWL_HWNDPARENT: i32 = -25;
+
+/// Class style: redraws the window if a movement or size adjustment changes
+/// the width of the client area.
+pub const CS_HREDRAW: u32 = 0x0002;
+/// Class style: redraws the window if a movement or size adjustment changes
+/// the height of the client area.
+pub const CS_VREDRAW: u32 = 0x0001;
+
+/// `GetWindow` relation: retrieves the owner window.
+pub const GW_OWNER: i32 = 4;
+
+// SWELL dialog creation: SWELL_CreateDialog accepts a magic resource ID of
+// 0x400000 | flags in order to create a top-level window without a dialog
+// template. Implemented identically in swell-dlg-generic.cpp and swell-dlg.mm.
+// Bit 0: resizable, Bit 1: no minimize box, Bit 2: no close box.
+pub const SWELL_CREATE_DIALOG_MAGIC: i64 = 0x400000;
+/// SWELL template-less dialog creation flag: window is resizable.
+pub const SWELL_DLG_FORCE_RESIZABLE: i64 = 0x1;
+/// SWELL template-less dialog creation flag: no minimize box.
+pub const SWELL_DLG_NO_MINIMIZE: i64 = 0x2;
+/// SWELL template-less dialog creation flag: no close box.
+pub const SWELL_DLG_NO_CLOSE: i64 = 0x4;
+
 // Some constants/types are different in Unix/SWELL. Search for "these differ"
 // in SWELL source code for explanation.
 #[cfg(target_family = "unix")]
