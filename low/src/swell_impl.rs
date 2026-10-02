@@ -16,6 +16,229 @@ static mut INSTANCE: Option<Swell> = None;
 /// This impl block contains functions which exist in SWELL as macros and
 /// therefore are not picked up by `bindgen`.
 impl Swell {
+    /// Creates a child button using the native SWELL/Win32 control API.
+    ///
+    /// The returned handle belongs to `parent`; the caller remains responsible
+    /// for retaining the logical control ID and for destroying the parent.
+    pub unsafe fn create_button(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        label: *const ::std::os::raw::c_char,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
+            let hwnd = self.SWELL_MakeButton(0, label, id, x, y, width, height, 0);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent, id, label, "BUTTON", winapi::um::winuser::BS_PUSHBUTTON,
+                x, y, width, height,
+            )
+        }
+    }
+
+    /// Creates a child edit control using the native SWELL/Win32 control API.
+    pub unsafe fn create_edit_field(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        flags: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
+            let hwnd = self.SWELL_MakeEditField(id, x, y, width, height, flags);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent, id, std::ptr::null(), "EDIT", winapi::um::winuser::ES_LEFT | flags as u32,
+                x, y, width, height,
+            )
+        }
+    }
+
+    /// Creates a child static label using the native SWELL/Win32 control API.
+    pub unsafe fn create_label(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        label: *const ::std::os::raw::c_char,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
+            let hwnd = self.SWELL_MakeLabel(0, label, id, x, y, width, height, 0);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent, id, label, "STATIC", winapi::um::winuser::SS_LEFT,
+                x, y, width, height,
+            )
+        }
+    }
+
+    /// Creates a child check box using the native SWELL/Win32 control API.
+    pub unsafe fn create_checkbox(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        label: *const ::std::os::raw::c_char,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
+            let hwnd = self.SWELL_MakeCheckBox(label, id, x, y, width, height, 0);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent, id, label, "BUTTON", winapi::um::winuser::BS_AUTOCHECKBOX,
+                x, y, width, height,
+            )
+        }
+    }
+
+    /// Creates a child group box using the native SWELL/Win32 control API.
+    pub unsafe fn create_group_box(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        label: *const ::std::os::raw::c_char,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
+            let hwnd = self.SWELL_MakeGroupBox(label, id, x, y, width, height, 0);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent, id, label, "BUTTON", winapi::um::winuser::BS_GROUPBOX,
+                x, y, width, height,
+            )
+        }
+    }
+
+    /// Creates a child combo box using the native SWELL/Win32 control API.
+    pub unsafe fn create_combo_box(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        flags: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
+            let hwnd = self.SWELL_MakeCombo(id, x, y, width, height, flags);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent, id, std::ptr::null(), "COMBOBOX", winapi::um::winuser::CBS_DROPDOWNLIST | flags as u32,
+                x, y, width, height,
+            )
+        }
+    }
+
+    /// Creates a child list box using the native SWELL/Win32 control API.
+    pub unsafe fn create_list_box(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        styles: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
+            let hwnd = self.SWELL_MakeListBox(id, x, y, width, height, styles);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent, id, std::ptr::null(), "LISTBOX", styles as u32,
+                x, y, width, height,
+            )
+        }
+    }
+
+    #[cfg(target_family = "windows")]
+    unsafe fn create_windows_control(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        text: *const ::std::os::raw::c_char,
+        class_name: &str,
+        style: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<root::HWND> {
+        use std::iter::once;
+        use winapi::um::winuser;
+        let class: Vec<u16> = class_name.encode_utf16().chain(once(0)).collect();
+        let text = if text.is_null() {
+            Vec::new()
+        } else {
+            std::ffi::CStr::from_ptr(text).to_string_lossy().encode_utf16().chain(once(0)).collect()
+        };
+        let hwnd = winuser::CreateWindowExW(
+            0,
+            class.as_ptr(),
+            if text.is_empty() { std::ptr::null() } else { text.as_ptr() },
+            winuser::WS_CHILD | winuser::WS_VISIBLE | style,
+            x,
+            y,
+            width,
+            height,
+            parent as _,
+            id as isize as _,
+            winuser::GetModuleHandleW(std::ptr::null()),
+            std::ptr::null_mut(),
+        );
+        (!hwnd.is_null()).then_some(hwnd as _)
+    }
+
     /// Paints a standard REAPER/SWELL window background for a paint region.
     pub unsafe fn paint_window_background(
         &self,

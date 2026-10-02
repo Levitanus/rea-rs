@@ -8,7 +8,7 @@ use crate::{
     keys::{FVirt, KeyBinding},
     misc_enums::Section,
     ptr_wrappers::{Hwnd, KbdSectionInfo},
-    swell_gui::{self, ReaperWindow, WindowHandler, WindowSpec},
+    swell_gui::{self, ReaperWindow, WindowHandler, WindowId, WindowSpec},
     ControlSurface, ControlSurfaceWrap, ReaRsError, ReaperResult,
 };
 use c_str_macro::c_str;
@@ -342,7 +342,7 @@ pub struct Reaper {
     registrations: Vec<ActionRegistration>,
     default_key_bindings: Vec<DefaultKeyBindingRegistration>,
     timers: HashMap<String, (Instant, Arc<RefCell<dyn Timer>>)>,
-    pub(crate) windows: HashMap<isize, Box<dyn WindowHandler>>,
+    pub(crate) windows: HashMap<WindowId, Box<dyn WindowHandler>>,
     csurfases: HashMap<
         String,
         (
@@ -460,21 +460,35 @@ impl Reaper {
                 "borrowed window cannot be registered",
             ));
         }
-        let id = window.hwnd() as isize;
-        if self.windows.contains_key(&id) {
+        let window_id = handler.window_id();
+        if self.windows.contains_key(&window_id) {
             return Err(ReaRsError::InvalidObject(
-                "window handler already registered",
+                "window handler ID is already registered",
             ));
         }
+        let hwnd = window.hwnd() as isize;
         let show_on_register = handler.window().show_on_register;
         handler.on_open();
-        self.windows.insert(id, handler);
+        self.windows.insert(window_id.clone(), handler);
         if show_on_register {
-            if let Some(handler) = self.windows.get(&id) {
+            if let Some(handler) = self.windows.get(&window_id) {
                 handler.window().show()?;
             }
         }
-        Ok(id)
+        Ok(hwnd)
+    }
+
+    pub(crate) fn window_id_for_hwnd(
+        &self,
+        hwnd: raw::HWND,
+    ) -> Option<WindowId> {
+        self.windows.iter().find_map(|(id, handler)| {
+            (handler.window().hwnd() == hwnd).then(|| id.clone())
+        })
+    }
+
+    pub fn is_window_registered(&self, window_id: &WindowId) -> bool {
+        self.windows.contains_key(window_id)
     }
 
     /// Removes a registered handler without destroying its window.
@@ -482,15 +496,16 @@ impl Reaper {
         &mut self,
         hwnd: raw::HWND,
     ) -> ReaperResult<()> {
-        let id = hwnd as isize;
+        let Some(id) = self.window_id_for_hwnd(hwnd) else {
+            return Err(ReaRsError::Key(
+                format!("{:p}", hwnd),
+                self.windows.keys().cloned().collect::<Vec<_>>().join(", "),
+            ));
+        };
         if self.windows.remove(&id).is_none() {
             return Err(ReaRsError::Key(
                 format!("{:p}", hwnd),
-                self.windows
-                    .keys()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                self.windows.keys().cloned().collect::<Vec<_>>().join(", "),
             ));
         }
         Ok(())

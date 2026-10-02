@@ -115,6 +115,16 @@ pub const TBM_SETPOS: u32 = WM_USER + 5;
 pub const TBM_SETRANGE: u32 = WM_USER + 6;
 pub const TBM_SETSEL: u32 = WM_USER + 10;
 
+// Common-control messages which are macros in Win32/SWELL headers and may
+// therefore be absent from bindgen output.
+pub const BM_CLICK: u32 = 0x00F5;
+pub const EM_SETSEL: u32 = 0x00B1;
+pub const LB_ADDSTRING: u32 = 0x0180;
+pub const LB_SETCURSEL: u32 = 0x0186;
+pub const LB_GETCURSEL: u32 = 0x0188;
+pub const PBM_SETPOS: u32 = WM_USER + 2;
+pub const PBM_SETRANGE32: u32 = WM_USER + 6;
+
 // Window style and window-long constants. Not picked up by bindgen because
 // they are defined in swell-types.h only as macros (SWELL) resp. are needed on
 // Windows as well. Values must match swell-types.h (SWELL) and winuser.h

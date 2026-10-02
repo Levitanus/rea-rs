@@ -139,3 +139,69 @@ Existing workspace warnings remain, primarily unrelated unused dependencies and 
 - A bare top-level window without child widgets normally produces few or no `WM_COMMAND` events.
 - Full widget, paint, mouse, keyboard, menu, and modal-dialog APIs are not included.
 - Cross-platform manual testing remains important, especially for native SWELL backends and Windows.
+
+## Follow-up considerations: native containers and explicit event propagation
+
+The next GUI layer should preserve the distinction between the native HWND hierarchy and
+application-level event forwarding:
+
+```text
+child HWND
+  -> immediate native parent/container callback
+    -> local handling or aggregation
+      -> optional explicit forwarding to a parent container or window
+```
+
+The current implementation has the callback contracts and registry foundation in
+`rea-rs/src/swell_gui.rs`, including stable `ContainerId` values, widget/container callback
+registration, direct control-to-container relationships, and an initial `WM_COMMAND` routing
+path. This is not yet a complete native implementation: callbacks are not automatically invoked
+by a custom container HWND procedure, `ForwardToParent` traversal is not operational, and
+`WM_NOTIFY`, `WM_HSCROLL`, and `WM_VSCROLL` still need to use the same dispatch model.
+
+The likely GroupBox design is a callback-capable event/layout container with an optional visual
+GroupBox child, rather than treating the standard visual GroupBox control itself as the complete
+container abstraction. A container should be able to aggregate direct-child state and forward a
+higher-level event only when its callback explicitly requests it; logical widget-tree bubbling
+should not be introduced implicitly.
+
+ScrollView should be implemented as real stacked native HWNDs:
+
+```text
+ScrollView
+├── Viewport
+│   └── Content
+│       └── child HWNDs
+└── scrollbars
+```
+
+Scrolling should move or resize the Content surface while keeping child HWND ownership stable,
+avoiding unnecessary child recreation or reparenting. Follow-up work should include resize/reflow
+integration, lifecycle and rebinding tests, nested-container propagation tests, and manual
+cross-platform validation.
+
+## Results of the callback-registry work
+
+- Added `ContainerId` as a stable container identity derived from `ControlId`.
+- Added `NativeContainer` for container-oriented access to native controls and HWND rebinding.
+- Added `EventResponse` and `ContainerResponse` to make handling and forwarding decisions explicit.
+- Added `WidgetEventCallback` and `ContainerEventCallback` registration contracts.
+- Added `EventRegistry` storage for widget callbacks, container callbacks, direct child ownership,
+  and nested container relationships.
+- Added `ReaperWindow` registration methods:
+  - `on_widget_event(...)`
+  - `on_container_event(...)`
+  - `set_control_container(...)`
+  - `set_container_parent(...)`
+- Added initial `WM_COMMAND` routing through the widget callback and direct-container callback
+  layers before optional top-level forwarding.
+- Exported the new container and callback types from `rea-rs/src/lib.rs`.
+- Added focused tests covering child-event/container identity preservation, stable native-container
+  identity, and direct native-parentage tracking.
+- Focused GUI tests passed: 3 tests passed, 0 failed.
+- Affected-crate compilation passed for `rea-rs-low`, `rea-rs`, and
+  `reaper-test-extension-plugin`.
+
+This work establishes the API and registry foundation, but the callback path is not yet connected
+to a custom native container window procedure. Native container HWND creation, complete forwarding,
+additional message types, and stacked ScrollView construction remain follow-up work.

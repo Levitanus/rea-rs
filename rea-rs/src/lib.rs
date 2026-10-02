@@ -237,8 +237,12 @@ pub mod socket;
 
 pub mod swell_gui;
 pub use swell_gui::{
-    CommandNotification, DockPosition, ReaperWindow, WindowCommand,
-    WindowHandler, WindowId, WindowSpec,
+    Button, CheckBox, ComboBox, CommandNotification, ContainerEvent,
+    ContainerId, ContainerResponse, ControlEvent, ControlHandle, ControlId,
+    ControlKind, ControlRect, DockPosition, EditField, EventResponse,
+    GroupBox, ListBox, ListView, NativeContainer, ProgressBar, RadioButton,
+    ReaperControl, ReaperWindow, StaticLabel, TabControl, Trackbar, TreeView,
+    WidgetEventCallback, WindowCommand, WindowHandler, WindowId, WindowSpec,
 };
 
 #[derive(thiserror::Error, Debug)]
