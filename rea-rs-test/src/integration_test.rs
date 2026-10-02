@@ -3,7 +3,7 @@ use fs_extra::dir::CopyOptions;
 use ini::Ini;
 use std::error::Error;
 use std::fs::File;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -291,7 +291,13 @@ fn setup_reaper_for_macos(
 fn write_reaper_config(reaper_home_path: &Path) -> Result<()> {
     println!("Writing REAPER configuration...");
     let config_path = reaper_home_path.join("reaper.ini");
-    let mut ini = Ini::load_from_file(config_path.clone())?;
+    let mut ini = match Ini::load_from_file(config_path.clone()) {
+        Ok(ini) => ini,
+        Err(ini::Error::Io(error)) if error.kind() == ErrorKind::NotFound => {
+            Ini::new()
+        }
+        Err(error) => return Err(error.into()),
+    };
     ini.with_section(Some("REAOER"))
         .set("linux_audio_mode", "2")
         .set("coreaudiobs", "512")
