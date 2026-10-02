@@ -8,6 +8,7 @@ use crate::{
     keys::{FVirt, KeyBinding},
     misc_enums::Section,
     ptr_wrappers::{Hwnd, KbdSectionInfo},
+    swell_gui::{self, ReaperWindow, WindowHandler, WindowSpec},
     ControlSurface, ControlSurfaceWrap, ReaRsError, ReaperResult,
 };
 use c_str_macro::c_str;
@@ -341,6 +342,7 @@ pub struct Reaper {
     registrations: Vec<ActionRegistration>,
     default_key_bindings: Vec<DefaultKeyBindingRegistration>,
     timers: HashMap<String, (Instant, Arc<RefCell<dyn Timer>>)>,
+    pub(crate) windows: HashMap<isize, Box<dyn WindowHandler>>,
     csurfases: HashMap<
         String,
         (
@@ -379,6 +381,7 @@ impl Reaper {
             registrations: Vec::new(),
             default_key_bindings: Vec::new(),
             timers: HashMap::new(),
+            windows: HashMap::new(),
             csurfases: HashMap::new(),
         }
     }
@@ -403,6 +406,94 @@ impl Reaper {
     }
     pub fn swell(&self) -> &rea_rs_low::Swell {
         &self.swell
+    }
+
+    /// Creates a new owned top-level window parented to REAPER's main window.
+    pub fn create_window(
+        &self,
+        spec: &WindowSpec,
+    ) -> ReaperResult<ReaperWindow> {
+        let parent =
+            self.low.pointers().GetMainHwnd.as_ref().ok_or_else(|| {
+                ReaRsError::UnexpectedAPI("GetMainHwnd not available".into())
+            })?;
+        let parent = unsafe { parent() };
+        if parent.is_null() {
+            return Err(ReaRsError::NullPtr("main window"));
+        }
+        let hwnd = unsafe {
+            self.swell.create_window(
+                parent,
+                &spec.title,
+                spec.width,
+                spec.height,
+                spec.resizable,
+                spec.no_minimize,
+                spec.no_close,
+                self.plugin_context().h_instance(),
+                Some(swell_gui::window_proc),
+                0,
+            )
+        }
+        .ok_or(ReaRsError::NullPtr("window"))?;
+        let window = ReaperWindow::owned(
+            hwnd,
+            spec.allow_show,
+            spec.dock_ident.clone(),
+        )?;
+        // Capture the initial floating geometry before the HWND can ever be
+        // reparented into a docker. This is the fallback restore rectangle
+        // for the first dock -> float transition.
+        window.remember_floating_rect()?;
+        Ok(window)
+    }
+
+    /// Adds a handler to the window registry. The handler must own an
+    /// `ReaperWindow` created by `create_window`.
+    pub fn register_window_handler(
+        &mut self,
+        mut handler: Box<dyn WindowHandler>,
+    ) -> ReaperResult<isize> {
+        let window = handler.window();
+        if !window.is_owned() {
+            return Err(ReaRsError::InvalidObject(
+                "borrowed window cannot be registered",
+            ));
+        }
+        let id = window.hwnd() as isize;
+        if self.windows.contains_key(&id) {
+            return Err(ReaRsError::InvalidObject(
+                "window handler already registered",
+            ));
+        }
+        let show_on_register = handler.window().show_on_register;
+        handler.on_open();
+        self.windows.insert(id, handler);
+        if show_on_register {
+            if let Some(handler) = self.windows.get(&id) {
+                handler.window().show()?;
+            }
+        }
+        Ok(id)
+    }
+
+    /// Removes a registered handler without destroying its window.
+    pub fn unregister_window_handler(
+        &mut self,
+        hwnd: raw::HWND,
+    ) -> ReaperResult<()> {
+        let id = hwnd as isize;
+        if self.windows.remove(&id).is_none() {
+            return Err(ReaRsError::Key(
+                format!("{:p}", hwnd),
+                self.windows
+                    .keys()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ));
+        }
+        Ok(())
     }
     pub fn plugin_context(&self) -> PluginContext {
         self.low.plugin_context().clone()
@@ -639,6 +730,13 @@ impl Reaper {
 }
 impl Drop for Reaper {
     fn drop(&mut self) {
+        let windows = std::mem::take(&mut self.windows);
+        for (_, handler) in windows {
+            let window = handler.window();
+            if window.is_owned() {
+                window.destroy_internal();
+            }
+        }
         let low = self.low().clone();
         unsafe {
             low.plugin_register(

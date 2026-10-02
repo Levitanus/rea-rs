@@ -10,7 +10,12 @@ use crate::{
 use int_enum::IntEnum;
 use log::{debug, error};
 use std::{
-    collections::HashMap, ffi::CString, fs::canonicalize, marker::PhantomData, path::{Path, PathBuf}, ptr::{NonNull, null_mut},
+    collections::HashMap,
+    ffi::CString,
+    fs::canonicalize,
+    marker::PhantomData,
+    path::{Path, PathBuf},
+    ptr::{null_mut, NonNull},
 };
 
 pub fn linear_to_db(value: f64) -> f64 {
@@ -26,8 +31,8 @@ impl Reaper {
     ///
     /// On Linux/macOS this is a SWELL window handle, not a native X11 or
     /// NSView handle directly. For high-level window management (wrapping,
-    /// docking, event handling) use [`crate::swell_gui::ReaperWindow::from_hwnd`]
-    /// instead.
+    /// docking, event handling) use
+    /// [`crate::swell_gui::ReaperWindow::from_hwnd`] instead.
     pub fn main_hwnd(&self) -> Hwnd {
         let raw = self.low().GetMainHwnd();
         NonNull::new(raw).expect("Reaper main window handle must be non-null")
@@ -308,8 +313,7 @@ impl Reaper {
             }
             // debug!("action name: {:?}", name);
             let name_cstring = CString::new(name)?;
-            let id =
-                self.low().NamedCommandLookup(name_cstring.as_ptr());
+            let id = self.low().NamedCommandLookup(name_cstring.as_ptr());
             // debug!("got action id: {:?}", id);
             match id {
                 x if x <= 0 => Ok(None),
@@ -548,8 +552,7 @@ impl Reaper {
         let page = page.into().unwrap_or(0_u32);
         let name_cstring = CString::new(name)?;
         unsafe {
-            self.low()
-                .ViewPrefs(page as i32, name_cstring.as_ptr());
+            self.low().ViewPrefs(page as i32, name_cstring.as_ptr());
         }
         Ok(())
     }

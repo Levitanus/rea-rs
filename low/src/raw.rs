@@ -151,7 +151,8 @@ pub const GWL_EXSTYLE: i32 = -20;
 pub const GWL_USERDATA: i32 = -21;
 /// `GetWindowLong`/`SetWindowLong` index: dialog procedure.
 pub const DWL_DLGPROC: i32 = -8;
-/// `GetWindowLong`/`SetWindowLong` index: parent window handle (SWELL-specific).
+/// `GetWindowLong`/`SetWindowLong` index: parent window handle
+/// (SWELL-specific).
 pub const GWL_HWNDPARENT: i32 = -25;
 
 /// Class style: redraws the window if a movement or size adjustment changes

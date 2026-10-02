@@ -235,6 +235,12 @@ pub use control_surface::*;
 
 pub mod socket;
 
+pub mod swell_gui;
+pub use swell_gui::{
+    CommandNotification, DockPosition, ReaperWindow, WindowCommand,
+    WindowHandler, WindowId, WindowSpec,
+};
+
 #[derive(thiserror::Error, Debug)]
 pub enum ReaRsError {
     #[error("The pointer to {0} is null.")]

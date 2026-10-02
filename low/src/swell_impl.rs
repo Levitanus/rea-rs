@@ -16,6 +16,28 @@ static mut INSTANCE: Option<Swell> = None;
 /// This impl block contains functions which exist in SWELL as macros and
 /// therefore are not picked up by `bindgen`.
 impl Swell {
+    /// Paints a standard REAPER/SWELL window background for a paint region.
+    pub unsafe fn paint_window_background(
+        &self,
+        hdc: root::HDC,
+        rect: *const root::RECT,
+    ) {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_FillDialogBackground(hdc, rect, 0);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            winapi::um::winuser::FillRect(
+                hdc as _,
+                rect as _,
+                winapi::um::winuser::GetSysColorBrush(
+                    winapi::um::winuser::COLOR_BTNFACE,
+                ),
+            );
+        }
+    }
+
     /// Makes the given instance available globally.
     ///
     /// After this has been called, the instance can be queried globally using
@@ -283,6 +305,36 @@ impl Swell {
     /// REAPER can crash if you pass an invalid pointer.
     pub unsafe fn UpdateWindow(&self, hwnd: root::HWND) {
         winapi::um::winuser::UpdateWindow(hwnd as _);
+    }
+
+    /// Windows counterpart of SWELL's `GetWindowLong`.
+    pub unsafe fn GetWindowLong(
+        &self,
+        hwnd: root::HWND,
+        index: ::std::os::raw::c_int,
+    ) -> root::LONG_PTR {
+        winapi::um::winuser::GetWindowLongPtrW(hwnd as _, index)
+    }
+
+    /// Windows counterpart of SWELL's `SetWindowLong`.
+    pub unsafe fn SetWindowLong(
+        &self,
+        hwnd: root::HWND,
+        index: ::std::os::raw::c_int,
+        value: root::LONG_PTR,
+    ) -> root::LONG_PTR {
+        winapi::um::winuser::SetWindowLongPtrW(hwnd as _, index, value)
+    }
+
+    /// Windows counterpart of SWELL's `DefWindowProc`.
+    pub unsafe fn DefWindowProc(
+        &self,
+        hwnd: root::HWND,
+        msg: root::UINT,
+        w_param: root::WPARAM,
+        l_param: root::LPARAM,
+    ) -> root::LRESULT {
+        winapi::um::winuser::DefWindowProcW(hwnd as _, msg, w_param, l_param)
     }
 
     /// # Safety
@@ -641,6 +693,8 @@ impl Swell {
         width: i32,
         height: i32,
         resizable: bool,
+        no_minimize: bool,
+        no_close: bool,
         hinstance: root::HINSTANCE,
         proc_: root::DLGPROC,
         param: root::LPARAM,
@@ -665,8 +719,13 @@ impl Swell {
             // afterwards via SetWindowLong(GWL_STYLE). On Linux this updates
             // the GDK decorations (swell_oswindow_update_style), on macOS it
             // recreates the window frame with the right style mask.
-            let flags = crate::raw::SWELL_DLG_FORCE_RESIZABLE
-                | crate::raw::SWELL_DLG_NO_MINIMIZE;
+            let mut flags = crate::raw::SWELL_DLG_FORCE_RESIZABLE;
+            if no_minimize {
+                flags |= crate::raw::SWELL_DLG_NO_MINIMIZE;
+            }
+            if no_close {
+                flags |= crate::raw::SWELL_DLG_NO_CLOSE;
+            }
             let resid =
                 (crate::raw::SWELL_CREATE_DIALOG_MAGIC | flags) as usize;
             let hwnd = self.SWELL_CreateDialog(
@@ -679,6 +738,26 @@ impl Swell {
             if hwnd.is_null() {
                 return None;
             }
+            // Initialize the backing style before the window is shown. This
+            // avoids exposing an uninitialized/garbled native surface on the
+            // first paint, especially on GDK-backed SWELL windows.
+            let mut style = self.GetWindowLong(hwnd, crate::raw::GWL_STYLE);
+            style |= crate::raw::WS_CAPTION as isize;
+            if resizable {
+                style |= crate::raw::WS_THICKFRAME as isize;
+            } else {
+                style &= !(crate::raw::WS_THICKFRAME as isize);
+            }
+            // Force SWELL to rebuild the native frame. Some backends only
+            // update decorations when the caption bit changes; merely
+            // writing the final style can therefore leave a borderless,
+            // non-resizable native surface.
+            self.SetWindowLong(
+                hwnd,
+                crate::raw::GWL_STYLE,
+                style & !(crate::raw::WS_CAPTION as isize),
+            );
+            self.SetWindowLong(hwnd, crate::raw::GWL_STYLE, style);
             // Title must be set after creation. SWELL's template-less mode
             // doesn't take a title.
             let title_c = std::ffi::CString::new(title).ok()?;
@@ -738,10 +817,8 @@ impl Swell {
                     hIconSm: std::ptr::null_mut(),
                 };
                 let atom = winuser::RegisterClassExW(&wc);
-                CLASS_REGISTERED.store(
-                    atom != 0,
-                    std::sync::atomic::Ordering::Release,
-                );
+                CLASS_REGISTERED
+                    .store(atom != 0, std::sync::atomic::Ordering::Release);
             });
             if !CLASS_REGISTERED.load(std::sync::atomic::Ordering::Acquire) {
                 return None;
@@ -799,10 +876,7 @@ unsafe extern "system" fn windows_default_wndproc(
 #[cfg(target_family = "windows")]
 fn windows_class_name() -> std::vec::Vec<u16> {
     use std::iter::once;
-    "ReaRsWindow"
-        .encode_utf16()
-        .chain(once(0))
-        .collect()
+    "ReaRsWindow".encode_utf16().chain(once(0)).collect()
 }
 
 #[cfg(target_family = "windows")]

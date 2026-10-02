@@ -311,8 +311,7 @@ pub trait GenericSend<'a>: SendIntType + Sized {
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                CString::new(selector.into().to_string())?
-                    .as_ptr(),
+                CString::new(selector.into().to_string())?.as_ptr(),
                 null_mut(),
             ) as *mut rea_rs_low::raw::TrackEnvelope
         };

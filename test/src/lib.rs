@@ -18,6 +18,7 @@ use rea_rs::{
     TrackPlayOffset, TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX,
     GUID,
 };
+mod swell_gui;
 use rea_rs_macros::reaper_extension_plugin;
 use rea_rs_test::{TestStep, TestStepResult};
 use std::collections::HashMap;
@@ -28,11 +29,12 @@ use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::Duration;
 
-
 #[reaper_extension_plugin]
 fn test_main(context: PluginContext) -> TestStepResult {
+    env_logger::try_init().unwrap_or(());
     let test =
         rea_rs_test::ReaperTest::setup(context, "rea-rs integration test");
+    swell_gui::register_actions(Reaper::get_mut())?;
     let steps = create_test_steps();
     for step in steps {
         test.push_test_step(step);

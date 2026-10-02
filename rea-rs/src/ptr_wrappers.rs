@@ -139,9 +139,7 @@ pub type Hinstance = NonNull<c_void>;
 pub struct KbdSectionInfo(pub(crate) NonNull<raw::KbdSectionInfo>);
 
 impl KbdSectionInfo {
-    pub(crate) fn from_raw(
-        ptr: *mut raw::KbdSectionInfo,
-    ) -> Option<Self> {
+    pub(crate) fn from_raw(ptr: *mut raw::KbdSectionInfo) -> Option<Self> {
         NonNull::new(ptr).map(Self)
     }
 
