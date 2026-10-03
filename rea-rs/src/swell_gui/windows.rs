@@ -199,7 +199,7 @@ impl Default for WindowLayout {
             // space is exhausted, the next root item (including a GroupBox)
             // belongs in a new horizontal lane rather than being left
             // outside the panel's usable bounds.
-            root: LayoutNode { entries: Vec::new(), axis: Axis::Y, spacing: 8, policy: OverflowPolicy::WrapScroll },
+                root: LayoutNode { entries: Vec::new(), axis: Axis::Y, spacing: 8, policy: OverflowPolicy::WrapScroll },
             groups: HashMap::new(),
         }
     }
@@ -240,7 +240,7 @@ impl<'a> LayoutPanel<'a> {
     pub fn create_group_box(&self, id: ControlId, label: &str, size: WidgetSize) -> ReaperResult<LayoutContainer<'a>> {
         let _group = self.window.create_group_box_in(self.parent, id, label, Self::rect(size))?;
         self.window.register_layout_entry(self.container, id, size);
-        self.window.layout.borrow_mut().groups.insert(id, LayoutNode { entries: Vec::new(), axis: Axis::Y, spacing: 8, policy: OverflowPolicy::WrapScroll });
+        self.window.layout.borrow_mut().groups.insert(id, LayoutNode { entries: Vec::new(), axis: Axis::Y, spacing: 8, policy: OverflowPolicy::Wrap });
         // GroupBox is a real native child window. Children therefore use the
         // GroupBox HWND as their parent and receive coordinates relative to
         // its client area.

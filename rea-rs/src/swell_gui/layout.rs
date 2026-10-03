@@ -3,8 +3,8 @@
 //! This module deliberately does not know about HWNDs. Native containers use
 //! these results to position themselves and their child windows.
 
-use rea_rs_low::raw;
 use log::trace;
+use rea_rs_low::raw;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Size {
@@ -356,6 +356,7 @@ impl WidgetSize {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverflowPolicy {
+    Wrap,
     WrapScroll,
     WrapClip,
     Scroll,
@@ -750,11 +751,8 @@ pub fn layout_flow(
     let mut used_cross = 0u32;
 
     for (index, item) in items.iter().enumerate() {
-        let mut item_cross = cross_size(
-            item.size,
-            axis,
-            cross_limit.saturating_sub(cross),
-        );
+        let mut item_cross =
+            cross_size(item.size, axis, cross_limit.saturating_sub(cross));
         let mut item_primary = sizes[index];
         // `primary` already includes the gap after the previous item. Do not
         // add `spacing` a second time here: doing so falsely wraps an item
@@ -762,7 +760,9 @@ pub fn layout_flow(
         // fixed button followed by a filling edit field).
         let may_wrap = matches!(
             policy,
-            OverflowPolicy::WrapScroll | OverflowPolicy::WrapClip
+            OverflowPolicy::WrapScroll
+                | OverflowPolicy::WrapClip
+                | OverflowPolicy::Wrap
         );
         let next_fill_item = items.get(index + 1).map_or(false, |next| {
             axis == Axis::Y
@@ -790,17 +790,14 @@ pub fn layout_flow(
             // cross-axis extent.  Otherwise a list/control that follows a
             // vertical stack consumes the whole width again and is reported
             // as clipped even though a valid placement exists on the right.
-            item_cross = cross_size(
-                item.size,
-                axis,
-                cross_limit.saturating_sub(cross),
-            );
+            item_cross =
+                cross_size(item.size, axis, cross_limit.saturating_sub(cross));
         }
         if axis == Axis::Y && item.size.fill_y().is_some() {
-            item_primary = item_primary.max(
-                axis_value(item.size.minimum(), axis),
-            );
-            item_primary = item_primary.min(primary_limit.saturating_sub(primary));
+            item_primary =
+                item_primary.max(axis_value(item.size.minimum(), axis));
+            item_primary =
+                item_primary.min(primary_limit.saturating_sub(primary));
         }
         let cross_end = cross.saturating_add(item_cross);
         let primary_end = primary.saturating_add(item_primary);
@@ -809,7 +806,9 @@ pub fn layout_flow(
         let allow = fits_cross
             || matches!(
                 policy,
-                OverflowPolicy::Scroll | OverflowPolicy::WrapScroll
+                OverflowPolicy::Scroll
+                    | OverflowPolicy::WrapScroll
+                    | OverflowPolicy::Wrap
             );
         if allow {
             let mut rect = Rect::new(0, 0, 0, 0);
@@ -864,11 +863,11 @@ pub fn layout_flow(
         output.overflow_y |= overflow_primary;
         output.overflow_x |= used_cross > cross_limit;
     }
-        trace!(
-            target: "rea_rs::layout",
-            "layout_flow: bounds={bounds:?} axis={axis:?} spacing={spacing} policy={policy:?} items={} output={output:?}",
-            items.len()
-        );
+    trace!(
+        target: "rea_rs::layout",
+        "layout_flow: bounds={bounds:?} axis={axis:?} spacing={spacing} policy={policy:?} items={} output={output:?}",
+        items.len()
+    );
     output
 }
 
@@ -1080,6 +1079,24 @@ mod tests {
         assert_eq!(output.placements[1].rect, Rect::new(0, 40, 50, 40));
         assert_eq!(output.placements[2].rect, Rect::new(50, 0, 50, 40));
         assert_eq!(output.wrapped_lanes, 1);
+    }
+
+    #[test]
+    fn wrap_overflow_keeps_wrapped_content_extent() {
+        let item = LayoutItem {
+            size: WidgetSize::fixed(50, 40),
+        };
+        let output = layout_flow(
+            Rect::new(0, 0, 100, 80),
+            Axis::Y,
+            &[item, item, item],
+            0,
+            OverflowPolicy::Wrap,
+        );
+
+        assert_eq!(output.wrapped_lanes, 1);
+        assert_eq!(output.placements.len(), 3);
+        assert_eq!(output.content_extent, Size { x: 100, y: 80 });
     }
 
     #[test]
