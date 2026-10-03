@@ -1,4 +1,5 @@
 use super::ReaperWindow;
+use super::layout::WidgetSize;
 use crate::{ReaRsError, ReaperResult};
 use rea_rs_low::raw;
 use std::{collections::HashMap, ffi::CString};
@@ -6,6 +7,14 @@ use std::{collections::HashMap, ffi::CString};
 /// Native control ID assigned to a child window.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct ControlId(pub i32);
+
+impl ControlId {
+    pub fn new() -> Self {
+        use std::sync::atomic::{AtomicI32, Ordering};
+        static NEXT_ID: AtomicI32 = AtomicI32::new(10_000);
+        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
 
 /// Stable identity of a native container used for explicit event routing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -53,6 +62,13 @@ impl ControlRect {
             width,
             height,
         }
+    }
+}
+
+impl From<WidgetSize> for ControlRect {
+    fn from(size: WidgetSize) -> Self {
+        let preferred = size.preferred();
+        Self::new(0, 0, preferred.x.max(1) as i32, preferred.y.max(1) as i32)
     }
 }
 

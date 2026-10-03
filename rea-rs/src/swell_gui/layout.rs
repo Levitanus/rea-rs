@@ -4,6 +4,7 @@
 //! these results to position themselves and their child windows.
 
 use rea_rs_low::raw;
+use log::trace;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Size {
@@ -145,6 +146,146 @@ pub enum WidgetSize {
 impl WidgetSize {
     pub const fn fixed(x: u32, y: u32) -> Self {
         Self::Fixed { x, y }
+    }
+
+    pub const fn new(x: u32, y: u32) -> Self {
+        Self::fixed(x, y)
+    }
+
+    pub const fn new_flex(
+        preferred_x: u32,
+        preferred_y: u32,
+        fill_x: WidgetFills,
+        fill_y: WidgetFills,
+    ) -> Self {
+        Self::Flex {
+            preferred: (preferred_x, preferred_y),
+            min_x: None,
+            min_y: None,
+            max_x: None,
+            max_y: None,
+            fill_x,
+            fill_y,
+        }
+    }
+
+    pub const fn new_fill_both(x: u32, y: u32) -> Self {
+        Self::new_flex(x, y, WidgetFills::Fill, WidgetFills::Fill)
+    }
+
+    pub const fn set_min_x(self, value: u32) -> Self {
+        self.with_bounds(Some(value), None, None, None)
+    }
+
+    pub const fn set_min_y(self, value: u32) -> Self {
+        self.with_bounds(None, Some(value), None, None)
+    }
+
+    pub const fn set_max_x(self, value: u32) -> Self {
+        self.with_bounds(None, None, Some(value), None)
+    }
+
+    pub const fn set_max_y(self, value: u32) -> Self {
+        self.with_bounds(None, None, None, Some(value))
+    }
+
+    const fn with_bounds(
+        self,
+        requested_min_x: Option<u32>,
+        requested_min_y: Option<u32>,
+        requested_max_x: Option<u32>,
+        requested_max_y: Option<u32>,
+    ) -> Self {
+        match self {
+            Self::Fixed { x, y } => Self::Flex {
+                preferred: (x, y),
+                min_x: requested_min_x,
+                min_y: requested_min_y,
+                max_x: requested_max_x,
+                max_y: requested_max_y,
+                fill_x: WidgetFills::Fill,
+                fill_y: WidgetFills::Fill,
+            },
+            Self::Flex {
+                preferred,
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+                fill_x,
+                fill_y,
+            } => Self::Flex {
+                preferred,
+                min_x: match requested_min_x {
+                    Some(value) => Some(value),
+                    None => min_x,
+                },
+                min_y: match requested_min_y {
+                    Some(value) => Some(value),
+                    None => min_y,
+                },
+                max_x: match requested_max_x {
+                    Some(value) => Some(value),
+                    None => max_x,
+                },
+                max_y: match requested_max_y {
+                    Some(value) => Some(value),
+                    None => max_y,
+                },
+                fill_x,
+                fill_y,
+            },
+        }
+    }
+
+    pub const fn set_fill_x(self, fill: WidgetFills) -> Self {
+        match self {
+            Self::Fixed { x, y } => {
+                Self::new_flex(x, y, fill, WidgetFills::Fill)
+            }
+            Self::Flex {
+                preferred,
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+                fill_y,
+                ..
+            } => Self::Flex {
+                preferred,
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+                fill_x: fill,
+                fill_y,
+            },
+        }
+    }
+
+    pub const fn set_fill_y(self, fill: WidgetFills) -> Self {
+        match self {
+            Self::Fixed { x, y } => {
+                Self::new_flex(x, y, WidgetFills::Fill, fill)
+            }
+            Self::Flex {
+                preferred,
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+                fill_x,
+                ..
+            } => Self::Flex {
+                preferred,
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+                fill_x,
+                fill_y: fill,
+            },
+        }
     }
 
     pub const fn preferred(self) -> Size {
@@ -425,7 +566,7 @@ pub fn allocate_panels_for(layout: &PanelLayout, bounds: Rect) -> PanelRects {
         .saturating_sub(right_width);
     let middle_y = bounds.y.saturating_add(top_height);
 
-    PanelRects {
+    let result = PanelRects {
         top: (!layout.top.is_empty())
             .then(|| Rect::new(bounds.x, bounds.y, bounds.width, top_height)),
         bottom: (!layout.bottom.is_empty()).then(|| {
@@ -455,7 +596,8 @@ pub fn allocate_panels_for(layout: &PanelLayout, bounds: Rect) -> PanelRects {
             middle_width,
             middle_height,
         ),
-    }
+    };
+    result
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -507,6 +649,22 @@ fn axis_value(size: Size, axis: Axis) -> u32 {
         size.y
     }
 }
+
+fn cross_size(item: WidgetSize, axis: Axis, available: u32) -> u32 {
+    let cross_axis = axis.cross();
+    let preferred = axis_value(item.preferred(), cross_axis);
+    let minimum = axis_value(item.minimum(), cross_axis);
+    let maximum = axis_value(item.maximum(), cross_axis);
+    let fills = if cross_axis == Axis::X {
+        item.fill_x()
+    } else {
+        item.fill_y()
+    };
+    match fills {
+        Some(_) => available.max(minimum).min(maximum),
+        None => preferred,
+    }
+}
 fn distribute_primary(
     items: &[LayoutItem],
     available: u32,
@@ -530,7 +688,7 @@ fn distribute_primary(
         .iter()
         .fold(0u32, |sum, value| sum.saturating_add(*value))
         .saturating_add(gaps);
-    let mut result = preferred;
+    let mut result = preferred.clone();
     let grow = available.saturating_sub(base);
     let fills: Vec<(usize, u32)> = items
         .iter()
@@ -592,23 +750,67 @@ pub fn layout_flow(
     let mut used_cross = 0u32;
 
     for (index, item) in items.iter().enumerate() {
-        let preferred = item.size.preferred();
-        let item_cross = axis_value(preferred, axis.cross());
-        let item_primary = sizes[index];
-        if primary > 0
-            && primary.saturating_add(spacing).saturating_add(item_primary)
-                > primary_limit
+        let mut item_cross = cross_size(
+            item.size,
+            axis,
+            cross_limit.saturating_sub(cross),
+        );
+        let mut item_primary = sizes[index];
+        // `primary` already includes the gap after the previous item. Do not
+        // add `spacing` a second time here: doing so falsely wraps an item
+        // that exactly fits after the previous gap (most visible with a
+        // fixed button followed by a filling edit field).
+        let may_wrap = matches!(
+            policy,
+            OverflowPolicy::WrapScroll | OverflowPolicy::WrapClip
+        );
+        let next_fill_item = items.get(index + 1).map_or(false, |next| {
+            axis == Axis::Y
+                && next.size.fill_y().is_some()
+                && item.size.fill_y().is_none()
+        });
+        let next_primary = sizes.get(index + 1).copied().unwrap_or(0);
+        let would_leave_fill_item_out = next_fill_item
+            && primary
+                .saturating_add(item_primary)
+                .saturating_add(spacing)
+                .saturating_add(next_primary)
+                > primary_limit;
+        if may_wrap
+            && primary > 0
+            && (primary.saturating_add(item_primary) > primary_limit
+                || would_leave_fill_item_out)
         {
             cross = cross.saturating_add(lane_cross).saturating_add(spacing);
             lane_cross = 0;
             primary = 0;
             lane = lane.saturating_add(1);
+            // A fill-sized item in a wrapped lane must fill the space that
+            // remains to the right of the preceding lane, not the complete
+            // cross-axis extent.  Otherwise a list/control that follows a
+            // vertical stack consumes the whole width again and is reported
+            // as clipped even though a valid placement exists on the right.
+            item_cross = cross_size(
+                item.size,
+                axis,
+                cross_limit.saturating_sub(cross),
+            );
+        }
+        if axis == Axis::Y && item.size.fill_y().is_some() {
+            item_primary = item_primary.max(
+                axis_value(item.size.minimum(), axis),
+            );
+            item_primary = item_primary.min(primary_limit.saturating_sub(primary));
         }
         let cross_end = cross.saturating_add(item_cross);
         let primary_end = primary.saturating_add(item_primary);
         let fits_cross = cross_end <= cross_limit;
         let wraps = lane > 0;
-        let allow = fits_cross || matches!(policy, OverflowPolicy::Scroll);
+        let allow = fits_cross
+            || matches!(
+                policy,
+                OverflowPolicy::Scroll | OverflowPolicy::WrapScroll
+            );
         if allow {
             let mut rect = Rect::new(0, 0, 0, 0);
             if axis == Axis::X {
@@ -662,6 +864,11 @@ pub fn layout_flow(
         output.overflow_y |= overflow_primary;
         output.overflow_x |= used_cross > cross_limit;
     }
+        trace!(
+            target: "rea_rs::layout",
+            "layout_flow: bounds={bounds:?} axis={axis:?} spacing={spacing} policy={policy:?} items={} output={output:?}",
+            items.len()
+        );
     output
 }
 
@@ -852,7 +1059,7 @@ mod tests {
             Panel::Central,
             Insets::default(),
             0,
-            OverflowPolicy::Clip,
+            OverflowPolicy::WrapScroll,
         );
         assert_eq!(central.placements[0].rect, Rect::new(10, 40, 40, 15));
     }
@@ -982,6 +1189,34 @@ mod tests {
 
         assert_eq!(output.placements[0].rect, Rect::new(0, 0, 30, 10));
         assert!(!output.overflow_x);
+    }
+
+    #[test]
+    fn widget_size_builders_update_one_flex_parameter_at_a_time() {
+        let size = WidgetSize::new_flex(
+            20,
+            10,
+            WidgetFills::FillPortion(1),
+            WidgetFills::Fill,
+        )
+        .set_min_x(12)
+        .set_min_y(8)
+        .set_max_x(80)
+        .set_max_y(40)
+        .set_fill_y(WidgetFills::FillPortion(2));
+
+        assert_eq!(
+            size,
+            WidgetSize::Flex {
+                preferred: (20, 10),
+                min_x: Some(12),
+                min_y: Some(8),
+                max_x: Some(80),
+                max_y: Some(40),
+                fill_x: WidgetFills::FillPortion(1),
+                fill_y: WidgetFills::FillPortion(2),
+            }
+        );
     }
 
     #[test]

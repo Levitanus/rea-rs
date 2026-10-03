@@ -9,7 +9,7 @@ pub mod windows;
 use rea_rs_low::raw;
 
 pub use events::{
-    CommandNotification, ContainerEvent, ContainerResponse, ControlEvent,
+    CommandNotification, ContainerEvent, ControlEvent,
     EventResponse, WidgetEventCallback, WindowCommand,
 };
 pub use widgets::{
@@ -19,7 +19,8 @@ pub use widgets::{
     TabControl, Trackbar, TreeView,
 };
 pub use windows::{
-    DockPosition, ReaperWindow, WindowHandler, WindowId, WindowSpec,
+    DockPosition, LayoutContainer, LayoutPanel, ReaperWindow, WindowHandler,
+    WindowId, WindowSpec,
 };
 #[cfg(test)]
 mod tests {

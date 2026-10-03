@@ -112,17 +112,9 @@ pub enum EventResponse {
     ForwardToWindow,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ContainerResponse {
-    Handled,
-    Ignore,
-    ForwardToParent,
-    ForwardToWindow,
-}
-
 pub type WidgetEventCallback = Box<dyn FnMut(ControlEvent) -> EventResponse>;
 pub type ContainerEventCallback =
-    Box<dyn FnMut(ContainerEvent) -> ContainerResponse>;
+    Box<dyn FnMut(ContainerEvent) -> EventResponse>;
 
 #[derive(Default)]
 pub(super) struct EventRegistry {
@@ -133,6 +125,13 @@ pub(super) struct EventRegistry {
         HashMap<ControlId, super::widgets::ContainerId>,
     pub(super) container_parent:
         HashMap<super::widgets::ContainerId, super::widgets::ContainerId>,
+}
+
+/// Result of routing a native control event through the explicit callback tree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DispatchResult {
+    Handled,
+    ForwardToWindow,
 }
 
 impl EventRegistry {
@@ -173,6 +172,73 @@ impl EventRegistry {
         self.container_callbacks.clear();
         self.direct_container.clear();
         self.container_parent.clear();
+    }
+
+    /// Routes an event through the widget, its direct container, and any
+    /// explicitly configured container parents.  Callbacks are temporarily
+    /// removed while they run so a callback may safely replace its own
+    /// registration without causing a `RefCell` reborrow panic.
+    pub(super) fn dispatch(&mut self, event: ControlEvent) -> DispatchResult {
+        let control = event.control();
+        if let Some(mut callback) = self.widget_callbacks.remove(&control) {
+            let response = callback(event);
+            self.widget_callbacks.insert(control, callback);
+            match response {
+                EventResponse::Handled => return DispatchResult::Handled,
+                EventResponse::ForwardToWindow => {
+                    return DispatchResult::ForwardToWindow
+                }
+                EventResponse::Ignore | EventResponse::ForwardToParent => {}
+            }
+        }
+
+        let mut current = self.direct_container.get(&control).copied();
+        let mut visited = std::collections::HashSet::new();
+        while let Some(container) = current {
+            if !visited.insert(container) {
+                break;
+            }
+            let container_event = ContainerEvent::child(container, event);
+            let Some(mut callback) = self.container_callbacks.remove(&container)
+            else {
+                current = self.container_parent.get(&container).copied();
+                continue;
+            };
+            let response = callback(container_event);
+            self.container_callbacks.insert(container, callback);
+            match response {
+                EventResponse::Handled => return DispatchResult::Handled,
+                EventResponse::ForwardToWindow => {
+                    return DispatchResult::ForwardToWindow
+                }
+                EventResponse::ForwardToParent => {
+                    current = self.container_parent.get(&container).copied();
+                }
+                EventResponse::Ignore => break,
+            }
+        }
+        DispatchResult::ForwardToWindow
+    }
+}
+
+impl ControlEvent {
+    pub(super) const fn control(self) -> ControlId {
+        match self {
+            Self::ButtonClicked { control }
+            | Self::CheckBoxChanged { control }
+            | Self::RadioButtonChanged { control }
+            | Self::EditChanged { control }
+            | Self::ComboSelectionChanged { control }
+            | Self::ComboEditChanged { control }
+            | Self::ListSelectionChanged { control }
+            | Self::ListDoubleClick { control }
+            | Self::TrackbarChanged { control }
+            | Self::Scroll { control, .. }
+            | Self::Notified { control, .. }
+            | Self::FocusGained { control }
+            | Self::FocusLost { control }
+            | Self::OtherCommand { control, .. } => control,
+        }
     }
 }
 
@@ -253,7 +319,7 @@ impl ReaperWindow {
     pub fn on_container_event(
         &self,
         id: super::widgets::ContainerId,
-        callback: impl FnMut(ContainerEvent) -> ContainerResponse + 'static,
+        callback: impl FnMut(ContainerEvent) -> EventResponse + 'static,
     ) {
         self.events
             .borrow_mut()

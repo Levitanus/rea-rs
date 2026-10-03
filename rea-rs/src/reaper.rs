@@ -468,6 +468,10 @@ impl Reaper {
         }
         let hwnd = window.hwnd() as isize;
         let show_on_register = handler.window().show_on_register;
+        // WM_SIZE is not guaranteed to arrive after all controls have been
+        // created. Apply the retained declarative layout before the window is
+        // opened so the first frame is already correctly positioned.
+        handler.window().apply_default_layout()?;
         handler.on_open();
         self.windows.insert(window_id.clone(), handler);
         if show_on_register {
