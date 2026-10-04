@@ -100,6 +100,35 @@ impl ImageSize {
     pub const fn new(width: u32, height: u32) -> Self { Self { width, height } }
 }
 
+/// A floating-point coordinate for LICE primitives that support subpixel
+/// positions (including arcs and cubic Bezier curves).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LicePoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl LicePoint {
+    pub const fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+}
+
+/// A floating-point rectangle for LICE source regions and transformed blits.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LiceRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl LiceRect {
+    pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self { x, y, width, height }
+    }
+}
+
     /// # Safety
     /// `handle` must be a valid owned HBITMAP that can be released by
     /// `DeleteObject`; it must not be used or destroyed elsewhere afterward.
@@ -222,6 +251,10 @@ fn lice_pixel(color: Color) -> LICE_pixel {
         | ((color.g as u32) << 8)
         | ((color.r as u32) << 16)
         | (0xff << 24)
+}
+
+fn native_coord(value: u32) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
 }
 
 fn swell_color(color: Color) -> i32 {
@@ -840,6 +873,27 @@ impl LiceSurface<'_> {
         }
     }
 
+    /// Clears the entire bitmap to an opaque RGB color.
+    pub fn clear(&mut self, color: Color) {
+        unsafe { self.low.LICE_Clear(self.handle.as_ptr(), lice_pixel(color)) }
+    }
+
+    /// Clears pixels in `rect` whose bits match `mask`, applying `or_bits`.
+    /// The masks are raw LICE pixel values in BGRA byte order.
+    pub fn clear_rect(&mut self, rect: Rect, mask: u32, or_bits: u32) {
+        unsafe {
+            self.low.LICE_ClearRect(
+                self.handle.as_ptr(),
+                native_coord(rect.x),
+                native_coord(rect.y),
+                native_coord(rect.width),
+                native_coord(rect.height),
+                mask,
+                or_bits,
+            );
+        }
+    }
+
     pub fn fill_rect(
         &mut self,
         rect: Rect,
@@ -854,6 +908,597 @@ impl LiceSurface<'_> {
                 i32::try_from(rect.y).unwrap_or(i32::MAX),
                 i32::try_from(rect.width).unwrap_or(i32::MAX),
                 i32::try_from(rect.height).unwrap_or(i32::MAX),
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+            );
+        }
+    }
+
+    /// Draws the outline of a rectangle.
+    pub fn draw_rect(
+        &mut self,
+        rect: Rect,
+        color: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+    ) {
+        if rect.width == 0 || rect.height == 0 {
+            return;
+        }
+        unsafe {
+            self.low.LICE_DrawRect(
+                self.handle.as_ptr(),
+                native_coord(rect.x),
+                native_coord(rect.y),
+                native_coord(rect.width),
+                native_coord(rect.height),
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+            );
+        }
+    }
+
+    /// Draws a rectangle with separate background and border colors.
+    pub fn bordered_rect(
+        &mut self,
+        rect: Rect,
+        background: Color,
+        border: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+    ) {
+        if rect.width == 0 || rect.height == 0 {
+            return;
+        }
+        unsafe {
+            self.low.LICE_BorderedRect(
+                self.handle.as_ptr(),
+                native_coord(rect.x),
+                native_coord(rect.y),
+                native_coord(rect.width),
+                native_coord(rect.height),
+                lice_pixel(background),
+                lice_pixel(border),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+            );
+        }
+    }
+
+    /// Draws a circular outline. `radius` is measured in pixels.
+    pub fn circle(
+        &mut self,
+        center: LicePoint,
+        radius: f32,
+        color: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+        antialias: bool,
+    ) {
+        if radius < 0.0 || !radius.is_finite() {
+            return;
+        }
+        unsafe {
+            self.low.LICE_Circle(
+                self.handle.as_ptr(),
+                center.x as f32,
+                center.y as f32,
+                radius,
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+                antialias,
+            );
+        }
+    }
+
+    /// Fills a circle. `radius` is measured in pixels.
+    pub fn fill_circle(
+        &mut self,
+        center: LicePoint,
+        radius: f32,
+        color: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+        antialias: bool,
+    ) {
+        if radius < 0.0 || !radius.is_finite() {
+            return;
+        }
+        unsafe {
+            self.low.LICE_FillCircle(
+                self.handle.as_ptr(),
+                center.x as f32,
+                center.y as f32,
+                radius,
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+                antialias,
+            );
+        }
+    }
+
+    /// Draws a circular arc. Angles are in radians, following LICE's API.
+    pub fn arc(
+        &mut self,
+        center: LicePoint,
+        radius: f32,
+        min_angle: f32,
+        max_angle: f32,
+        color: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+        antialias: bool,
+    ) {
+        if radius < 0.0 || !radius.is_finite() {
+            return;
+        }
+        unsafe {
+            self.low.LICE_Arc(
+                self.handle.as_ptr(),
+                center.x as f32,
+                center.y as f32,
+                radius,
+                min_angle,
+                max_angle,
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+                antialias,
+            );
+        }
+    }
+
+    /// Draws a rounded rectangle outline. The corner radius is in pixels.
+    pub fn round_rect(
+        &mut self,
+        rect: Rect,
+        corner_radius: u32,
+        color: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+        antialias: bool,
+    ) {
+        if rect.width == 0 || rect.height == 0 {
+            return;
+        }
+        unsafe {
+            self.low.LICE_RoundRect(
+                self.handle.as_ptr(),
+                rect.x as f32,
+                rect.y as f32,
+                rect.width as f32,
+                rect.height as f32,
+                native_coord(corner_radius),
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+                antialias,
+            );
+        }
+    }
+
+    /// Draws a cubic Bezier curve through the start/end points and control
+    /// points. `tolerance` controls curve subdivision in LICE pixels.
+    pub fn draw_cubic_bezier(
+        &mut self,
+        start: LicePoint,
+        control1: LicePoint,
+        control2: LicePoint,
+        end: LicePoint,
+        color: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+        antialias: bool,
+        tolerance: f64,
+    ) {
+        unsafe {
+            self.low.LICE_DrawCBezier(
+                self.handle.as_ptr(),
+                start.x,
+                start.y,
+                control1.x,
+                control1.y,
+                control2.x,
+                control2.y,
+                end.x,
+                end.y,
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+                antialias,
+                tolerance,
+            );
+        }
+    }
+
+    /// Fills under a cubic Bezier curve down to the horizontal `fill_y` line.
+    pub fn fill_cubic_bezier(
+        &mut self,
+        start: LicePoint,
+        control1: LicePoint,
+        control2: LicePoint,
+        end: LicePoint,
+        fill_y: u32,
+        color: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+        antialias: bool,
+        tolerance: f64,
+    ) {
+        unsafe {
+            self.low.LICE_FillCBezier(
+                self.handle.as_ptr(),
+                start.x,
+                start.y,
+                control1.x,
+                control1.y,
+                control2.x,
+                control2.y,
+                end.x,
+                end.y,
+                native_coord(fill_y),
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+                antialias,
+                tolerance,
+            );
+        }
+    }
+
+    /// Fills a convex polygon. Fewer than three points produce no drawing.
+    pub fn fill_convex_polygon(
+        &mut self,
+        points: &[Point],
+        color: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+    ) {
+        if points.len() < 3 || points.len() > i32::MAX as usize {
+            return;
+        }
+        let mut xs: Vec<_> = points.iter().map(|point| native_coord(point.x)).collect();
+        let mut ys: Vec<_> = points.iter().map(|point| native_coord(point.y)).collect();
+        unsafe {
+            self.low.LICE_FillConvexPolygon(
+                self.handle.as_ptr(),
+                xs.as_mut_ptr(),
+                ys.as_mut_ptr(),
+                points.len() as i32,
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+            );
+        }
+    }
+
+    /// Reads a raw LICE pixel. The returned value is packed BGRA, as used by
+    /// `LICE_pixel`; out-of-bounds coordinates return zero per LICE behavior.
+    pub fn get_pixel(&self, position: Point) -> u32 {
+        unsafe {
+            self.low.LICE_GetPixel(
+                self.handle.as_ptr(),
+                native_coord(position.x),
+                native_coord(position.y),
+            )
+        }
+    }
+
+    /// Flood-fills a contiguous region matching the seed pixel under
+    /// `compare_mask`, preserving bits selected by `keep_mask`.
+    pub fn simple_fill(
+        &mut self,
+        seed: Point,
+        new_pixel: u32,
+        compare_mask: u32,
+        keep_mask: u32,
+    ) {
+        unsafe {
+            self.low.LICE_SimpleFill(
+                self.handle.as_ptr(),
+                native_coord(seed.x),
+                native_coord(seed.y),
+                new_pixel,
+                compare_mask,
+                keep_mask,
+            );
+        }
+    }
+
+    /// Blurs a source rectangle into this bitmap at the given destination
+    /// origin. Source and destination may alias only if LICE permits it.
+    pub fn blur_from(
+        &mut self,
+        source: &LiceBitmap,
+        destination: Point,
+        source_rect: Rect,
+    ) {
+        unsafe {
+            self.low.LICE_Blur(
+                self.handle.as_ptr(),
+                source.raw(),
+                native_coord(destination.x),
+                native_coord(destination.y),
+                native_coord(source_rect.x),
+                native_coord(source_rect.y),
+                native_coord(source_rect.width),
+                native_coord(source_rect.height),
+            );
+        }
+    }
+
+    /// Scales a floating-point source region into an integer destination
+    /// rectangle.
+    pub fn scaled_blit_from(
+        &mut self,
+        source: &LiceBitmap,
+        destination: Rect,
+        source_rect: LiceRect,
+        alpha: f32,
+        options: LiceBlitOptions,
+    ) {
+        unsafe {
+            self.low.LICE_ScaledBlit(
+                self.handle.as_ptr(),
+                source.raw(),
+                native_coord(destination.x),
+                native_coord(destination.y),
+                native_coord(destination.width),
+                native_coord(destination.height),
+                source_rect.x,
+                source_rect.y,
+                source_rect.width,
+                source_rect.height,
+                alpha.clamp(0.0, 1.0),
+                options.raw(),
+            );
+        }
+    }
+
+    /// Rotates a floating-point source region while blitting into an integer
+    /// destination rectangle. `angle` is in radians; `rotation_center` is
+    /// relative to the source region.
+    pub fn rotated_blit_from(
+        &mut self,
+        source: &LiceBitmap,
+        destination: Rect,
+        source_rect: LiceRect,
+        angle: f32,
+        clip_to_source_rect: bool,
+        alpha: f32,
+        options: LiceBlitOptions,
+        rotation_center: LicePoint,
+    ) {
+        unsafe {
+            self.low.LICE_RotatedBlit(
+                self.handle.as_ptr(),
+                source.raw(),
+                native_coord(destination.x),
+                native_coord(destination.y),
+                native_coord(destination.width),
+                native_coord(destination.height),
+                source_rect.x,
+                source_rect.y,
+                source_rect.width,
+                source_rect.height,
+                angle,
+                clip_to_source_rect,
+                alpha.clamp(0.0, 1.0),
+                options.raw(),
+                rotation_center.x as f32,
+                rotation_center.y as f32,
+            );
+        }
+    }
+
+    /// Draws simple text at a position using LICE's built-in bitmap font.
+    pub fn draw_text_simple(
+        &mut self,
+        position: Point,
+        text: &str,
+        color: Color,
+        alpha: f32,
+        options: LiceBlitOptions,
+    ) -> ReaperResult<()> {
+        let text = CString::new(text)?;
+        unsafe {
+            self.low.LICE_DrawText(
+                self.handle.as_ptr(),
+                native_coord(position.x),
+                native_coord(position.y),
+                text.as_ptr(),
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                options.raw(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Fills a triangle.
+    pub fn fill_triangle(
+        &mut self,
+        a: Point,
+        b: Point,
+        c: Point,
+        color: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+    ) {
+        unsafe {
+            self.low.LICE_FillTriangle(
+                self.handle.as_ptr(),
+                native_coord(a.x),
+                native_coord(a.y),
+                native_coord(b.x),
+                native_coord(b.y),
+                native_coord(c.x),
+                native_coord(c.y),
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+            );
+        }
+    }
+
+    /// Fills a trapezoid described by horizontal spans at `y1` and `y2`.
+    pub fn fill_trapezoid(
+        &mut self,
+        x1a: u32,
+        x1b: u32,
+        y1: u32,
+        x2a: u32,
+        x2b: u32,
+        y2: u32,
+        color: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+    ) {
+        unsafe {
+            self.low.LICE_FillTrapezoid(
+                self.handle.as_ptr(),
+                native_coord(x1a),
+                native_coord(x1b),
+                native_coord(y1),
+                native_coord(x2a),
+                native_coord(x2b),
+                native_coord(y2),
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+            );
+        }
+    }
+
+    /// Draws a line with the requested integer pixel width.
+    pub fn thick_line(
+        &mut self,
+        from: LicePoint,
+        to: LicePoint,
+        width: u32,
+        color: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+    ) {
+        if width == 0 {
+            return;
+        }
+        unsafe {
+            self.low.LICE_ThickFLine(
+                self.handle.as_ptr(),
+                from.x,
+                from.y,
+                to.x,
+                to.y,
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+                native_coord(width),
+            );
+        }
+    }
+
+    /// Draws a single byte-sized character using LICE's current bitmap font.
+    pub fn draw_char(
+        &mut self,
+        position: Point,
+        character: u8,
+        color: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+    ) {
+        unsafe {
+            self.low.LICE_DrawChar(
+                self.handle.as_ptr(),
+                native_coord(position.x),
+                native_coord(position.y),
+                character as i8,
+                lice_pixel(color),
+                alpha.clamp(0.0, 1.0),
+                combine_mode.int_value(),
+            );
+        }
+    }
+
+    /// Adds horizontal and vertical RGBA gradients to a rectangle. Each array
+    /// is ordered `[red, green, blue, alpha]`; values follow LICE's channel
+    /// units and are not clamped.
+    pub fn gradient_rect(
+        &mut self,
+        rect: Rect,
+        initial: [f32; 4],
+        delta_x: [f32; 4],
+        delta_y: [f32; 4],
+        combine_mode: LiceCombineMode,
+    ) {
+        unsafe {
+            self.low.LICE_GradRect(
+                self.handle.as_ptr(),
+                native_coord(rect.x),
+                native_coord(rect.y),
+                native_coord(rect.width),
+                native_coord(rect.height),
+                initial[0],
+                initial[1],
+                initial[2],
+                initial[3],
+                delta_x[0],
+                delta_x[1],
+                delta_x[2],
+                delta_x[3],
+                delta_y[0],
+                delta_y[1],
+                delta_y[2],
+                delta_y[3],
+                combine_mode.int_value(),
+            );
+        }
+    }
+
+    /// Scales and offsets RGBA channels in the selected rectangle. Arrays are
+    /// ordered `[red, green, blue, alpha]`.
+    pub fn multiply_add_rect(
+        &mut self,
+        rect: Rect,
+        scale: [f32; 4],
+        add: [f32; 4],
+    ) {
+        unsafe {
+            self.low.LICE_MultiplyAddRect(
+                self.handle.as_ptr(),
+                native_coord(rect.x),
+                native_coord(rect.y),
+                native_coord(rect.width),
+                native_coord(rect.height),
+                scale[0],
+                scale[1],
+                scale[2],
+                scale[3],
+                add[0],
+                add[1],
+                add[2],
+                add[3],
+            );
+        }
+    }
+
+    /// Writes one pixel using the selected LICE combine mode.
+    pub fn put_pixel(
+        &mut self,
+        position: Point,
+        color: Color,
+        alpha: f32,
+        combine_mode: LiceCombineMode,
+    ) {
+        unsafe {
+            self.low.LICE_PutPixel(
+                self.handle.as_ptr(),
+                native_coord(position.x),
+                native_coord(position.y),
                 lice_pixel(color),
                 alpha.clamp(0.0, 1.0),
                 combine_mode.int_value(),
