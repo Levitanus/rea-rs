@@ -1,9 +1,8 @@
 use log::info;
 use rea_rs::{
     swell_gui::layout::WidgetSize, ActionKind, Button, CheckBox, ComboBox,
-    ControlEvent, ControlId, EditField, EventResponse,
-    ExtState, ListBox, Reaper, ReaperWindow, WindowCommand, WindowHandler,
-    WindowId, WindowSpec,
+    ControlEvent, ControlId, EditField, EventResponse, ExtState, ListBox,
+    Reaper, ReaperWindow, WindowCommand, WindowHandler, WindowId, WindowSpec,
 };
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
@@ -21,9 +20,10 @@ struct DemoWindow {
 
 impl DemoWindow {
     fn new() -> anyhow::Result<Self> {
+        let (def_x_w, def_x_h) = (640_u32, 480_u32);
         let window = Reaper::get().create_window(
             &WindowSpec::new("rea-rs widget gallery")
-                .size(640, 420)
+                .size(def_x_w, def_x_h)
                 .dock_ident("rea_rs_widget_gallery"), /* .no_close(false)
                                                        * .resizable(true), */
         )?;
@@ -31,17 +31,23 @@ impl DemoWindow {
         // Creation is expressed in layout terms. The panel/group owns the
         // initial geometry; callers do not provide x/y coordinates.
         let central = window.central_panel();
-        let dock_state = central.create_checkbox(
+        let scroll_id = ControlId::new();
+        let scroll_view = central.create_scroll_view(
+            scroll_id,
+            WidgetSize::new_fill_both(def_x_w, def_x_h),
+            rea_rs::ScrollbarRenderer::Native,
+        );
+        let dock_state = scroll_view.create_checkbox(
             ControlId(DOCK_STATE_ID),
             "Docked",
             WidgetSize::new(120, 24),
         )?;
-        let _label = central.create_label(
+        let _label = scroll_view.create_label(
             ControlId(LABEL_ID),
             "SWELL widget gallery",
             WidgetSize::new(220, 24),
         )?;
-        let group = central.create_group_box(
+        let group = scroll_view.create_group_box(
             ControlId(GROUP_ID),
             "Native controls",
             WidgetSize::new_fill_both(390, 180),
@@ -89,7 +95,9 @@ impl DemoWindow {
             if let ControlEvent::CheckBoxChanged { .. } = event {
                 match checkbox.checked() {
                     Ok(value) => info!("example checkbox value: {}", value),
-                    Err(error) => info!("could not read example checkbox: {}", error),
+                    Err(error) => {
+                        info!("could not read example checkbox: {}", error)
+                    }
                 }
             }
             EventResponse::Handled
@@ -98,7 +106,9 @@ impl DemoWindow {
             if let ControlEvent::ComboSelectionChanged { .. } = event {
                 match combo.selected_index() {
                     Ok(value) => info!("combo selected index: {}", value),
-                    Err(error) => info!("could not read combo selection: {}", error),
+                    Err(error) => {
+                        info!("could not read combo selection: {}", error)
+                    }
                 }
             }
             EventResponse::Handled
@@ -107,7 +117,9 @@ impl DemoWindow {
             if let ControlEvent::ListSelectionChanged { .. } = event {
                 match list.selected_index() {
                     Ok(value) => info!("list selected index: {}", value),
-                    Err(error) => info!("could not read list selection: {}", error),
+                    Err(error) => {
+                        info!("could not read list selection: {}", error)
+                    }
                 }
             }
             EventResponse::Handled
@@ -116,7 +128,9 @@ impl DemoWindow {
             if let ControlEvent::EditChanged { .. } = event {
                 match edit.text() {
                     Ok(value) => info!("edit value: {:?}", value),
-                    Err(error) => info!("could not read edit value: {}", error),
+                    Err(error) => {
+                        info!("could not read edit value: {}", error)
+                    }
                 }
             }
             EventResponse::Handled

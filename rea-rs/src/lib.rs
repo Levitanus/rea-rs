@@ -241,7 +241,9 @@ pub use swell_gui::{
     ContainerId, ControlEvent, ControlHandle, ControlId,
     ControlKind, ControlRect, DockPosition, EditField, EventResponse,
     GroupBox, LayoutContainer, LayoutPanel, ListBox, ListView, NativeContainer, ProgressBar, RadioButton,
-    ReaperControl, ReaperWindow, StaticLabel, TabControl, Trackbar, TreeView,
+    ReaperControl, ReaperWindow, ScrollView, StaticLabel, TabControl, Trackbar, TreeView,
+    ScrollCommand, ScrollMetrics, ScrollOffset, ScrollState, ScrollViewEvent,
+    ScrollViewEventSource, ScrollbarRenderer, ScrollbarVisibility,
     WidgetEventCallback, WindowCommand, WindowHandler, WindowId, WindowSpec,
 };
 

@@ -131,6 +131,8 @@ pub const PBM_SETRANGE32: u32 = WM_USER + 6;
 // (Windows).
 /// Window style: child window.
 pub const WS_CHILD: i32 = 0x40000000;
+/// Window style: clips child windows to the client area.
+pub const WS_CLIPCHILDREN: i32 = 0x02000000;
 /// Window style: has a title bar. Includes WS_DLGFRAME and WS_BORDER.
 pub const WS_CAPTION: i32 = 0x00C00000;
 /// Window style: has a sizing border.

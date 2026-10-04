@@ -662,7 +662,12 @@ fn cross_size(item: WidgetSize, axis: Axis, available: u32) -> u32 {
         item.fill_y()
     };
     match fills {
-        Some(_) => available.max(minimum).min(maximum),
+        Some(_) if maximum != u32::MAX => available.max(minimum).min(maximum),
+        // An unconstrained cross-axis fill keeps its preferred size. Fill
+        // means stretch within an explicit bound; without one, growing a
+        // control to the entire lane would make max-independent layouts
+        // unexpectedly taller/wider.
+        Some(_) => preferred.max(minimum),
         None => preferred,
     }
 }

@@ -2,6 +2,7 @@
 
 pub mod events;
 pub mod layout;
+pub mod scroll;
 pub mod widgets;
 pub mod windowing;
 pub mod windows;
@@ -9,8 +10,13 @@ pub mod windows;
 use rea_rs_low::raw;
 
 pub use events::{
-    CommandNotification, ContainerEvent, ControlEvent,
-    EventResponse, WidgetEventCallback, WindowCommand,
+    CommandNotification, ContainerEvent, ControlEvent, EventResponse,
+    ScrollViewEvent, ScrollViewEventSource, WidgetEventCallback,
+    WindowCommand,
+};
+pub use scroll::{
+    decode_scroll_command, ScrollCommand, ScrollMetrics, ScrollOffset,
+    ScrollState, ScrollbarRenderer, ScrollbarVisibility,
 };
 pub use widgets::{
     Button, CheckBox, ComboBox, ContainerId, ControlHandle, ControlId,
@@ -19,8 +25,8 @@ pub use widgets::{
     TabControl, Trackbar, TreeView,
 };
 pub use windows::{
-    DockPosition, LayoutContainer, LayoutPanel, ReaperWindow, WindowHandler,
-    WindowId, WindowSpec,
+    DockPosition, LayoutContainer, LayoutPanel, ReaperWindow, ScrollView,
+    WindowHandler, WindowId, WindowSpec,
 };
 #[cfg(test)]
 mod tests {

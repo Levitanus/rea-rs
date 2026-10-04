@@ -1,3 +1,4 @@
+use super::scroll::ScrollOffset;
 use super::widgets::{ControlId, ControlKind};
 use super::windows::ReaperWindow;
 use rea_rs_low::raw;
@@ -96,6 +97,33 @@ pub enum ControlEvent {
     },
 }
 
+/// The semantic source of a ScrollView movement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScrollViewEventSource {
+    Wheel,
+    Line,
+    Page,
+    Thumb,
+    Programmatic,
+}
+
+impl ScrollViewEventSource {
+    pub const fn is_user_initiated(self) -> bool {
+        !matches!(self, Self::Programmatic)
+    }
+}
+
+/// A decoded ScrollView movement.
+///
+/// Unlike [`ControlEvent::Scroll`], this event does not expose a native
+/// notification code. The offset is already clamped and expressed in content
+/// coordinates, so consumers do not need to understand SWELL or Win32.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScrollViewEvent {
+    pub offset: ScrollOffset,
+    pub source: ScrollViewEventSource,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContainerEvent {
     Child {
@@ -113,12 +141,16 @@ pub enum EventResponse {
 }
 
 pub type WidgetEventCallback = Box<dyn FnMut(ControlEvent) -> EventResponse>;
+pub type ScrollViewEventCallback =
+    Box<dyn FnMut(ScrollViewEvent) -> EventResponse>;
 pub type ContainerEventCallback =
     Box<dyn FnMut(ContainerEvent) -> EventResponse>;
 
 #[derive(Default)]
 pub(super) struct EventRegistry {
     pub(super) widget_callbacks: HashMap<ControlId, WidgetEventCallback>,
+    pub(super) scroll_view_callbacks:
+        HashMap<ControlId, ScrollViewEventCallback>,
     pub(super) container_callbacks:
         HashMap<super::widgets::ContainerId, ContainerEventCallback>,
     pub(super) direct_container:
@@ -127,7 +159,8 @@ pub(super) struct EventRegistry {
         HashMap<super::widgets::ContainerId, super::widgets::ContainerId>,
 }
 
-/// Result of routing a native control event through the explicit callback tree.
+/// Result of routing a native control event through the explicit callback
+/// tree.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DispatchResult {
     Handled,
@@ -169,9 +202,37 @@ impl EventRegistry {
 
     pub(super) fn clear(&mut self) {
         self.widget_callbacks.clear();
+        self.scroll_view_callbacks.clear();
         self.container_callbacks.clear();
         self.direct_container.clear();
         self.container_parent.clear();
+    }
+
+    pub(super) fn register_scroll_view_callback(
+        &mut self,
+        id: ControlId,
+        callback: ScrollViewEventCallback,
+    ) {
+        self.scroll_view_callbacks.insert(id, callback);
+    }
+
+    pub(super) fn dispatch_scroll_view(
+        &mut self,
+        id: ControlId,
+        event: ScrollViewEvent,
+    ) -> DispatchResult {
+        let Some(mut callback) = self.scroll_view_callbacks.remove(&id) else {
+            return DispatchResult::ForwardToWindow;
+        };
+        let response = callback(event);
+        self.scroll_view_callbacks.insert(id, callback);
+        match response {
+            EventResponse::Handled => DispatchResult::Handled,
+            EventResponse::ForwardToWindow => DispatchResult::ForwardToWindow,
+            EventResponse::Ignore | EventResponse::ForwardToParent => {
+                DispatchResult::Handled
+            }
+        }
     }
 
     /// Routes an event through the widget, its direct container, and any
@@ -199,7 +260,8 @@ impl EventRegistry {
                 break;
             }
             let container_event = ContainerEvent::child(container, event);
-            let Some(mut callback) = self.container_callbacks.remove(&container)
+            let Some(mut callback) =
+                self.container_callbacks.remove(&container)
             else {
                 current = self.container_parent.get(&container).copied();
                 continue;
@@ -314,6 +376,35 @@ impl ReaperWindow {
         self.events
             .borrow_mut()
             .register_widget_callback(id, Box::new(callback));
+    }
+
+    /// Registers a semantic callback for a ScrollView. The callback receives
+    /// a clamped content offset and a platform-neutral movement source.
+    pub fn on_scroll_view_event(
+        &self,
+        id: ControlId,
+        callback: impl FnMut(ScrollViewEvent) -> EventResponse + 'static,
+    ) {
+        self.events
+            .borrow_mut()
+            .register_scroll_view_callback(id, Box::new(callback));
+    }
+
+    /// Delivers a semantic ScrollView event to the registered callback.
+    ///
+    /// This is primarily used by native viewport message handlers. Keeping
+    /// the delivery operation on `ReaperWindow` avoids exposing the internal
+    /// event registry while allowing platform adapters to remain separate from
+    /// the public event contract.
+    pub(crate) fn emit_scroll_view_event(
+        &self,
+        id: ControlId,
+        event: ScrollViewEvent,
+    ) -> EventResponse {
+        match self.events.borrow_mut().dispatch_scroll_view(id, event) {
+            DispatchResult::Handled => EventResponse::Handled,
+            DispatchResult::ForwardToWindow => EventResponse::ForwardToWindow,
+        }
     }
 
     pub fn on_container_event(

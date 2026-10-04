@@ -16,6 +16,75 @@ static mut INSTANCE: Option<Swell> = None;
 /// This impl block contains functions which exist in SWELL as macros and
 /// therefore are not picked up by `bindgen`.
 impl Swell {
+    /// Creates a hidden child window with the supplied procedure.
+    ///
+    /// This is intentionally lower-level than `create_window`: the caller
+    /// owns the child lifetime through its parent and may use the window as a
+    /// structural container without registering it as a dialog control.
+    pub unsafe fn create_child_window(
+        &self,
+        parent: root::HWND,
+        width: i32,
+        height: i32,
+        proc_: root::DLGPROC,
+        param: root::LPARAM,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            let hwnd = self.SWELL_CreateDialog(
+                std::ptr::null_mut(),
+                crate::raw::SWELL_CREATE_DIALOG_MAGIC as *const _,
+                parent,
+                proc_,
+                param,
+            );
+            if hwnd.is_null() {
+                return None;
+            }
+            self.SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                width.max(1),
+                height.max(1),
+                (crate::raw::SWP_NOMOVE | crate::raw::SWP_NOZORDER) as i32,
+            );
+            Some(hwnd)
+        }
+        #[cfg(target_family = "windows")]
+        {
+            use std::iter::once;
+            use winapi::um::winuser;
+            let class = windows_class_name();
+            let hwnd = winuser::CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                winuser::WS_CHILD | winuser::WS_CLIPCHILDREN,
+                0,
+                0,
+                width.max(1),
+                height.max(1),
+                parent as _,
+                std::ptr::null_mut(),
+                winuser::GetModuleHandleW(std::ptr::null()),
+                param as _,
+            );
+            if hwnd.is_null() {
+                return None;
+            }
+            if let Some(real_proc) = proc_ {
+                winuser::SetWindowLongPtrW(
+                    hwnd,
+                    winuser::GWLP_WNDPROC,
+                    std::mem::transmute(real_proc),
+                );
+            }
+            Some(hwnd as _)
+        }
+    }
+
     /// Creates a child button using the native SWELL/Win32 control API.
     ///
     /// The returned handle belongs to `parent`; the caller remains responsible
