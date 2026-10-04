@@ -3,10 +3,8 @@ use std::{ffi::CString, mem::MaybeUninit, ptr::null};
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
-    ptr_wrappers::MediaTrack,
-    utils::{string_from_const_i8},
-    Color, Position, Project, ReaRsError, Reaper, ReaperResult, Track,
-    WithReaperPtr,
+    ptr_wrappers::MediaTrack, utils::string_from_const_i8, Color, Position,
+    Project, ReaRsError, Reaper, ReaperResult, Track, WithReaperPtr,
 };
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]

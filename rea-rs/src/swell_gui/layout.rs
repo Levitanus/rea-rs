@@ -671,9 +671,7 @@ fn cross_size(item: WidgetSize, axis: Axis, available: u32) -> u32 {
     };
     match fills {
         Some(WidgetFills::Fixed) | None => preferred,
-        Some(_) if maximum != u32::MAX => {
-            available.max(minimum).min(maximum)
-        }
+        Some(_) if maximum != u32::MAX => available.max(minimum).min(maximum),
         // Horizontal cross-axis fill tracks the parent width, which is
         // important for fill-sized containers in vertical flows. Vertical
         // cross-axis fill keeps its preferred size unless constrained, so

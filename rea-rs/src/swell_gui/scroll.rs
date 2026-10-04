@@ -67,12 +67,16 @@ impl ScrollbarVisibility {
         let mut vertical = content.y > viewport.y;
         let mut iteration = 0;
         while iteration < 2 {
-            let effective_width = viewport.x.saturating_sub(
-                if vertical { thickness } else { 0 },
-            );
-            let effective_height = viewport.y.saturating_sub(
-                if horizontal { thickness } else { 0 },
-            );
+            let effective_width = viewport.x.saturating_sub(if vertical {
+                thickness
+            } else {
+                0
+            });
+            let effective_height = viewport.y.saturating_sub(if horizontal {
+                thickness
+            } else {
+                0
+            });
             let next_horizontal = content.x > effective_width;
             let next_vertical = content.y > effective_height;
             if next_horizontal == horizontal && next_vertical == vertical {
@@ -82,7 +86,10 @@ impl ScrollbarVisibility {
             vertical = next_vertical;
             iteration += 1;
         }
-        Self { horizontal, vertical }
+        Self {
+            horizontal,
+            vertical,
+        }
     }
 }
 
@@ -92,10 +99,19 @@ impl ScrollMetrics {
         viewport: Size,
         thickness: u32,
     ) -> (Self, ScrollbarVisibility) {
-        let visibility = ScrollbarVisibility::resolve(content, viewport, thickness);
+        let visibility =
+            ScrollbarVisibility::resolve(content, viewport, thickness);
         let effective_viewport = Size {
-            x: viewport.x.saturating_sub(if visibility.vertical { thickness } else { 0 }),
-            y: viewport.y.saturating_sub(if visibility.horizontal { thickness } else { 0 }),
+            x: viewport.x.saturating_sub(if visibility.vertical {
+                thickness
+            } else {
+                0
+            }),
+            y: viewport.y.saturating_sub(if visibility.horizontal {
+                thickness
+            } else {
+                0
+            }),
         };
         let offset = ScrollOffset::new(0, 0);
         (
@@ -142,7 +158,10 @@ pub enum ScrollCommand {
 }
 
 /// Decodes a low-word native scrollbar notification.
-pub const fn decode_scroll_command(code: i32, position: u32) -> Option<ScrollCommand> {
+pub const fn decode_scroll_command(
+    code: i32,
+    position: u32,
+) -> Option<ScrollCommand> {
     match code {
         0 => Some(ScrollCommand::LineBackward),
         1 => Some(ScrollCommand::LineForward),

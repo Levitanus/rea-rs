@@ -1,5 +1,6 @@
 //! High-level, platform-neutral APIs for REAPER's SWELL GUI.
 
+pub mod drawing;
 pub mod events;
 pub mod layout;
 pub mod scroll;
@@ -9,24 +10,29 @@ pub mod windows;
 
 use rea_rs_low::raw;
 
+pub use drawing::{
+    default_logfont, Brush, DrawTextOptions, Font, HdcSurface, ImageList,
+    LiceBitmap, LiceBitmapKind, LiceFont, LiceSurface, PaintInfo, Pen,
+};
 pub use events::{
     CommandNotification, ContainerEvent, ControlEvent, EventResponse,
     ScrollViewEvent, ScrollViewEventSource, WidgetEventCallback,
-    WindowCommand,
+    WindowCommand, WindowEvent, WindowEventCallback,
 };
 pub use scroll::{
     decode_scroll_command, ScrollCommand, ScrollMetrics, ScrollOffset,
     ScrollState, ScrollbarRenderer, ScrollbarVisibility,
 };
+pub use widgets::CreationContext;
 pub use widgets::{
-    Button, CheckBox, ComboBox, ContainerId, ControlHandle, ControlId,
+    Button, Canvas, CheckBox, ComboBox, ContainerId, ControlHandle, ControlId,
     ControlKind, ControlRect, EditField, GroupBox, ListBox, ListView,
     NativeContainer, ProgressBar, RadioButton, ReaperControl, StaticLabel,
     TabControl, Trackbar, TreeView,
 };
 pub use windows::{
-    CreationContext, DockPosition, ReaperWindow, ScrollView, WindowHandler,
-    WindowId, WindowSpec,
+    DockPosition, ReaperWindow, ScrollView, WindowHandler, WindowId,
+    WindowSpec,
 };
 #[cfg(test)]
 mod tests {
@@ -76,6 +82,34 @@ mod tests {
             registry.container_parent.get(&group),
             Some(&ContainerId(ControlId(99)))
         );
+    }
+
+    #[test]
+    fn paint_info_keeps_damage_and_client_bounds_separate() {
+        let info = PaintInfo {
+            damage_rect: layout::Rect::new(2, 3, 4, 5),
+            client_rect: layout::Rect::new(0, 0, 80, 60),
+        };
+        assert_eq!(info.damage_rect, layout::Rect::new(2, 3, 4, 5));
+        assert_eq!(info.client_rect, layout::Rect::new(0, 0, 80, 60));
+    }
+
+    #[test]
+    fn general_window_events_preserve_native_input_payloads() {
+        let event = WindowEvent::Mouse {
+            message: raw::WM_LBUTTONDOWN,
+            position: (13, 24),
+            buttons: 1,
+        };
+        assert!(matches!(
+            event,
+            WindowEvent::Mouse {
+                position: (13, 24),
+                ..
+            }
+        ));
+        assert!(matches!(WindowEvent::Text('x'), WindowEvent::Text('x')));
+        assert!(matches!(WindowEvent::Focus(true), WindowEvent::Focus(true)));
     }
 }
 

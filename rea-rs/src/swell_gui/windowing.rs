@@ -10,7 +10,15 @@ impl ReaperWindow {
         self.hwnd.as_ptr()
     }
     pub fn is_owned(&self) -> bool {
-        self.owned
+        self.owned.get()
+    }
+
+    pub(crate) fn relinquish_native_ownership(&self) {
+        self.owned.set(false);
+    }
+
+    pub(crate) fn destroy_owned_native(&self) {
+        self.destroy_internal();
     }
 
     pub(crate) fn remember_floating_rect(&self) -> ReaperResult<()> {
@@ -433,7 +441,7 @@ impl ReaperWindow {
 
     pub fn is_docked(&self) -> ReaperResult<bool> {
         self.check_window()?;
-        if self.owned {
+        if self.owned.get() {
             return Ok(self.docked.get());
         }
         let low = Reaper::get().low();
@@ -480,15 +488,18 @@ impl ReaperWindow {
     }
 
     pub fn destroy(&mut self) -> ReaperResult<()> {
-        if !self.owned {
+        if !self.owned.get() {
             return Ok(());
         }
         self.destroy_internal();
-        self.owned = false;
+        self.owned.set(false);
         Ok(())
     }
 
     pub(crate) fn destroy_internal(&self) {
+        if !self.owned.replace(false) {
+            return;
+        }
         self.reset_ui();
         if !Reaper::is_available() {
             return;
@@ -509,7 +520,7 @@ impl ReaperWindow {
 
 impl Drop for ReaperWindow {
     fn drop(&mut self) {
-        if self.owned {
+        if self.owned.get() {
             self.destroy_internal();
         }
     }

@@ -1,9 +1,9 @@
 use log::info;
 use rea_rs::{
     swell_gui::layout::{WidgetFills, WidgetSize},
-    ActionKind, Button, CheckBox, ComboBox, ControlEvent, ControlId,
-    EditField, EventResponse, ExtState, ListBox, Reaper, ReaperWindow,
-    WindowCommand, WindowHandler, WindowId, WindowSpec,
+    ActionKind, Brush, Canvas, CheckBox, ComboBox, ControlEvent, ControlId,
+    EditField, EventResponse, ExtState, Font, ListBox, PaintInfo, Pen, Reaper,
+    ReaperWindow, WindowCommand, WindowHandler, WindowId, WindowSpec,
 };
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
@@ -16,6 +16,10 @@ struct DemoWindow {
     checkbox: CheckBox,
     combo: ComboBox,
     list: ListBox,
+    background: Brush,
+    border: Pen,
+    title_font: Font,
+    canvas: Canvas,
 }
 
 impl DemoWindow {
@@ -48,7 +52,7 @@ impl DemoWindow {
             "Native controls",
             WidgetSize::new_fill_both(390, 180),
         )?;
-        let button = ui.button(
+        let _button = ui.button(
             ControlId(BUTTON_ID),
             "Click me",
             WidgetSize::new(120, 28),
@@ -74,7 +78,14 @@ impl DemoWindow {
         )?;
         list.add_item("List item one")?;
         list.add_item("List item two")?;
+        let background = Brush::solid(0x00302018)?;
+        let border = Pen::solid(2, 0x00d09040)?;
+        let mut logfont = rea_rs::default_logfont();
+        logfont.lfHeight = 18;
+        let title_font = Font::from_logfont(logfont)?;
 
+        let canvas =
+            ui.canvas(ControlId(CANVAS_ID), WidgetSize::new(280, 84))?;
         ui.on_widget_event(ControlId(BUTTON_ID), |event| {
             info!("button event: {:?}", event);
             EventResponse::Handled
@@ -133,6 +144,10 @@ impl DemoWindow {
             checkbox,
             combo,
             list,
+            background,
+            border,
+            title_font,
+            canvas,
         })
     }
 
@@ -211,6 +226,47 @@ impl WindowHandler for DemoWindow {
             }
         }
     }
+
+    fn render(
+        &mut self,
+        info: &PaintInfo,
+        surface: &mut rea_rs::HdcSurface<'_>,
+    ) {
+        surface.fill_rect(info.client_rect, &self.background);
+        surface.frame_rect(info.client_rect, &self.background);
+        let _ = surface.draw_text(
+            "Retained SWELL drawing",
+            rea_rs::swell_gui::layout::Rect::new(24, 16, 380, 32),
+            &self.title_font,
+            rea_rs::DrawTextOptions { alignment: 0 },
+        );
+        surface.line((18, 52), (620, 52), &self.border);
+    }
+
+    fn render_widget(
+        &mut self,
+        id: ControlId,
+        info: &PaintInfo,
+        surface: &mut rea_rs::HdcSurface<'_>,
+    ) {
+        if id == self.canvas.id() {
+            surface.fill_rect(info.client_rect, &self.background);
+            surface.frame_rect(info.client_rect, &self.background);
+        }
+    }
+
+    fn on_widget_event(
+        &mut self,
+        id: ControlId,
+        event: rea_rs::WindowEvent,
+    ) -> bool {
+        if id == self.canvas.id() {
+            info!("canvas event: {:?}", event);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 const DOCK_STATE_ID: i32 = 100;
@@ -221,6 +277,7 @@ const LABEL_ID: i32 = 104;
 const GROUP_ID: i32 = 105;
 const COMBO_ID: i32 = 106;
 const LIST_ID: i32 = 107;
+const CANVAS_ID: i32 = 108;
 
 pub fn register_actions(reaper: &mut Reaper) -> anyhow::Result<()> {
     reaper.register_action(
@@ -229,11 +286,9 @@ pub fn register_actions(reaper: &mut Reaper) -> anyhow::Result<()> {
         ActionKind::NotToggleable,
         |_| {
             let demo_window = DemoWindow::new()?;
-            let hwnd = demo_window.window.hwnd();
             if let Err(error) = Reaper::get_mut()
                 .register_window_handler(Box::new(demo_window))
             {
-                let _ = Reaper::get_mut().unregister_window_handler(hwnd);
                 return Err(error.into());
             }
             info!("rea-rs window demo opened");

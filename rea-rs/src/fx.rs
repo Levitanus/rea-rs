@@ -6,9 +6,8 @@ use std::{
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
-    utils::{string_from_buf},
-    Envelope, KnowsProject, ReaRsError, Reaper, ReaperResult, Take, Track,
-    WithReaperPtr,
+    utils::string_from_buf, Envelope, KnowsProject, ReaRsError, Reaper,
+    ReaperResult, Take, Track, WithReaperPtr,
 };
 
 /// Parametrizes FX functionality for [TrackFX] asn [TakeFX].

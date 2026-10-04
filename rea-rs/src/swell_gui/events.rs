@@ -140,6 +140,43 @@ pub enum EventResponse {
     ForwardToWindow,
 }
 
+/// General window input/lifecycle event, independent of native controls.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WindowEvent {
+    Canvas {
+        control: ControlId,
+        event: Box<WindowEvent>,
+    },
+    Mouse {
+        message: u32,
+        position: (i32, i32),
+        buttons: usize,
+    },
+    Wheel {
+        horizontal: bool,
+        delta: i32,
+        position: (i32, i32),
+    },
+    Key {
+        message: u32,
+        key: usize,
+        modifiers: usize,
+    },
+    Text(char),
+    Gesture {
+        gesture: usize,
+        location: (i32, i32),
+    },
+    DropFiles {
+        point: (i32, i32),
+        count: u32,
+    },
+    Focus(bool),
+}
+
+/// Callback for general window/Canvas input events.
+pub type WindowEventCallback = Box<dyn FnMut(WindowEvent) -> EventResponse>;
+
 pub type WidgetEventCallback = Box<dyn FnMut(ControlEvent) -> EventResponse>;
 pub type ScrollViewEventCallback =
     Box<dyn FnMut(ScrollViewEvent) -> EventResponse>;

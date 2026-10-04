@@ -93,10 +93,9 @@ impl Source {
     ) -> ReaperResult<Self> {
         let c_string = CString::new(file.to_string_lossy().to_string())?;
         let ptr = unsafe {
-            Reaper::get().low().PCM_Source_CreateFromFileEx(
-                c_string.as_ptr(),
-                !midi_as_file,
-            )
+            Reaper::get()
+                .low()
+                .PCM_Source_CreateFromFileEx(c_string.as_ptr(), !midi_as_file)
         };
         Self::new(
             None,
@@ -113,9 +112,9 @@ impl Source {
         let type_string = type_string.into();
         let c_string = CString::new(type_string)?;
         let ptr = unsafe {
-            Reaper::get().low().PCM_Source_CreateFromType(
-                c_string.as_ptr(),
-            )
+            Reaper::get()
+                .low()
+                .PCM_Source_CreateFromType(c_string.as_ptr())
         };
         Self::new(
             None,

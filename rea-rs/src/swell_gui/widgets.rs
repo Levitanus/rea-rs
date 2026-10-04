@@ -663,6 +663,22 @@ impl<'a> CreationContext<'a> {
         })
     }
 
+    /// Creates a structural child HWND intended for custom retained drawing.
+    /// The child is registered by `id` and receives its own paint/input
+    /// dispatch while sharing the parent handler's retained resources.
+    pub fn canvas(
+        &self,
+        id: ControlId,
+        size: WidgetSize,
+    ) -> anyhow::Result<Canvas> {
+        let hwnd = self
+            .window
+            .create_structural_child(self.parent, self.size(size))?;
+        self.window.layout.borrow_mut().structural.insert(id, hwnd);
+        self.window.register_layout_entry(self.container, id, size);
+        Ok(Canvas { id, hwnd })
+    }
+
     pub fn on_widget_event(
         &self,
         id: ControlId,
@@ -690,6 +706,53 @@ impl<'a> CreationContext<'a> {
             + 'static,
     ) {
         self.window.on_container_event(id, callback);
+    }
+}
+
+/// Structural native child used for custom rendering and independent input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Canvas {
+    id: ControlId,
+    hwnd: raw::HWND,
+}
+
+impl Canvas {
+    pub fn id(&self) -> ControlId {
+        self.id
+    }
+    pub fn hwnd(&self) -> raw::HWND {
+        self.hwnd
+    }
+    pub fn focus(&self) -> ReaperResult<()> {
+        unsafe { Reaper::get().swell().SetFocus(self.hwnd) };
+        Ok(())
+    }
+    pub fn capture(&self) -> ReaperResult<()> {
+        unsafe { Reaper::get().swell().SetCapture(self.hwnd) };
+        Ok(())
+    }
+    pub fn release_capture(&self) -> ReaperResult<()> {
+        Reaper::get().swell().ReleaseCapture();
+        Ok(())
+    }
+    pub fn set_rect(&self, rect: ControlRect) -> ReaperResult<()> {
+        if rect.width < 1 || rect.height < 1 {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "invalid control size",
+            ));
+        }
+        unsafe {
+            Reaper::get().swell().SetWindowPos(
+                self.hwnd,
+                std::ptr::null_mut(),
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+                raw::SWP_NOZORDER as i32,
+            );
+        }
+        Ok(())
     }
 }
 

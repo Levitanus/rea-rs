@@ -45,6 +45,7 @@ struct ActionRegistration {
     registration: raw::custom_action_register_t,
 }
 
+#[allow(dead_code)]
 struct DefaultKeyBindingRegistration {
     _description: CString,
     registration: raw::gaccel_register_t,
@@ -343,6 +344,7 @@ pub struct Reaper {
     default_key_bindings: Vec<DefaultKeyBindingRegistration>,
     timers: HashMap<String, (Instant, Arc<RefCell<dyn Timer>>)>,
     pub(crate) windows: HashMap<WindowId, Box<dyn WindowHandler>>,
+    pub(crate) window_routes: HashMap<usize, WindowId>,
     csurfases: HashMap<
         String,
         (
@@ -382,6 +384,7 @@ impl Reaper {
             default_key_bindings: Vec::new(),
             timers: HashMap::new(),
             windows: HashMap::new(),
+            window_routes: HashMap::new(),
             csurfases: HashMap::new(),
         }
     }
@@ -417,7 +420,7 @@ impl Reaper {
             self.low.pointers().GetMainHwnd.as_ref().ok_or_else(|| {
                 ReaRsError::UnexpectedAPI("GetMainHwnd not available".into())
             })?;
-        let parent = unsafe { parent() };
+        let parent = parent();
         if parent.is_null() {
             return Err(ReaRsError::NullPtr("main window"));
         }
@@ -448,78 +451,118 @@ impl Reaper {
         Ok(window)
     }
 
-    /// Adds a handler to the window registry. The handler must own an
-    /// `ReaperWindow` created by `create_window`.
+    /// Registers a handler for either an owned window or a non-owning host
+    /// window wrapper. Returns the stable logical ID used for teardown.
     pub fn register_window_handler(
         &mut self,
-        mut handler: Box<dyn WindowHandler>,
-    ) -> ReaperResult<isize> {
+        handler: Box<dyn WindowHandler>,
+    ) -> ReaperResult<WindowId> {
         let window = handler.window();
-        if !window.is_owned() {
-            return Err(ReaRsError::InvalidObject(
-                "borrowed window cannot be registered",
-            ));
-        }
         let window_id = handler.window_id();
         if self.windows.contains_key(&window_id) {
             return Err(ReaRsError::InvalidObject(
                 "window handler ID is already registered",
             ));
         }
-        let hwnd = window.hwnd() as isize;
+        let hwnd = window.hwnd();
+        let hwnd_key = hwnd as usize;
+        if hwnd.is_null()
+            || self.window_routes.contains_key(&hwnd_key)
+            || !unsafe { self.swell.IsWindow(hwnd) }
+        {
+            return Err(ReaRsError::InvalidObject(
+                "window is invalid or already attached to a handler",
+            ));
+        }
         let show_on_register = handler.window().show_on_register;
-        // WM_SIZE is not guaranteed to arrive after all controls have been
-        // created. Apply the retained declarative layout before the window is
-        // opened so the first frame is already correctly positioned.
-        handler.window().apply_default_layout()?;
-        handler.on_open();
+        let owned = window.is_owned();
+        if owned {
+            handler.window().apply_default_layout()?;
+        }
         self.windows.insert(window_id.clone(), handler);
+        self.window_routes.insert(hwnd_key, window_id.clone());
+        if !owned {
+            let previous = unsafe {
+                self.swell.SetWindowLong(
+                    hwnd,
+                    raw::GWL_WNDPROC,
+                    swell_gui::window_proc as *const () as usize as isize,
+                )
+            };
+            swell_gui::windows::remember_host_proc(hwnd, previous);
+        }
+        if let Some(handler) = self.windows.get_mut(&window_id) {
+            handler.on_open();
+        }
         if show_on_register {
             if let Some(handler) = self.windows.get(&window_id) {
-                handler.window().show()?;
+                if let Err(error) = handler.window().show() {
+                    self.unregister_window_handler(&window_id)?;
+                    return Err(error);
+                }
             }
         }
-        Ok(hwnd)
+        Ok(window_id)
     }
 
     pub(crate) fn window_id_for_hwnd(
         &self,
         hwnd: raw::HWND,
     ) -> Option<WindowId> {
-        self.windows.iter().find_map(|(id, handler)| {
-            (handler.window().hwnd() == hwnd).then(|| id.clone())
-        })
+        self.window_routes.get(&(hwnd as usize)).cloned()
     }
 
     pub fn is_window_registered(&self, window_id: &WindowId) -> bool {
         self.windows.contains_key(window_id)
     }
 
-    /// Removes a registered handler without destroying its window.
+    /// Unregisters a handler by stable ID. Dropping an owned wrapper destroys
+    /// its native window; a host wrapper is detached but never destroys HWND.
     pub fn unregister_window_handler(
+        &mut self,
+        window_id: &WindowId,
+    ) -> ReaperResult<()> {
+        let Some(mut handler) = self.windows.remove(window_id) else {
+            return Ok(());
+        };
+        let hwnd = handler.window().hwnd();
+        let owned = handler.window().is_owned();
+        self.window_routes.remove(&(hwnd as usize));
+        if !owned {
+            swell_gui::windows::detach_host_proc(hwnd);
+        }
+        handler.window().destroy_structural_children();
+        handler.on_destroy();
+        if owned {
+            handler.window().destroy_owned_native();
+        }
+        drop(handler);
+        Ok(())
+    }
+
+    /// Compatibility helper: resolves a native HWND to its stable ID.
+    #[deprecated(
+        note = "use unregister_window_handler with the WindowId returned by registration"
+    )]
+    pub fn unregister_window_handler_by_hwnd(
         &mut self,
         hwnd: raw::HWND,
     ) -> ReaperResult<()> {
-        let Some(id) = self.window_id_for_hwnd(hwnd) else {
-            return Err(ReaRsError::Key(
-                format!("{:p}", hwnd),
-                self.windows.keys().cloned().collect::<Vec<_>>().join(", "),
-            ));
-        };
-        if self.windows.remove(&id).is_none() {
-            return Err(ReaRsError::Key(
-                format!("{:p}", hwnd),
-                self.windows.keys().cloned().collect::<Vec<_>>().join(", "),
-            ));
-        }
-        Ok(())
+        let id = self.window_id_for_hwnd(hwnd).ok_or_else(|| {
+            ReaRsError::Key(format!("{:p}", hwnd), String::new())
+        })?;
+        self.unregister_window_handler(&id)
     }
+
     pub fn plugin_context(&self) -> PluginContext {
         self.low.plugin_context().clone()
     }
 
     pub fn is_available() -> bool {
-        unsafe { INSTANCE.is_some() }
+        #[allow(static_mut_refs)]
+        unsafe {
+            INSTANCE.is_some()
+        }
     }
     /// Gives access to the instance which you made available globally before.
     ///
@@ -530,6 +573,7 @@ impl Reaper {
     ///
     /// [`make_available_globally()`]: fn.make_available_globally.html
     pub fn get() -> &'static Reaper {
+        #[allow(static_mut_refs)]
         unsafe {
             INSTANCE
                 .as_ref()
@@ -537,6 +581,7 @@ impl Reaper {
         }
     }
     pub fn get_mut() -> &'static mut Reaper {
+        #[allow(static_mut_refs)]
         unsafe {
             INSTANCE
                 .as_mut()
@@ -750,11 +795,19 @@ impl Reaper {
 impl Drop for Reaper {
     fn drop(&mut self) {
         let windows = std::mem::take(&mut self.windows);
-        for (_, handler) in windows {
+        self.window_routes.clear();
+        for (id, handler) in windows {
             let window = handler.window();
-            if window.is_owned() {
+            if !window.is_owned() {
+                swell_gui::windows::detach_host_proc(window.hwnd());
+            } else {
                 window.destroy_internal();
             }
+            window.destroy_structural_children();
+            let mut handler = handler;
+            handler.on_destroy();
+            drop(handler);
+            let _ = id;
         }
         let low = self.low().clone();
         unsafe {

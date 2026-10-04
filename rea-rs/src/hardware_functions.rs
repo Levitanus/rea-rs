@@ -3,7 +3,7 @@ use std::mem::MaybeUninit;
 use log::{debug, error};
 
 use crate::{
-    utils::{string_from_const_i8, string_from_buf},
+    utils::{string_from_buf, string_from_const_i8},
     HardwareSocket, Reaper, SampleAmount,
 };
 

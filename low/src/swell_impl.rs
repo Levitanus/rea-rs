@@ -101,15 +101,25 @@ impl Swell {
     ) -> Option<root::HWND> {
         #[cfg(target_family = "unix")]
         {
-            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
-            let hwnd = self.SWELL_MakeButton(0, label, id, x, y, width, height, 0);
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
+            let hwnd =
+                self.SWELL_MakeButton(0, label, id, x, y, width, height, 0);
             return (!hwnd.is_null()).then_some(hwnd);
         }
         #[cfg(target_family = "windows")]
         {
             self.create_windows_control(
-                parent, id, label, "BUTTON", winapi::um::winuser::BS_PUSHBUTTON,
-                x, y, width, height,
+                parent,
+                id,
+                label,
+                "BUTTON",
+                winapi::um::winuser::BS_PUSHBUTTON,
+                x,
+                y,
+                width,
+                height,
             )
         }
     }
@@ -127,15 +137,25 @@ impl Swell {
     ) -> Option<root::HWND> {
         #[cfg(target_family = "unix")]
         {
-            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
-            let hwnd = self.SWELL_MakeEditField(id, x, y, width, height, flags);
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
+            let hwnd =
+                self.SWELL_MakeEditField(id, x, y, width, height, flags);
             return (!hwnd.is_null()).then_some(hwnd);
         }
         #[cfg(target_family = "windows")]
         {
             self.create_windows_control(
-                parent, id, std::ptr::null(), "EDIT", winapi::um::winuser::ES_LEFT | flags as u32,
-                x, y, width, height,
+                parent,
+                id,
+                std::ptr::null(),
+                "EDIT",
+                winapi::um::winuser::ES_LEFT | flags as u32,
+                x,
+                y,
+                width,
+                height,
             )
         }
     }
@@ -153,15 +173,25 @@ impl Swell {
     ) -> Option<root::HWND> {
         #[cfg(target_family = "unix")]
         {
-            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
-            let hwnd = self.SWELL_MakeLabel(0, label, id, x, y, width, height, 0);
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
+            let hwnd =
+                self.SWELL_MakeLabel(0, label, id, x, y, width, height, 0);
             return (!hwnd.is_null()).then_some(hwnd);
         }
         #[cfg(target_family = "windows")]
         {
             self.create_windows_control(
-                parent, id, label, "STATIC", winapi::um::winuser::SS_LEFT,
-                x, y, width, height,
+                parent,
+                id,
+                label,
+                "STATIC",
+                winapi::um::winuser::SS_LEFT,
+                x,
+                y,
+                width,
+                height,
             )
         }
     }
@@ -179,15 +209,25 @@ impl Swell {
     ) -> Option<root::HWND> {
         #[cfg(target_family = "unix")]
         {
-            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
-            let hwnd = self.SWELL_MakeCheckBox(label, id, x, y, width, height, 0);
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
+            let hwnd =
+                self.SWELL_MakeCheckBox(label, id, x, y, width, height, 0);
             return (!hwnd.is_null()).then_some(hwnd);
         }
         #[cfg(target_family = "windows")]
         {
             self.create_windows_control(
-                parent, id, label, "BUTTON", winapi::um::winuser::BS_AUTOCHECKBOX,
-                x, y, width, height,
+                parent,
+                id,
+                label,
+                "BUTTON",
+                winapi::um::winuser::BS_AUTOCHECKBOX,
+                x,
+                y,
+                width,
+                height,
             )
         }
     }
@@ -205,15 +245,25 @@ impl Swell {
     ) -> Option<root::HWND> {
         #[cfg(target_family = "unix")]
         {
-            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
-            let hwnd = self.SWELL_MakeGroupBox(label, id, x, y, width, height, 0);
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
+            let hwnd =
+                self.SWELL_MakeGroupBox(label, id, x, y, width, height, 0);
             return (!hwnd.is_null()).then_some(hwnd);
         }
         #[cfg(target_family = "windows")]
         {
             self.create_windows_control(
-                parent, id, label, "BUTTON", winapi::um::winuser::BS_GROUPBOX,
-                x, y, width, height,
+                parent,
+                id,
+                label,
+                "BUTTON",
+                winapi::um::winuser::BS_GROUPBOX,
+                x,
+                y,
+                width,
+                height,
             )
         }
     }
@@ -231,15 +281,24 @@ impl Swell {
     ) -> Option<root::HWND> {
         #[cfg(target_family = "unix")]
         {
-            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
             let hwnd = self.SWELL_MakeCombo(id, x, y, width, height, flags);
             return (!hwnd.is_null()).then_some(hwnd);
         }
         #[cfg(target_family = "windows")]
         {
             self.create_windows_control(
-                parent, id, std::ptr::null(), "COMBOBOX", winapi::um::winuser::CBS_DROPDOWNLIST | flags as u32,
-                x, y, width, height,
+                parent,
+                id,
+                std::ptr::null(),
+                "COMBOBOX",
+                winapi::um::winuser::CBS_DROPDOWNLIST | flags as u32,
+                x,
+                y,
+                width,
+                height,
             )
         }
     }
@@ -257,15 +316,24 @@ impl Swell {
     ) -> Option<root::HWND> {
         #[cfg(target_family = "unix")]
         {
-            self.SWELL_MakeSetCurParms(1.0, 1.0, 0.0, 0.0, parent, false, false);
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
             let hwnd = self.SWELL_MakeListBox(id, x, y, width, height, styles);
             return (!hwnd.is_null()).then_some(hwnd);
         }
         #[cfg(target_family = "windows")]
         {
             self.create_windows_control(
-                parent, id, std::ptr::null(), "LISTBOX", styles as u32,
-                x, y, width, height,
+                parent,
+                id,
+                std::ptr::null(),
+                "LISTBOX",
+                styles as u32,
+                x,
+                y,
+                width,
+                height,
             )
         }
     }
@@ -285,16 +353,25 @@ impl Swell {
     ) -> Option<root::HWND> {
         use std::iter::once;
         use winapi::um::winuser;
-        let class: Vec<u16> = class_name.encode_utf16().chain(once(0)).collect();
+        let class: Vec<u16> =
+            class_name.encode_utf16().chain(once(0)).collect();
         let text = if text.is_null() {
             Vec::new()
         } else {
-            std::ffi::CStr::from_ptr(text).to_string_lossy().encode_utf16().chain(once(0)).collect()
+            std::ffi::CStr::from_ptr(text)
+                .to_string_lossy()
+                .encode_utf16()
+                .chain(once(0))
+                .collect()
         };
         let hwnd = winuser::CreateWindowExW(
             0,
             class.as_ptr(),
-            if text.is_empty() { std::ptr::null() } else { text.as_ptr() },
+            if text.is_empty() {
+                std::ptr::null()
+            } else {
+                text.as_ptr()
+            },
             winuser::WS_CHILD | winuser::WS_VISIBLE | style,
             x,
             y,
