@@ -1,4 +1,6 @@
 use super::scroll::ScrollOffset;
+use super::layout::Point;
+use crate::keys::{KeyStroke, VKeys};
 use super::widgets::{ControlId, ControlKind};
 use super::windows::ReaperWindow;
 use rea_rs_low::raw;
@@ -140,6 +142,63 @@ pub enum EventResponse {
     ForwardToWindow,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+    X1,
+    X2,
+}
+
+bitflags::bitflags! {
+    #[derive(Default)]
+    pub struct MouseButtons: u16 {
+        const LEFT = 0x0001;
+        const RIGHT = 0x0002;
+        const SHIFT = 0x0004;
+        const CONTROL = 0x0008;
+        const MIDDLE = 0x0010;
+        const X1 = 0x0020;
+        const X2 = 0x0040;
+    }
+}
+
+impl MouseButtons {
+    pub const fn from_key_state(bits: u16) -> Self {
+        Self::from_bits_truncate(bits)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseMessage {
+    Move,
+    Down(MouseButton),
+    Up(MouseButton),
+    DoubleClick(MouseButton),
+    Wheel { horizontal: bool },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KeyMessage {
+    Down,
+    Up,
+    SystemDown,
+    SystemUp,
+}
+
+bitflags::bitflags! {
+    #[derive(Default)]
+    pub struct KeyModifiers: u8 {
+        const SHIFT = 0x01;
+        const CONTROL = 0x02;
+        const ALT = 0x04;
+        const META = 0x08;
+        const CAPS_LOCK = 0x10;
+        const NUM_LOCK = 0x20;
+    }
+}
+
 /// General window input/lifecycle event, independent of native controls.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WindowEvent {
@@ -148,30 +207,29 @@ pub enum WindowEvent {
         event: Box<WindowEvent>,
     },
     Mouse {
-        message: u32,
-        position: (i32, i32),
-        buttons: usize,
+        message: MouseMessage,
+        position: Point,
+        buttons: MouseButtons,
     },
     Wheel {
         horizontal: bool,
         delta: i32,
-        position: (i32, i32),
+        position: Point,
     },
     Key {
-        message: u32,
-        key: usize,
-        modifiers: usize,
+        message: KeyMessage,
+        key: NativeKey,
+        stroke: KeyStroke,
+        modifiers: KeyModifiers,
     },
     Text(char),
-    Gesture {
-        gesture: usize,
-        location: (i32, i32),
-    },
-    DropFiles {
-        point: (i32, i32),
-        count: u32,
-    },
     Focus(bool),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeKey {
+    Known(VKeys),
+    Other(u32),
 }
 
 /// Callback for general window/Canvas input events.

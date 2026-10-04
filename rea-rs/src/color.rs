@@ -11,6 +11,15 @@ pub struct Color {
     pub b: u8,
 }
 impl Color {
+    pub const BLACK: Self = Self { r: 0, g: 0, b: 0 };
+    pub const WHITE: Self = Self { r: 255, g: 255, b: 255 };
+    pub const RED: Self = Self { r: 255, g: 0, b: 0 };
+    pub const GREEN: Self = Self { r: 0, g: 128, b: 0 };
+    pub const BLUE: Self = Self { r: 0, g: 0, b: 255 };
+    pub const YELLOW: Self = Self { r: 255, g: 255, b: 0 };
+    pub const CYAN: Self = Self { r: 0, g: 255, b: 255 };
+    pub const MAGENTA: Self = Self { r: 255, g: 0, b: 255 };
+
     /// New color from r, g, b (0..255).
     pub fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
@@ -50,6 +59,7 @@ impl Color {
         low.ColorToNative(self.r as i32, self.g as i32, self.b as i32)
     }
 }
+
 impl Default for Color {
     fn default() -> Self {
         Self::new(0, 0, 0)

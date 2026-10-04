@@ -237,12 +237,15 @@ pub mod socket;
 
 pub mod swell_gui;
 pub use swell_gui::{
-    default_logfont, Brush, Button, Canvas, CheckBox, ComboBox,
+    default_logfont, Bitmap, Brush, Button, Canvas, CheckBox, ComboBox,
     CommandNotification, ContainerEvent, ContainerId, ControlEvent,
     ControlHandle, ControlId, ControlKind, ControlRect, DockPosition,
-    DrawTextOptions, EditField, EventResponse, Font, GroupBox, HdcSurface,
-    ImageList, LiceBitmap, LiceBitmapKind, LiceFont, LiceSurface, ListBox,
-    ListView, NativeContainer, PaintInfo, Pen, ProgressBar, RadioButton,
+    DrawTextFlags, DrawTextOptions, EditField, EventResponse, Font,
+    FontCharset, FontSpec, GroupBox, HdcSurface, Icon, ImageList,
+    ImageSize, KeyMessage, KeyModifiers, LiceBitmap, LiceBitmapKind,
+    LiceBlitOptions, LiceCombineMode, LiceFont, LiceSurface, LiceTextOptions,
+    ListViewImageListKind, ListBox, ListView, MouseButton, MouseButtons,
+    MouseMessage, NativeKey, NativeContainer, PaintInfo, Pen, PenStyle, ProgressBar, RadioButton,
     ReaperControl, ReaperWindow, ScrollCommand, ScrollMetrics, ScrollOffset,
     ScrollState, ScrollView, ScrollViewEvent, ScrollViewEventSource,
     ScrollbarRenderer, ScrollbarVisibility, StaticLabel, TabControl, Trackbar,

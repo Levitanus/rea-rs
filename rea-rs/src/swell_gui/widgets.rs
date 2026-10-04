@@ -295,6 +295,15 @@ typed_control!(TabControl, Tab);
 typed_control!(ListView, ListView);
 typed_control!(TreeView, TreeView);
 
+impl ListView {
+    pub fn from_control(control: ReaperControl) -> ReaperResult<Self> {
+        if control.kind() != ControlKind::ListView {
+            return Err(ReaRsError::InvalidObject("control is not a ListView"));
+        }
+        Ok(Self(control))
+    }
+}
+
 impl GroupBox {
     pub fn container(&self) -> NativeContainer {
         NativeContainer::from_control(self.control())

@@ -1,9 +1,10 @@
 use log::info;
 use rea_rs::{
-    swell_gui::layout::{WidgetFills, WidgetSize},
+    swell_gui::layout::{Point, WidgetFills, WidgetSize},
     ActionKind, Brush, Canvas, CheckBox, ComboBox, ControlEvent, ControlId,
-    EditField, EventResponse, ExtState, Font, ListBox, PaintInfo, Pen, Reaper,
-    ReaperWindow, WindowCommand, WindowHandler, WindowId, WindowSpec,
+    Color, DrawTextFlags, DrawTextOptions, EditField, EventResponse, ExtState,
+    Font, FontSpec, ListBox, PaintInfo, Pen, Reaper, ReaperWindow,
+    WindowCommand, WindowHandler, WindowId, WindowSpec,
 };
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
@@ -78,11 +79,9 @@ impl DemoWindow {
         )?;
         list.add_item("List item one")?;
         list.add_item("List item two")?;
-        let background = Brush::solid(0x00302018)?;
-        let border = Pen::solid(2, 0x00d09040)?;
-        let mut logfont = rea_rs::default_logfont();
-        logfont.lfHeight = 18;
-        let title_font = Font::from_logfont(logfont)?;
+        let background = Brush::solid(Color::new(24, 32, 48))?;
+        let border = Pen::solid(2, Color::new(64, 144, 208))?;
+        let title_font = Font::new(FontSpec::new("Arial").set_size(18))?;
 
         let canvas =
             ui.canvas(ControlId(CANVAS_ID), WidgetSize::new(280, 84))?;
@@ -238,9 +237,9 @@ impl WindowHandler for DemoWindow {
             "Retained SWELL drawing",
             rea_rs::swell_gui::layout::Rect::new(24, 16, 380, 32),
             &self.title_font,
-            rea_rs::DrawTextOptions { alignment: 0 },
+            DrawTextOptions::new(DrawTextFlags::LEFT | DrawTextFlags::TOP),
         );
-        surface.line((18, 52), (620, 52), &self.border);
+        surface.line(Point { x: 18, y: 52 }, Point { x: 620, y: 52 }, &self.border);
     }
 
     fn render_widget(

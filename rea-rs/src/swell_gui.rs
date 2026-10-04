@@ -11,12 +11,16 @@ pub mod windows;
 use rea_rs_low::raw;
 
 pub use drawing::{
-    default_logfont, Brush, DrawTextOptions, Font, HdcSurface, ImageList,
-    LiceBitmap, LiceBitmapKind, LiceFont, LiceSurface, PaintInfo, Pen,
+    default_logfont, Bitmap, Brush, DrawTextFlags, DrawTextOptions, Font,
+    FontCharset, FontSpec, HdcSurface, Icon, ImageList, ImageSize,
+    LiceBitmap, LiceBitmapKind, LiceBlitOptions, LiceCombineMode, LiceFont,
+    LiceSurface, LiceTextOptions, ListViewImageListKind, PaintInfo, Pen,
+    PenStyle,
 };
 pub use events::{
     CommandNotification, ContainerEvent, ControlEvent, EventResponse,
-    ScrollViewEvent, ScrollViewEventSource, WidgetEventCallback,
+    KeyMessage, KeyModifiers, MouseButton, MouseButtons, MouseMessage,
+    NativeKey, ScrollViewEvent, ScrollViewEventSource, WidgetEventCallback,
     WindowCommand, WindowEvent, WindowEventCallback,
 };
 pub use scroll::{
@@ -97,19 +101,28 @@ mod tests {
     #[test]
     fn general_window_events_preserve_native_input_payloads() {
         let event = WindowEvent::Mouse {
-            message: raw::WM_LBUTTONDOWN,
-            position: (13, 24),
-            buttons: 1,
+            message: events::MouseMessage::Down(events::MouseButton::Left),
+            position: layout::Point { x: 13, y: 24 },
+            buttons: events::MouseButtons::LEFT,
         };
         assert!(matches!(
             event,
             WindowEvent::Mouse {
-                position: (13, 24),
+                position: layout::Point { x: 13, y: 24 },
                 ..
             }
         ));
         assert!(matches!(WindowEvent::Text('x'), WindowEvent::Text('x')));
         assert!(matches!(WindowEvent::Focus(true), WindowEvent::Focus(true)));
+    }
+
+    #[test]
+    fn drawing_options_are_semantic_and_default_to_left_top() {
+        assert!(DrawTextOptions::default()
+            .alignment
+            .contains(DrawTextFlags::LEFT | DrawTextFlags::TOP));
+        assert_eq!(LiceBlitOptions::default().mode, LiceCombineMode::Copy);
+        assert_eq!(ImageSize::new(32, 16).width, 32);
     }
 }
 

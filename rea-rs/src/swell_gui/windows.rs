@@ -12,7 +12,8 @@ use super::{
     },
 };
 use crate::{
-    ptr_wrappers::Hwnd, swell_gui::widgets::CreationContext, ReaRsError,
+    keys::VKeys, ptr_wrappers::Hwnd, swell_gui::widgets::CreationContext,
+    IntEnum, ReaRsError,
     Reaper, ReaperResult,
 };
 use rea_rs_low::raw;
@@ -483,15 +484,38 @@ impl ReaperWindow {
     }
 
     pub(super) fn reset_ui(&self) {
+        let scroll_views: Vec<_> = self
+            .scroll_views
+            .borrow()
+            .iter()
+            .map(|(view, runtime)| (*view as raw::HWND, runtime.renderer))
+            .collect();
+        let controls: Vec<_> = self
+            .controls
+            .borrow()
+            .ids()
+            .filter_map(|id| self.control(id))
+            .collect();
+        let structural: Vec<_> = self
+            .layout
+            .borrow()
+            .structural
+            .iter()
+            .map(|(id, hwnd)| (*id, *hwnd))
+            .collect();
         if Reaper::is_available() {
             let reaper = Reaper::get();
-            let mut hwnds: Vec<_> = self
-                .controls
-                .borrow()
-                .ids()
-                .filter_map(|id| self.control(id).map(|control| control.hwnd))
-                .collect();
-            hwnds.extend(self.layout.borrow().structural.values().copied());
+            for (view, renderer) in scroll_views {
+                if renderer == ScrollbarRenderer::CoolSb
+                    && reaper.low().supports_cool_scrollbars()
+                    && !view.is_null()
+                    && unsafe { reaper.swell().IsWindow(view) }
+                {
+                    unsafe { let _ = reaper.low().UninitializeCoolSB(view); }
+                }
+            }
+            let mut hwnds: Vec<_> = controls.iter().map(|control| control.hwnd).collect();
+            hwnds.extend(structural.iter().map(|(_, hwnd)| *hwnd));
             for runtime in self.scroll_views.borrow().values() {
                 if runtime.content != self.hwnd() {
                     hwnds.push(runtime.content);
@@ -506,6 +530,12 @@ impl ReaperWindow {
                     }
                 }
             }
+        }
+        for control in controls {
+            self.unregister_control(control.id);
+        }
+        for (id, _) in structural {
+            self.layout.borrow_mut().structural.remove(&id);
         }
         self.clear_controls();
     }
@@ -870,7 +900,6 @@ impl ReaperWindow {
         self.controls.borrow_mut().rebind(id, hwnd)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn unregister_control(
         &self,
         id: ControlId,
@@ -1083,53 +1112,91 @@ unsafe fn call_proc(
 }
 
 fn decode_window_event(
+    hwnd: raw::HWND,
     msg: raw::UINT,
     wparam: raw::WPARAM,
     lparam: raw::LPARAM,
 ) -> Option<super::events::WindowEvent> {
-    use super::events::WindowEvent;
-    let point = (
-        lparam as u32 as u16 as i16 as i32,
-        (lparam as u32 >> 16) as u16 as i16 as i32,
-    );
+    use super::events::{
+        KeyMessage, KeyModifiers, MouseButton, MouseButtons, MouseMessage,
+        NativeKey, WindowEvent,
+    };
+    let point = super::layout::Point {
+        x: ((lparam as u32) as u16 as i16 as i32).max(0) as u32,
+        y: ((lparam as u32 >> 16) as u16 as i16 as i32).max(0) as u32,
+    };
+    let mouse_buttons = MouseButtons::from_bits_truncate(wparam as u16);
     match msg {
-        raw::WM_MOUSEMOVE
-        | raw::WM_LBUTTONDOWN
-        | raw::WM_LBUTTONUP
-        | raw::WM_LBUTTONDBLCLK
-        | raw::WM_RBUTTONDOWN
-        | raw::WM_RBUTTONUP
-        | raw::WM_RBUTTONDBLCLK
-        | raw::WM_MBUTTONDOWN
-        | raw::WM_MBUTTONUP
-        | raw::WM_MBUTTONDBLCLK => Some(WindowEvent::Mouse {
-            message: msg,
+        raw::WM_MOUSEMOVE => Some(WindowEvent::Mouse {
+            message: MouseMessage::Move,
             position: point,
-            buttons: wparam,
+            buttons: mouse_buttons,
         }),
-        raw::WM_MOUSEWHEEL | raw::WM_MOUSEHWHEEL => Some(WindowEvent::Wheel {
-            horizontal: msg == raw::WM_MOUSEHWHEEL,
-            delta: ((wparam >> 16) & 0xffff) as i16 as i32,
-            position: point,
-        }),
-        raw::WM_KEYDOWN
-        | raw::WM_KEYUP
-        | raw::WM_SYSKEYDOWN
-        | raw::WM_SYSKEYUP => Some(WindowEvent::Key {
-            message: msg,
-            key: wparam,
-            modifiers: 0,
-        }),
+        raw::WM_LBUTTONDOWN | raw::WM_RBUTTONDOWN | raw::WM_MBUTTONDOWN
+        | 0x020B => {
+            let button = match msg {
+                raw::WM_LBUTTONDOWN => MouseButton::Left,
+                raw::WM_RBUTTONDOWN => MouseButton::Right,
+                raw::WM_MBUTTONDOWN => MouseButton::Middle,
+                _ if (wparam >> 16) as u16 == 1 => MouseButton::X1,
+                _ => MouseButton::X2,
+            };
+            Some(WindowEvent::Mouse { message: MouseMessage::Down(button), position: point, buttons: mouse_buttons })
+        }
+        raw::WM_LBUTTONUP | raw::WM_RBUTTONUP | raw::WM_MBUTTONUP | 0x020C => {
+            let button = match msg {
+                raw::WM_LBUTTONUP => MouseButton::Left,
+                raw::WM_RBUTTONUP => MouseButton::Right,
+                raw::WM_MBUTTONUP => MouseButton::Middle,
+                _ if (wparam >> 16) as u16 == 1 => MouseButton::X1,
+                _ => MouseButton::X2,
+            };
+            Some(WindowEvent::Mouse { message: MouseMessage::Up(button), position: point, buttons: mouse_buttons })
+        }
+        raw::WM_LBUTTONDBLCLK | raw::WM_RBUTTONDBLCLK | raw::WM_MBUTTONDBLCLK
+        | 0x020D => {
+            let button = match msg {
+                raw::WM_LBUTTONDBLCLK => MouseButton::Left,
+                raw::WM_RBUTTONDBLCLK => MouseButton::Right,
+                raw::WM_MBUTTONDBLCLK => MouseButton::Middle,
+                _ if (wparam >> 16) as u16 == 1 => MouseButton::X1,
+                _ => MouseButton::X2,
+            };
+            Some(WindowEvent::Mouse { message: MouseMessage::DoubleClick(button), position: point, buttons: mouse_buttons })
+        }
+        raw::WM_MOUSEWHEEL | raw::WM_MOUSEHWHEEL => {
+            let mut screen_point = raw::POINT {
+                x: ((lparam as u32) as u16 as i16) as i32,
+                y: ((lparam as u32 >> 16) as u16 as i16) as i32,
+            };
+            unsafe { Reaper::get().swell().ScreenToClient(hwnd, &mut screen_point) };
+            Some(WindowEvent::Wheel {
+                horizontal: msg == raw::WM_MOUSEHWHEEL,
+                delta: ((wparam >> 16) & 0xffff) as i16 as i32,
+                position: screen_point.into(),
+            })
+        }
+        raw::WM_KEYDOWN | raw::WM_KEYUP | raw::WM_SYSKEYDOWN | raw::WM_SYSKEYUP => {
+            let key = wparam as u32;
+            Some(WindowEvent::Key {
+                message: match msg {
+                    raw::WM_KEYDOWN => KeyMessage::Down,
+                    raw::WM_KEYUP => KeyMessage::Up,
+                    raw::WM_SYSKEYDOWN => KeyMessage::SystemDown,
+                    _ => KeyMessage::SystemUp,
+                },
+                key: VKeys::from_int(key)
+                    .map(NativeKey::Known)
+                    .unwrap_or(NativeKey::Other(key)),
+                stroke: (lparam as isize).into(),
+                modifiers: if matches!(msg, raw::WM_SYSKEYDOWN | raw::WM_SYSKEYUP) { KeyModifiers::ALT } else { KeyModifiers::empty() },
+            })
+        }
         raw::WM_CHAR | raw::WM_SYSCHAR => {
             char::from_u32(wparam as u32).map(WindowEvent::Text)
         }
         raw::WM_SETFOCUS => Some(WindowEvent::Focus(true)),
         raw::WM_KILLFOCUS => Some(WindowEvent::Focus(false)),
-        raw::WM_DROPFILES => Some(WindowEvent::DropFiles { point, count: 0 }),
-        raw::WM_GESTURE => Some(WindowEvent::Gesture {
-            gesture: wparam,
-            location: point,
-        }),
         _ => None,
     }
 }
@@ -1238,7 +1305,7 @@ pub(crate) unsafe extern "C" fn window_proc(
             return result;
         }
         if host_message_enabled {
-            let event = decode_window_event(msg, wparam, lparam);
+            let event = decode_window_event(hwnd, msg, wparam, lparam);
             if let Some(event) = event {
                 if Reaper::get_mut()
                     .windows
@@ -1251,7 +1318,7 @@ pub(crate) unsafe extern "C" fn window_proc(
         }
         return call_saved_host_proc(hwnd, msg, wparam, lparam).unwrap_or(0);
     }
-    if let Some(event) = decode_window_event(msg, wparam, lparam) {
+    if let Some(event) = decode_window_event(hwnd, msg, wparam, lparam) {
         let widget_id = Reaper::get().windows.get(&key).and_then(|handler| {
             handler
                 .window()
