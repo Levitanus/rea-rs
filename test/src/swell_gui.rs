@@ -1,8 +1,9 @@
 use log::info;
 use rea_rs::{
-    swell_gui::layout::WidgetSize, ActionKind, Button, CheckBox, ComboBox,
-    ControlEvent, ControlId, EditField, EventResponse, ExtState, ListBox,
-    Reaper, ReaperWindow, WindowCommand, WindowHandler, WindowId, WindowSpec,
+    swell_gui::layout::{WidgetFills, WidgetSize},
+    ActionKind, Button, CheckBox, ComboBox, ControlEvent, ControlId,
+    EditField, EventResponse, ExtState, ListBox, Reaper, ReaperWindow,
+    WindowCommand, WindowHandler, WindowId, WindowSpec,
 };
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
@@ -31,7 +32,7 @@ impl DemoWindow {
         let ui = ui.scroll_view(
             ControlId::new(),
             WidgetSize::new_fill_both(width, height),
-            rea_rs::ScrollbarRenderer::Native,
+            rea_rs::ScrollbarRenderer::CoolSb,
         )?;
         let dock_state = ui.checkbox(
             ControlId(DOCK_STATE_ID),
@@ -53,8 +54,14 @@ impl DemoWindow {
             "Click me",
             WidgetSize::new(120, 28),
         )?;
-        let edit =
-            ui.edit_field(ControlId(EDIT_ID), WidgetSize::new(210, 28), 0)?;
+        let edit = ui.edit_field(
+            ControlId(EDIT_ID),
+            WidgetSize::new(
+                210,
+                28,
+            ),
+            0,
+        )?;
         let checkbox = ui.checkbox(
             ControlId(CHECKBOX_ID),
             "Example checkbox",
@@ -68,7 +75,8 @@ impl DemoWindow {
             ControlId(LIST_ID),
             WidgetSize::new_fill_both(350, 55)
                 .set_min_x(180)
-                .set_min_y(40),
+                .set_min_y(40)
+                .set_fill_x(WidgetFills::FillPortion(2)),
             0,
         )?;
         list.add_item("List item one")?;

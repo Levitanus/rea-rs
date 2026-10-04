@@ -122,8 +122,16 @@ impl Insets {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WidgetFills {
+    /// Keep the preferred size on this axis; do not distribute fill space.
+    Fixed,
     Fill,
     FillPortion(u32),
+}
+
+impl WidgetFills {
+    const fn participates_in_fill(self) -> bool {
+        !matches!(self, Self::Fixed)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -662,13 +670,16 @@ fn cross_size(item: WidgetSize, axis: Axis, available: u32) -> u32 {
         item.fill_y()
     };
     match fills {
-        Some(_) if maximum != u32::MAX => available.max(minimum).min(maximum),
-        // An unconstrained cross-axis fill keeps its preferred size. Fill
-        // means stretch within an explicit bound; without one, growing a
-        // control to the entire lane would make max-independent layouts
-        // unexpectedly taller/wider.
-        Some(_) => preferred.max(minimum),
-        None => preferred,
+        Some(WidgetFills::Fixed) | None => preferred,
+        Some(_) if maximum != u32::MAX => {
+            available.max(minimum).min(maximum)
+        }
+        // Horizontal cross-axis fill tracks the parent width, which is
+        // important for fill-sized containers in vertical flows. Vertical
+        // cross-axis fill keeps its preferred size unless constrained, so
+        // row controls do not unexpectedly stretch taller.
+        Some(_) if cross_axis == Axis::X => available.max(minimum),
+        Some(_) => preferred.min(available).max(minimum),
     }
 }
 fn distribute_primary(
@@ -705,9 +716,13 @@ fn distribute_primary(
             } else {
                 item.size.fill_y()
             }?;
+            if !fill.participates_in_fill() {
+                return None;
+            }
             Some((
                 index,
                 match fill {
+                    WidgetFills::Fixed => unreachable!(),
                     WidgetFills::Fill => 1,
                     WidgetFills::FillPortion(portion) => portion.max(1),
                 },
@@ -771,8 +786,14 @@ pub fn layout_flow(
         );
         let next_fill_item = items.get(index + 1).map_or(false, |next| {
             axis == Axis::Y
-                && next.size.fill_y().is_some()
-                && item.size.fill_y().is_none()
+                && next
+                    .size
+                    .fill_y()
+                    .is_some_and(WidgetFills::participates_in_fill)
+                && !item
+                    .size
+                    .fill_y()
+                    .is_some_and(WidgetFills::participates_in_fill)
         });
         let next_primary = sizes.get(index + 1).copied().unwrap_or(0);
         let would_leave_fill_item_out = next_fill_item
@@ -798,11 +819,18 @@ pub fn layout_flow(
             item_cross =
                 cross_size(item.size, axis, cross_limit.saturating_sub(cross));
         }
-        if axis == Axis::Y && item.size.fill_y().is_some() {
+        if axis == Axis::Y
+            && item
+                .size
+                .fill_y()
+                .is_some_and(WidgetFills::participates_in_fill)
+        {
             item_primary =
                 item_primary.max(axis_value(item.size.minimum(), axis));
-            item_primary =
-                item_primary.min(primary_limit.saturating_sub(primary));
+            if policy != OverflowPolicy::Scroll {
+                item_primary =
+                    item_primary.min(primary_limit.saturating_sub(primary));
+            }
         }
         let cross_end = cross.saturating_add(item_cross);
         let primary_end = primary.saturating_add(item_primary);
@@ -1211,6 +1239,95 @@ mod tests {
 
         assert_eq!(output.placements[0].rect, Rect::new(0, 0, 30, 10));
         assert!(!output.overflow_x);
+    }
+
+    #[test]
+    fn unconstrained_cross_axis_fill_tracks_available_space() {
+        let output = layout_flow(
+            Rect::new(0, 0, 912, 200),
+            Axis::Y,
+            &[LayoutItem {
+                size: WidgetSize::new_fill_both(640, 180),
+            }],
+            0,
+            OverflowPolicy::WrapScroll,
+        );
+
+        assert_eq!(output.placements[0].rect, Rect::new(0, 0, 912, 200));
+    }
+
+    #[test]
+    fn unconstrained_cross_axis_fill_shrinks_to_available_space() {
+        let output = layout_flow(
+            Rect::new(0, 0, 600, 200),
+            Axis::Y,
+            &[LayoutItem {
+                size: WidgetSize::new_fill_both(640, 180),
+            }],
+            0,
+            OverflowPolicy::WrapScroll,
+        );
+
+        assert_eq!(output.placements[0].rect, Rect::new(0, 0, 600, 200));
+    }
+
+    #[test]
+    fn scroll_flow_preserves_minimum_for_fill_item_past_viewport() {
+        let fixed = |width, height| LayoutItem {
+            size: WidgetSize::fixed(width, height),
+        };
+        let list = LayoutItem {
+            size: WidgetSize::new_fill_both(350, 55)
+                .set_min_x(180)
+                .set_min_y(40),
+        };
+        let output = layout_flow(
+            Rect::new(0, 0, 140, 142),
+            Axis::Y,
+            &[
+                fixed(120, 28),
+                fixed(210, 28),
+                fixed(180, 24),
+                fixed(160, 28),
+                list,
+            ],
+            8,
+            OverflowPolicy::Scroll,
+        );
+
+        let list = output.placements.last().unwrap().rect;
+        assert!(list.height >= 40);
+        assert!(output.content_extent.y >= list.y + list.height);
+        assert!(output.content_extent.x > 140);
+    }
+
+    #[test]
+    fn fixed_fill_axis_does_not_consume_list_height() {
+        let output = layout_flow(
+            Rect::new(0, 0, 300, 180),
+            Axis::Y,
+            &[
+                LayoutItem {
+                    size: WidgetSize::new_flex(
+                        210,
+                        28,
+                        WidgetFills::Fill,
+                        WidgetFills::Fixed,
+                    ),
+                },
+                LayoutItem {
+                    size: WidgetSize::new_fill_both(350, 55)
+                        .set_min_x(180)
+                        .set_min_y(40),
+                },
+            ],
+            8,
+            OverflowPolicy::Scroll,
+        );
+
+        assert_eq!(output.placements[0].rect, Rect::new(0, 0, 300, 28));
+        assert!(output.placements[1].rect.height >= 40);
+        assert_eq!(output.placements[1].rect.y, 36);
     }
 
     #[test]

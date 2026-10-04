@@ -317,7 +317,7 @@ impl<'a> CreationContext<'a> {
             entries: Vec::new(), axis: Axis::Y, spacing: 8, policy: OverflowPolicy::WrapScroll,
         });
         self.window.scroll_views.borrow_mut().insert(view as usize, ScrollViewRuntime {
-            id, content, state: Rc::new(RefCell::new(ScrollState::new())),
+            id, content, state: Rc::new(RefCell::new(ScrollState::new())), renderer,
         });
         Ok(CreationContext {
             window: self.window,
@@ -354,6 +354,7 @@ struct ScrollViewRuntime {
     id: ControlId,
     content: raw::HWND,
     state: Rc<RefCell<ScrollState>>,
+    renderer: ScrollbarRenderer,
 }
 
 const SCROLLBAR_THICKNESS: u32 = 16;
@@ -402,6 +403,31 @@ impl<'a> ScrollView<'a> {
     pub fn set_viewport_size(&self, size: super::layout::Size) {
         let mut state = self.state.borrow_mut();
         *state = state.set_viewport(size);
+        self.sync_scrollbars();
+    }
+
+    fn set_layout_sizes(
+        &self,
+        viewport: super::layout::Size,
+        content: super::layout::Size,
+    ) {
+        let state = {
+            let mut state = self.state.borrow_mut();
+            *state = state.set_viewport(viewport).set_content(content);
+            *state
+        };
+        let offset = state.offset();
+        unsafe {
+            let _ = Reaper::get().swell().SetWindowPos(
+                self.content,
+                std::ptr::null_mut(),
+                -(offset.x.min(i32::MAX as u32) as i32),
+                -(offset.y.min(i32::MAX as u32) as i32),
+                content.x.max(1).min(i32::MAX as u32) as i32,
+                content.y.max(1).min(i32::MAX as u32) as i32,
+                (raw::SWP_NOZORDER | raw::SWP_NOACTIVATE) as i32,
+            );
+        }
         self.sync_scrollbars();
     }
 
@@ -562,7 +588,8 @@ impl ReaperWindow {
         &self,
         bounds: Rect,
         node: &LayoutNode,
-    ) -> ReaperResult<Vec<Rect>> {
+        policy: OverflowPolicy,
+    ) -> ReaperResult<LayoutOutput> {
         let items: Vec<_> = node
             .entries
             .iter()
@@ -573,7 +600,7 @@ impl ReaperWindow {
             node.axis,
             &items,
             node.spacing,
-            node.policy,
+            policy,
         );
         for placement in &output.placements {
             if let Some(entry) = node.entries.get(placement.index) {
@@ -601,11 +628,119 @@ impl ReaperWindow {
                 }
             }
         }
-        Ok(output
-            .placements
-            .into_iter()
-            .map(|placement| placement.rect)
-            .collect())
+        Ok(output)
+    }
+
+    fn apply_container_layout(
+        &self,
+        id: ControlId,
+        rect: Rect,
+        layout: &WindowLayout,
+        parent_wraps: bool,
+    ) -> ReaperResult<super::layout::Size> {
+        let Some(node) = layout.groups.get(&id) else {
+            return Ok(rect.size());
+        };
+        let scroll_view = layout.structural.get(&id).copied();
+        let wraps = if scroll_view.is_some() {
+            rect.width > rect.height
+        } else {
+            parent_wraps
+        };
+        let policy = if wraps {
+            if scroll_view.is_some() {
+                OverflowPolicy::WrapScroll
+            } else {
+                OverflowPolicy::Wrap
+            }
+        } else {
+            OverflowPolicy::Scroll
+        };
+        let bounds = if scroll_view.is_some() {
+            Rect::new(0, 0, rect.width, rect.height)
+        } else {
+            Rect::new(
+                15,
+                28,
+                rect.width.saturating_sub(30),
+                rect.height.saturating_sub(38),
+            )
+        };
+        // A ScrollView wraps against its viewport; nested containers may
+        // extend farther than their declared size, so their extents are
+        // included below when sizing the scrolling content window.
+        let output = self.apply_layout_node(bounds, node, policy)?;
+        let mut content_extent = super::layout::Size {
+            x: output.content_extent.x.max(bounds.width),
+            y: output.content_extent.y.max(bounds.height),
+        };
+        for placement in output.placements {
+            let Some(entry) = node.entries.get(placement.index) else {
+                continue;
+            };
+            if layout.groups.contains_key(&entry.id) {
+                let child_size = self.apply_container_layout(
+                    entry.id,
+                    placement.rect,
+                    layout,
+                    wraps,
+                )?;
+                content_extent.x = content_extent
+                    .x
+                    .max(placement.rect.x.saturating_add(child_size.x));
+                content_extent.y = content_extent
+                    .y
+                    .max(placement.rect.y.saturating_add(child_size.y));
+            }
+        }
+        if let Some(view) = scroll_view {
+            if let Some((runtime_id, content_hwnd, state, renderer)) = self
+                .scroll_views
+                .borrow()
+                .get(&(view as usize))
+                .map(|runtime| {
+                    (
+                        runtime.id,
+                        runtime.content,
+                        Rc::clone(&runtime.state),
+                        runtime.renderer,
+                    )
+                })
+            {
+                ScrollView {
+                    window: self,
+                    id: runtime_id,
+                    view,
+                    content: content_hwnd,
+                    state,
+                    renderer,
+                }
+                .set_layout_sizes(bounds.size(), content_extent);
+            }
+            Ok(content_extent)
+        } else {
+            // GroupBox child HWNDs clip their descendants, so expand the
+            // native group to contain wrapped child lanes. Its parent (the
+            // ScrollView) then incorporates this size into its scroll range.
+            let required = super::layout::Size {
+                x: content_extent.x.saturating_add(30),
+                y: content_extent.y.saturating_add(38),
+            };
+            if required.x > rect.width || required.y > rect.height {
+                if let Some(control) = self.control(id) {
+                    ReaperControl::new(control).set_rect(ControlRect::new(
+                        rect.x as i32,
+                        rect.y as i32,
+                        required.x.max(rect.width).min(i32::MAX as u32) as i32,
+                        required.y.max(rect.height).min(i32::MAX as u32) as i32,
+                    ))?;
+                }
+            }
+            Ok(super::layout::Size {
+                x: required.x.max(rect.width),
+                y: required.y.max(rect.height),
+            })
+        }
     }
 
     pub(super) fn create_structural_child(
@@ -634,6 +769,7 @@ impl ReaperWindow {
                 rect.height,
                 raw::SWP_NOZORDER as i32,
             );
+            Self::swell()?.ShowWindow(hwnd, raw::SW_SHOW);
         }
         Ok(hwnd)
     }
@@ -666,21 +802,16 @@ impl ReaperWindow {
             spacing: layout.root.spacing,
             policy: layout.root.policy,
         };
-        let root_placements = self.apply_layout_node(bounds, &root)?;
-        for (index, entry) in root.entries.iter().enumerate() {
-            let Some(group) = layout.groups.get(&entry.id) else {
-                continue;
-            };
-            let Some(group_rect) = root_placements.get(index).copied() else {
-                continue;
-            };
-            let content = Rect::new(
-                15,
-                28,
-                group_rect.width.saturating_sub(30),
-                group_rect.height.saturating_sub(38),
-            );
-            self.apply_layout_node(content, group)?;
+        let output = self.apply_layout_node(bounds, &root, root.policy)?;
+        for placement in output.placements {
+            if let Some(entry) = root.entries.get(placement.index) {
+                self.apply_container_layout(
+                    entry.id,
+                    placement.rect,
+                    &layout,
+                    false,
+                )?;
+            }
         }
         Ok(())
     }
@@ -1125,23 +1256,18 @@ pub(crate) unsafe extern "C" fn window_proc(
         return 0;
     }
     let reaper = Reaper::get_mut();
-    let key = reaper.window_id_for_hwnd(hwnd).or_else(|| {
-        // Child controls send WM_COMMAND to their immediate native parent.
-        // A GroupBox is itself a native child, so commands from controls
-        // inside it do not reach the top-level window procedure directly.
-        // Walk the parent chain and route such messages to the owning window.
-        if msg != raw::WM_COMMAND {
-            return None;
+    // Structural ScrollView HWNDs use this procedure too. Resolve their
+    // owner through the parent chain so scroll, resize and command messages
+    // are associated with the correct registered window.
+    let mut current = hwnd;
+    let mut key = None;
+    while !current.is_null() {
+        if let Some(owner) = reaper.window_id_for_hwnd(current) {
+            key = Some(owner);
+            break;
         }
-        let mut parent = Reaper::get().swell().GetParent(hwnd);
-        while !parent.is_null() {
-            if let Some(key) = reaper.window_id_for_hwnd(parent) {
-                return Some(key);
-            }
-            parent = Reaper::get().swell().GetParent(parent);
-        }
-        None
-    });
+        current = reaper.swell().GetParent(current);
+    }
     let Some(key) = key else {
         log::warn!("window message for unregistered HWND {:p}", hwnd);
         return Reaper::get()
@@ -1152,6 +1278,16 @@ pub(crate) unsafe extern "C" fn window_proc(
     let swell = reaper.swell() as *const rea_rs_low::Swell;
     match msg {
         raw::WM_CLOSE => {
+            let is_top_level = reaper
+                .windows
+                .get(&key)
+                .is_some_and(|handler| handler.window().hwnd() == hwnd);
+            if !is_top_level {
+                return reaper
+                    .swell()
+                    .DefWindowProc(hwnd, msg, wparam, lparam)
+                    as raw::INT_PTR;
+            }
             let allow = reaper
                 .windows
                 .get_mut(&key)
@@ -1165,6 +1301,16 @@ pub(crate) unsafe extern "C" fn window_proc(
             1
         }
         raw::WM_DESTROY => {
+            let is_top_level = reaper
+                .windows
+                .get(&key)
+                .is_some_and(|handler| handler.window().hwnd() == hwnd);
+            if !is_top_level {
+                return reaper
+                    .swell()
+                    .DefWindowProc(hwnd, msg, wparam, lparam)
+                    as raw::INT_PTR;
+            }
             if let Some(low) =
                 Reaper::is_available().then(|| Reaper::get().low())
             {
@@ -1392,6 +1538,16 @@ pub(crate) unsafe extern "C" fn window_proc(
             0
         }
         raw::WM_SIZE => {
+            let is_top_level = reaper
+                .windows
+                .get(&key)
+                .is_some_and(|handler| handler.window().hwnd() == hwnd);
+            if !is_top_level {
+                return reaper
+                    .swell()
+                    .DefWindowProc(hwnd, msg, wparam, lparam)
+                    as raw::INT_PTR;
+            }
             let mut rect = std::mem::zeroed();
             Reaper::get().swell().GetClientRect(hwnd, &mut rect);
             let Some(handler) = reaper.windows.get_mut(&key) else {
