@@ -12,7 +12,6 @@ const DOCK_STATE_KEY: &str = "rea_rs_widget_gallery.dock";
 struct DemoWindow {
     window: ReaperWindow,
     dock_state: CheckBox,
-    button: Button,
     edit: EditField,
     checkbox: CheckBox,
     combo: ComboBox,
@@ -54,14 +53,8 @@ impl DemoWindow {
             "Click me",
             WidgetSize::new(120, 28),
         )?;
-        let edit = ui.edit_field(
-            ControlId(EDIT_ID),
-            WidgetSize::new(
-                210,
-                28,
-            ),
-            0,
-        )?;
+        let edit =
+            ui.edit_field(ControlId(EDIT_ID), WidgetSize::new(210, 28), 0)?;
         let checkbox = ui.checkbox(
             ControlId(CHECKBOX_ID),
             "Example checkbox",
@@ -132,12 +125,10 @@ impl DemoWindow {
                 true,
             )?;
         }
-        button.enable(true)?;
 
         Ok(Self {
             window,
             dock_state,
-            button,
             edit,
             checkbox,
             combo,

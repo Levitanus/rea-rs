@@ -1,8 +1,15 @@
-use super::ReaperWindow;
 use super::layout::WidgetSize;
-use crate::{ReaRsError, ReaperResult};
+use super::ReaperWindow;
+use crate::{
+    swell_gui::{
+        layout::{Axis, OverflowPolicy, Panel},
+        windows::{LayoutNode, ScrollViewRuntime},
+    },
+    ReaRsError, Reaper, ReaperResult, ScrollState, ScrollViewEvent,
+    ScrollbarRenderer,
+};
 use rea_rs_low::raw;
-use std::{collections::HashMap, ffi::CString};
+use std::{cell::RefCell, collections::HashMap, ffi::CString, rc::Rc};
 
 /// Native control ID assigned to a child window.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -445,5 +452,439 @@ impl ControlRegistry {
         for id in ids {
             let _ = self.unregister(id);
         }
+    }
+}
+
+/// Synchronous widget factory passed to [`ReaperWindow::build_ui`].
+///
+/// The root context is deliberately just a creation surface over the window;
+/// it does not create an implicit panel.  Layout panels are available through
+/// the opt-in helper methods below.
+pub struct CreationContext<'a> {
+    window: &'a ReaperWindow,
+    parent: raw::HWND,
+    container: Option<ControlId>,
+}
+
+impl<'a> CreationContext<'a> {
+    pub(super) fn new(window: &'a ReaperWindow) -> Self {
+        Self {
+            window,
+            parent: window.hwnd(),
+            container: None,
+        }
+    }
+
+    fn size(&self, size: WidgetSize) -> ControlRect {
+        size.into()
+    }
+
+    pub fn button(
+        &self,
+        id: ControlId,
+        label: &str,
+        size: WidgetSize,
+    ) -> anyhow::Result<Button> {
+        let control = self.window.create_button_in(
+            self.parent,
+            id,
+            label,
+            self.size(size),
+        )?;
+        self.window.register_layout_entry(self.container, id, size);
+        Ok(control)
+    }
+
+    pub fn edit_field(
+        &self,
+        id: ControlId,
+        size: WidgetSize,
+        flags: i32,
+    ) -> anyhow::Result<EditField> {
+        let control = self.window.create_edit_field_in(
+            self.parent,
+            id,
+            self.size(size),
+            flags,
+        )?;
+        self.window.register_layout_entry(self.container, id, size);
+        Ok(control)
+    }
+
+    pub fn label(
+        &self,
+        id: ControlId,
+        label: &str,
+        size: WidgetSize,
+    ) -> anyhow::Result<StaticLabel> {
+        let control = self.window.create_label_in(
+            self.parent,
+            id,
+            label,
+            self.size(size),
+        )?;
+        self.window.register_layout_entry(self.container, id, size);
+        Ok(control)
+    }
+
+    pub fn checkbox(
+        &self,
+        id: ControlId,
+        label: &str,
+        size: WidgetSize,
+    ) -> anyhow::Result<CheckBox> {
+        let control = self.window.create_checkbox_in(
+            self.parent,
+            id,
+            label,
+            self.size(size),
+        )?;
+        self.window.register_layout_entry(self.container, id, size);
+        Ok(control)
+    }
+
+    pub fn combo_box(
+        &self,
+        id: ControlId,
+        size: WidgetSize,
+        flags: i32,
+    ) -> anyhow::Result<ComboBox> {
+        let control = self.window.create_combo_box_in(
+            self.parent,
+            id,
+            self.size(size),
+            flags,
+        )?;
+        self.window.register_layout_entry(self.container, id, size);
+        Ok(control)
+    }
+
+    pub fn list_box(
+        &self,
+        id: ControlId,
+        size: WidgetSize,
+        styles: i32,
+    ) -> anyhow::Result<ListBox> {
+        let control = self.window.create_list_box_in(
+            self.parent,
+            id,
+            self.size(size),
+            styles,
+        )?;
+        self.window.register_layout_entry(self.container, id, size);
+        Ok(control)
+    }
+
+    /// Uses the existing declarative flow layout as an opt-in container.
+    pub fn panel(&self, _panel: Panel) -> CreationContext<'a> {
+        CreationContext {
+            window: self.window,
+            parent: self.parent,
+            container: self.container,
+        }
+    }
+
+    pub fn central_panel(&self) -> CreationContext<'a> {
+        self.panel(Panel::Central)
+    }
+
+    pub fn group_box(
+        &self,
+        id: ControlId,
+        label: &str,
+        size: WidgetSize,
+    ) -> anyhow::Result<CreationContext<'a>> {
+        let group = self.window.create_group_box_in(
+            self.parent,
+            id,
+            label,
+            self.size(size),
+        )?;
+        self.window.register_layout_entry(self.container, id, size);
+        self.window.layout.borrow_mut().groups.insert(
+            id,
+            LayoutNode {
+                entries: Vec::new(),
+                axis: Axis::Y,
+                spacing: 8,
+                policy: OverflowPolicy::Wrap,
+            },
+        );
+        Ok(CreationContext {
+            window: self.window,
+            parent: group.hwnd(),
+            container: Some(id),
+        })
+    }
+
+    pub fn scroll_view(
+        &self,
+        id: ControlId,
+        size: WidgetSize,
+        renderer: ScrollbarRenderer,
+    ) -> anyhow::Result<CreationContext<'a>> {
+        let rect = self.size(size);
+        let view = self.window.create_structural_child(self.parent, rect)?;
+        let content = self.window.create_structural_child(
+            view,
+            ControlRect::new(0, 0, rect.width, rect.height),
+        )?;
+        if renderer == ScrollbarRenderer::CoolSb
+            && Reaper::get().low().supports_cool_scrollbars()
+        {
+            unsafe {
+                Reaper::get().low().InitializeCoolSB(view);
+            }
+        }
+        self.window.register_layout_entry(self.container, id, size);
+        self.window.layout.borrow_mut().structural.insert(id, view);
+        self.window.layout.borrow_mut().groups.insert(
+            id,
+            LayoutNode {
+                entries: Vec::new(),
+                axis: Axis::Y,
+                spacing: 8,
+                policy: OverflowPolicy::WrapScroll,
+            },
+        );
+        self.window.scroll_views.borrow_mut().insert(
+            view as usize,
+            ScrollViewRuntime {
+                id,
+                content,
+                state: Rc::new(RefCell::new(ScrollState::new())),
+                renderer,
+            },
+        );
+        Ok(CreationContext {
+            window: self.window,
+            parent: content,
+            container: Some(id),
+        })
+    }
+
+    pub fn on_widget_event(
+        &self,
+        id: ControlId,
+        callback: impl FnMut(super::events::ControlEvent) -> super::events::EventResponse
+            + 'static,
+    ) {
+        self.window.on_widget_event(id, callback);
+    }
+
+    pub fn on_scroll_view_event(
+        &self,
+        id: ControlId,
+        callback: impl FnMut(ScrollViewEvent) -> super::events::EventResponse
+            + 'static,
+    ) {
+        self.window.on_scroll_view_event(id, callback);
+    }
+
+    pub fn on_container_event(
+        &self,
+        id: super::widgets::ContainerId,
+        callback: impl FnMut(
+                super::events::ContainerEvent,
+            ) -> super::events::EventResponse
+            + 'static,
+    ) {
+        self.window.on_container_event(id, callback);
+    }
+}
+
+impl ReaperWindow {
+    pub(super) fn create_button_in(
+        &self,
+        parent: raw::HWND,
+        id: ControlId,
+        label: &str,
+        rect: ControlRect,
+    ) -> ReaperResult<Button> {
+        self.prepare_control_creation(rect)?;
+        let label = CString::new(label)?;
+        let hwnd = unsafe {
+            Self::swell()?.create_button(
+                parent,
+                id.0,
+                label.as_ptr(),
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+            )
+        }
+        .ok_or(ReaRsError::NullPtr("control"))?;
+        Ok(Button::new(self.create_control_handle(
+            id,
+            ControlKind::Button,
+            hwnd,
+        )?))
+    }
+
+    pub(super) fn create_edit_field_in(
+        &self,
+        parent: raw::HWND,
+        id: ControlId,
+        rect: ControlRect,
+        flags: i32,
+    ) -> ReaperResult<EditField> {
+        self.prepare_control_creation(rect)?;
+        let hwnd = unsafe {
+            Self::swell()?.create_edit_field(
+                parent,
+                id.0,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+                flags,
+            )
+        }
+        .ok_or(ReaRsError::NullPtr("control"))?;
+        Ok(EditField::new(self.create_control_handle(
+            id,
+            ControlKind::EditField,
+            hwnd,
+        )?))
+    }
+
+    pub(super) fn create_label_in(
+        &self,
+        parent: raw::HWND,
+        id: ControlId,
+        label: &str,
+        rect: ControlRect,
+    ) -> ReaperResult<StaticLabel> {
+        self.prepare_control_creation(rect)?;
+        let label = CString::new(label)?;
+        let hwnd = unsafe {
+            Self::swell()?.create_label(
+                parent,
+                id.0,
+                label.as_ptr(),
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+            )
+        }
+        .ok_or(ReaRsError::NullPtr("control"))?;
+        Ok(StaticLabel::new(self.create_control_handle(
+            id,
+            ControlKind::Static,
+            hwnd,
+        )?))
+    }
+
+    pub(super) fn create_checkbox_in(
+        &self,
+        parent: raw::HWND,
+        id: ControlId,
+        label: &str,
+        rect: ControlRect,
+    ) -> ReaperResult<CheckBox> {
+        self.prepare_control_creation(rect)?;
+        let label = CString::new(label)?;
+        let hwnd = unsafe {
+            Self::swell()?.create_checkbox(
+                parent,
+                id.0,
+                label.as_ptr(),
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+            )
+        }
+        .ok_or(ReaRsError::NullPtr("control"))?;
+        Ok(CheckBox::new(self.create_control_handle(
+            id,
+            ControlKind::CheckBox,
+            hwnd,
+        )?))
+    }
+
+    pub(super) fn create_group_box_in(
+        &self,
+        parent: raw::HWND,
+        id: ControlId,
+        label: &str,
+        rect: ControlRect,
+    ) -> ReaperResult<GroupBox> {
+        self.prepare_control_creation(rect)?;
+        let label = CString::new(label)?;
+        let hwnd = unsafe {
+            Self::swell()?.create_group_box(
+                parent,
+                id.0,
+                label.as_ptr(),
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+            )
+        }
+        .ok_or(ReaRsError::NullPtr("control"))?;
+        self.install_container_event_proc(hwnd)?;
+        Ok(GroupBox::new(self.create_control_handle(
+            id,
+            ControlKind::Static,
+            hwnd,
+        )?))
+    }
+
+    pub(super) fn create_combo_box_in(
+        &self,
+        parent: raw::HWND,
+        id: ControlId,
+        rect: ControlRect,
+        flags: i32,
+    ) -> ReaperResult<ComboBox> {
+        self.prepare_control_creation(rect)?;
+        let hwnd = unsafe {
+            Self::swell()?.create_combo_box(
+                parent,
+                id.0,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+                flags,
+            )
+        }
+        .ok_or(ReaRsError::NullPtr("control"))?;
+        Ok(ComboBox::new(self.create_control_handle(
+            id,
+            ControlKind::ComboBox,
+            hwnd,
+        )?))
+    }
+
+    pub(super) fn create_list_box_in(
+        &self,
+        parent: raw::HWND,
+        id: ControlId,
+        rect: ControlRect,
+        styles: i32,
+    ) -> ReaperResult<ListBox> {
+        self.prepare_control_creation(rect)?;
+        let hwnd = unsafe {
+            Self::swell()?.create_list_box(
+                parent,
+                id.0,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+                styles,
+            )
+        }
+        .ok_or(ReaRsError::NullPtr("control"))?;
+        Ok(ListBox::new(self.create_control_handle(
+            id,
+            ControlKind::ListBox,
+            hwnd,
+        )?))
     }
 }
