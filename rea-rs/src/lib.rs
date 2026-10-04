@@ -240,7 +240,7 @@ pub use swell_gui::{
     Button, CheckBox, ComboBox, CommandNotification, ContainerEvent,
     ContainerId, ControlEvent, ControlHandle, ControlId,
     ControlKind, ControlRect, DockPosition, EditField, EventResponse,
-    GroupBox, LayoutContainer, LayoutPanel, ListBox, ListView, NativeContainer, ProgressBar, RadioButton,
+    GroupBox, ListBox, ListView, NativeContainer, ProgressBar, RadioButton,
     ReaperControl, ReaperWindow, ScrollView, StaticLabel, TabControl, Trackbar, TreeView,
     ScrollCommand, ScrollMetrics, ScrollOffset, ScrollState, ScrollViewEvent,
     ScrollViewEventSource, ScrollbarRenderer, ScrollbarVisibility,

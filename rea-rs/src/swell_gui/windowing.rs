@@ -489,7 +489,7 @@ impl ReaperWindow {
     }
 
     pub(crate) fn destroy_internal(&self) {
-        self.clear_controls();
+        self.reset_ui();
         if !Reaper::is_available() {
             return;
         }

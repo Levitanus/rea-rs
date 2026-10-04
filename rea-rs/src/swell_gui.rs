@@ -25,8 +25,8 @@ pub use widgets::{
     TabControl, Trackbar, TreeView,
 };
 pub use windows::{
-    DockPosition, LayoutContainer, LayoutPanel, ReaperWindow, ScrollView,
-    WindowHandler, WindowId, WindowSpec,
+    CreationContext, DockPosition, ReaperWindow, ScrollView, WindowHandler,
+    WindowId, WindowSpec,
 };
 #[cfg(test)]
 mod tests {
