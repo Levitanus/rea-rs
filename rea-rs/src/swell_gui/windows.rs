@@ -386,6 +386,7 @@ impl<'a> ScrollView<'a> {
                 (raw::SWP_NOZORDER | raw::SWP_NOACTIVATE) as i32,
             );
         }
+        self.sync_scrollbars();
     }
 
     fn sync_scrollbars(&self) {
@@ -789,6 +790,13 @@ impl ReaperWindow {
         // content rectangle, so giving the root layout a margin prevents a
         // fill-sized GroupBox from touching or overflowing the window frame.
         let client = Rect::from(client);
+        log::trace!(
+            "applying window layout: hwnd={:?} client={}x{} entries={}",
+            self.hwnd(),
+            client.width,
+            client.height,
+            self.layout.borrow().root.entries.len(),
+        );
         let bounds = Rect::new(
             20,
             20,
@@ -1232,7 +1240,12 @@ pub(crate) unsafe extern "C" fn window_proc(
             .DefWindowProc(hwnd, msg, wparam, lparam)
             as raw::INT_PTR;
     };
-    if direct_host.is_some() {
+    let is_borrowed_host = direct_host.is_some()
+        && reaper
+            .windows
+            .get(&key)
+            .is_some_and(|handler| !handler.window().is_owned());
+    if is_borrowed_host {
         let host_message_enabled = reaper
             .windows
             .get(&key)
@@ -1327,10 +1340,33 @@ pub(crate) unsafe extern "C" fn window_proc(
                 .structural
                 .iter()
                 .find_map(|(id, child)| (*child == hwnd).then_some(*id))
+                .or_else(|| {
+                    handler
+                        .window()
+                        .scroll_views
+                        .borrow()
+                        .values()
+                        .find_map(|runtime| {
+                            (runtime.content == hwnd).then_some(runtime.id)
+                        })
+                })
         });
+        if matches!(
+            &event,
+            super::events::WindowEvent::Mouse {
+                message: super::events::MouseMessage::Move
+                    | super::events::MouseMessage::Wheel { .. },
+                ..
+            } | super::events::WindowEvent::Wheel { .. }
+        ) {
+            log::trace!("window input: hwnd={hwnd:?} widget={widget_id:?} event={event:?}");
+        } else {
+            log::debug!("window input: hwnd={hwnd:?} widget={widget_id:?} event={event:?}");
+        }
         if let Some(handler) = Reaper::get_mut().windows.get_mut(&key) {
             if let Some(id) = widget_id {
-                if handler.on_widget_event(id, event.clone()) {
+                let handled = handler.on_widget_event(id, event.clone());
+                if handled || handler.on_event(event) {
                     return 0;
                 }
             } else if handler.on_event(event) {
@@ -1424,6 +1460,7 @@ pub(crate) unsafe extern "C" fn window_proc(
                     ),
                 }
             };
+            log::debug!("WM_COMMAND: hwnd={hwnd:?} id={id} code={code} command={command:?}");
             handler.on_command(command);
             if lparam != 0 {
                 let control_id = super::widgets::ControlId(id);
@@ -1438,6 +1475,7 @@ pub(crate) unsafe extern "C" fn window_proc(
                 if let Some(event) = event {
                     let result =
                         handler.window().events.borrow_mut().dispatch(event);
+                    log::debug!("control event dispatch: event={event:?} result={result:?}");
                     if matches!(
                         result,
                         super::events::DispatchResult::ForwardToWindow
@@ -1498,6 +1536,12 @@ pub(crate) unsafe extern "C" fn window_proc(
                         _ => ScrollViewEventSource::Programmatic,
                     };
                     let event = ScrollViewEvent { offset, source };
+                    log::trace!(
+                        "scroll view moved: id={:?} source={:?} offset={:?}",
+                        runtime.id,
+                        source,
+                        offset,
+                    );
                     let _ = handler
                         .window()
                         .emit_scroll_view_event(runtime.id, event);
@@ -1514,10 +1558,9 @@ pub(crate) unsafe extern "C" fn window_proc(
                     control: control.id,
                     code: (wparam as usize & 0xffff) as i32,
                 };
-                if matches!(
-                    handler.window().events.borrow_mut().dispatch(event),
-                    super::events::DispatchResult::ForwardToWindow
-                ) {
+                let result = handler.window().events.borrow_mut().dispatch(event);
+                log::debug!("control scroll dispatch: event={event:?} result={result:?}");
+                if matches!(result, super::events::DispatchResult::ForwardToWindow) {
                     handler.on_control_event(event);
                 }
             }
@@ -1593,10 +1636,9 @@ pub(crate) unsafe extern "C" fn window_proc(
                     control: control_id,
                     code: header.code,
                 };
-                if matches!(
-                    handler.window().events.borrow_mut().dispatch(event),
-                    super::events::DispatchResult::ForwardToWindow
-                ) {
+                let result = handler.window().events.borrow_mut().dispatch(event);
+                log::debug!("control notification dispatch: event={event:?} result={result:?}");
+                if matches!(result, super::events::DispatchResult::ForwardToWindow) {
                     handler.on_control_event(event);
                 }
             }
@@ -1611,7 +1653,15 @@ pub(crate) unsafe extern "C" fn window_proc(
                     let id =
                         window.layout.borrow().structural.iter().find_map(
                             |(id, child)| (*child == hwnd).then_some(*id),
-                        );
+                        ).or_else(|| {
+                            window
+                                .scroll_views
+                                .borrow()
+                                .values()
+                                .find_map(|runtime| {
+                                    (runtime.content == hwnd).then_some(runtime.id)
+                                })
+                        });
                     (window.hwnd() == hwnd, id)
                 })
                 .unwrap_or((false, None));
@@ -1641,6 +1691,11 @@ pub(crate) unsafe extern "C" fn window_proc(
             }
             let mut rect = std::mem::zeroed();
             Reaper::get().swell().GetClientRect(hwnd, &mut rect);
+            log::trace!(
+                "WM_SIZE: hwnd={hwnd:?} client={}x{}",
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+            );
             let Some(handler) = reaper.windows.get_mut(&key) else {
                 return 0;
             };

@@ -1677,6 +1677,11 @@ impl<'paint> HdcSurface<'paint> {
         }
     }
 
+    /// Sets the foreground color used by subsequent text drawing on this HDC.
+    pub fn set_text_color(&mut self, color: Color) {
+        unsafe { self.swell.SetTextColor(self.raw(), color.to_native()) };
+    }
+
     pub fn line(&mut self, from: Point, to: Point, pen: &Pen) {
         let Some(selection) =
             SelectedObject::select(self, pen.raw() as raw::HGDIOBJ)

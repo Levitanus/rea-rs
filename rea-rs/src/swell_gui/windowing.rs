@@ -343,6 +343,7 @@ impl ReaperWindow {
             }
         }
         self.rebind_controls()?;
+        self.apply_default_layout()?;
         Ok(())
     }
 
@@ -370,7 +371,7 @@ impl ReaperWindow {
             low.pointers().GetMainHwnd.as_ref().ok_or_else(|| {
                 ReaRsError::UnexpectedAPI("GetMainHwnd not available".into())
             })?;
-        let main_hwnd = unsafe { main_hwnd() };
+        let main_hwnd = main_hwnd();
         if main_hwnd.is_null() {
             return Err(ReaRsError::NullPtr("main window"));
         }
@@ -436,6 +437,7 @@ impl ReaperWindow {
             );
         }
         self.rebind_controls()?;
+        self.apply_default_layout()?;
         Ok(())
     }
 

@@ -444,6 +444,21 @@ impl Reaper {
             spec.allow_show,
             spec.dock_ident.clone(),
         )?;
+        let mut client = raw::RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        unsafe { self.swell.GetClientRect(hwnd, &mut client) };
+        log::debug!(
+            "created window {:?}: requested={}x{} client={}x{}",
+            spec.title,
+            spec.width,
+            spec.height,
+            client.right - client.left,
+            client.bottom - client.top,
+        );
         // Capture the initial floating geometry before the HWND can ever be
         // reparented into a docker. This is the fallback restore rectangle
         // for the first dock -> float transition.

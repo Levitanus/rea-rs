@@ -33,8 +33,9 @@ impl DemoWindow {
         )?;
 
         let ui = window.build_ui()?.central_panel();
+        let scroll_view_id = ControlId::new();
         let ui = ui.scroll_view(
-            ControlId::new(),
+            scroll_view_id,
             WidgetSize::new_fill_both(width, height),
             rea_rs::ScrollbarRenderer::CoolSb,
         )?;
@@ -86,34 +87,34 @@ impl DemoWindow {
         let canvas =
             ui.canvas(ControlId(CANVAS_ID), WidgetSize::new(280, 84))?;
         ui.on_widget_event(ControlId(BUTTON_ID), |event| {
-            info!("button event: {:?}", event);
+            log::debug!("button event: {:?}", event);
             EventResponse::Handled
         });
         ui.on_widget_event(ControlId(DOCK_STATE_ID), |event| {
-            info!("dock-state event: {:?}", event);
+            log::debug!("dock-state event: {:?}", event);
             EventResponse::ForwardToWindow
         });
         ui.on_widget_event(ControlId(CHECKBOX_ID), move |event| {
             if let ControlEvent::CheckBoxChanged { .. } = event {
-                info!("checkbox value: {:?}", checkbox.checked());
+                log::debug!("checkbox value: {:?}", checkbox.checked());
             }
             EventResponse::Handled
         });
         ui.on_widget_event(ControlId(COMBO_ID), move |event| {
             if let ControlEvent::ComboSelectionChanged { .. } = event {
-                info!("combo selection: {:?}", combo.selected_index());
+                log::debug!("combo selection: {:?}", combo.selected_index());
             }
             EventResponse::Handled
         });
         ui.on_widget_event(ControlId(LIST_ID), move |event| {
             if let ControlEvent::ListSelectionChanged { .. } = event {
-                info!("list selection: {:?}", list.selected_index());
+                log::debug!("list selection: {:?}", list.selected_index());
             }
             EventResponse::Handled
         });
         ui.on_widget_event(ControlId(EDIT_ID), move |event| {
             if let ControlEvent::EditChanged { .. } = event {
-                info!("edit value: {:?}", edit.text());
+                log::debug!("edit value: {:?}", edit.text());
             }
             EventResponse::Handled
         });
@@ -194,6 +195,9 @@ impl WindowHandler for DemoWindow {
         self.update_dock_state();
         self.log_control_values();
     }
+    fn on_resize(&mut self, width: i32, height: i32) {
+        log::debug!("widget gallery resized: client={}x{}", width, height);
+    }
     fn on_close(&mut self) -> bool {
         true
     }
@@ -201,7 +205,7 @@ impl WindowHandler for DemoWindow {
         info!("window destroyed");
     }
     fn on_command(&mut self, command: WindowCommand) {
-        info!("window command: {:?}", command);
+        log::debug!("window command: {:?}", command);
     }
     fn on_control_event(&mut self, event: ControlEvent) {
         if let ControlEvent::CheckBoxChanged { control } = event {
@@ -233,6 +237,7 @@ impl WindowHandler for DemoWindow {
     ) {
         surface.fill_rect(info.client_rect, &self.background);
         surface.frame_rect(info.client_rect, &self.background);
+        surface.set_text_color(Color::WHITE);
         let _ = surface.draw_text(
             "Retained SWELL drawing",
             rea_rs::swell_gui::layout::Rect::new(24, 16, 380, 32),
@@ -260,11 +265,39 @@ impl WindowHandler for DemoWindow {
         event: rea_rs::WindowEvent,
     ) -> bool {
         if id == self.canvas.id() {
-            info!("canvas event: {:?}", event);
-            true
+            if matches!(
+                event,
+                rea_rs::WindowEvent::Mouse {
+                    message: rea_rs::swell_gui::MouseMessage::Move,
+                    ..
+                }
+            ) {
+                log::trace!("canvas mouse move: {:?}", event);
+            } else {
+                log::debug!("canvas event: {:?}", event);
+            }
+            // This demo only observes Canvas events; leave them unhandled so
+            // the general window callback can also observe them.
+            false
         } else {
             false
         }
+    }
+
+    fn on_event(&mut self, event: rea_rs::WindowEvent) -> bool {
+        if matches!(
+            &event,
+            rea_rs::WindowEvent::Mouse {
+                message: rea_rs::swell_gui::MouseMessage::Move
+                    | rea_rs::swell_gui::MouseMessage::Wheel { .. },
+                ..
+            } | rea_rs::WindowEvent::Wheel { .. }
+        ) {
+            log::trace!("window event: {:?}", event);
+        } else {
+            log::debug!("window event: {:?}", event);
+        }
+        false
     }
 }
 
