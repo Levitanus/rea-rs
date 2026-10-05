@@ -504,7 +504,7 @@ impl Reaper {
                     swell_gui::window_proc as *const () as usize as isize,
                 )
             };
-            swell_gui::windows::remember_host_proc(hwnd, previous);
+            swell_gui::host_proc::remember_host_proc(hwnd, previous);
         }
         if let Some(handler) = self.windows.get_mut(&window_id) {
             handler.on_open();
@@ -544,7 +544,7 @@ impl Reaper {
         let owned = handler.window().is_owned();
         self.window_routes.remove(&(hwnd as usize));
         if !owned {
-            swell_gui::windows::detach_host_proc(hwnd);
+            swell_gui::host_proc::detach_host_proc(hwnd);
         }
         handler.window().destroy_structural_children();
         handler.on_destroy();
@@ -814,7 +814,7 @@ impl Drop for Reaper {
         for (id, handler) in windows {
             let window = handler.window();
             if !window.is_owned() {
-                swell_gui::windows::detach_host_proc(window.hwnd());
+                swell_gui::host_proc::detach_host_proc(window.hwnd());
             } else {
                 window.destroy_internal();
             }

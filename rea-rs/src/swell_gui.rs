@@ -7,6 +7,7 @@ pub mod scroll;
 pub mod widgets;
 pub mod windowing;
 pub mod windows;
+pub(crate) mod host_proc;
 
 use rea_rs_low::raw;
 
@@ -133,5 +134,5 @@ pub(crate) unsafe extern "C" fn window_proc(
     wparam: raw::WPARAM,
     lparam: raw::LPARAM,
 ) -> raw::INT_PTR {
-    windows::window_proc(hwnd, msg, wparam, lparam)
+    host_proc::window_proc(hwnd, msg, wparam, lparam)
 }
