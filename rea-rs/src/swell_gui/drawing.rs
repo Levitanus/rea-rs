@@ -1,8 +1,8 @@
-//! Retained SWELL/HDC and LICE drawing resources.
+//! Retained SWELL resources and LICE drawing surfaces.
 //!
 //! Resource owners are independent of windows and creation contexts. Keep
-//! them in a concrete [`WindowHandler`] and borrow a surface only while its
-//! native paint transaction is active.
+//! them in a concrete [`WindowHandler`]. LICE surfaces are borrowed only for
+//! the duration of a paint callback.
 
 use super::layout::{Point, Rect};
 use super::widgets::ListView;
@@ -44,8 +44,7 @@ impl DrawTextOptions {
     }
 }
 
-impl DrawTextFlags {
-}
+impl DrawTextFlags {}
 
 impl Default for DrawTextOptions {
     fn default() -> Self {
@@ -97,7 +96,9 @@ pub struct ImageSize {
 }
 
 impl ImageSize {
-    pub const fn new(width: u32, height: u32) -> Self { Self { width, height } }
+    pub const fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
+    }
 }
 
 /// A floating-point coordinate for LICE primitives that support subpixel
@@ -125,23 +126,32 @@ pub struct LiceRect {
 
 impl LiceRect {
     pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }
 
-    /// # Safety
-    /// `handle` must be a valid owned HBITMAP that can be released by
-    /// `DeleteObject`; it must not be used or destroyed elsewhere afterward.
+/// # Safety
+/// `handle` must be a valid owned HBITMAP that can be released by
+/// `DeleteObject`; it must not be used or destroyed elsewhere afterward.
 
 impl Bitmap {
     /// # Safety
     /// `handle` must be a valid owned HBITMAP that can be released by
     /// `DeleteObject`; it must not be used or destroyed elsewhere afterward.
-    pub unsafe fn from_owned_handle(handle: raw::HBITMAP) -> ReaperResult<Self> {
-        NonNull::new(handle).map(|handle| Self {
-            handle: handle.cast(),
-            swell: *Reaper::get().swell(),
-        }).ok_or(ReaRsError::NullPtr("bitmap"))
+    pub unsafe fn from_owned_handle(
+        handle: raw::HBITMAP,
+    ) -> ReaperResult<Self> {
+        NonNull::new(handle)
+            .map(|handle| Self {
+                handle: handle.cast(),
+                swell: *Reaper::get().swell(),
+            })
+            .ok_or(ReaRsError::NullPtr("bitmap"))
     }
 }
 
@@ -163,9 +173,7 @@ impl Icon {
     /// `handle` must be a valid owned `HICON` releasable by `DeleteObject`;
     /// ownership is transferred and the handle must not be used or destroyed
     /// elsewhere afterward.
-    pub unsafe fn from_owned_handle(
-        handle: raw::HICON,
-    ) -> ReaperResult<Self> {
+    pub unsafe fn from_owned_handle(handle: raw::HICON) -> ReaperResult<Self> {
         NonNull::new(handle)
             .map(|handle| Self {
                 handle: handle.cast(),
@@ -223,7 +231,8 @@ impl Default for LiceBlitOptions {
 
 impl LiceBlitOptions {
     pub(crate) fn raw(self) -> i32 {
-        self.mode.int_value() | if self.bilinear { 0x100 } else { 0 }
+        self.mode.int_value()
+            | if self.bilinear { 0x100 } else { 0 }
             | if self.use_source_alpha { 0x10000 } else { 0 }
     }
 }
@@ -379,6 +388,7 @@ pub struct Brush {
 }
 
 impl Brush {
+    /// Creates a solid brush for native controls and SWELL erase procedures.
     pub fn solid(color: Color) -> ReaperResult<Self> {
         let handle = Reaper::get().swell().CreateSolidBrush(color.to_native());
         NonNull::new(handle)
@@ -392,9 +402,10 @@ impl Brush {
     pub fn alpha(color: Color, alpha: f32) -> ReaperResult<Self> {
         #[cfg(target_family = "unix")]
         {
-            let handle = Reaper::get()
-                .swell()
-                .CreateSolidBrushAlpha(color.to_native(), alpha.clamp(0.0, 1.0));
+            let handle = Reaper::get().swell().CreateSolidBrushAlpha(
+                color.to_native(),
+                alpha.clamp(0.0, 1.0),
+            );
             NonNull::new(handle)
                 .map(|handle| Self {
                     handle,
@@ -427,18 +438,28 @@ pub struct Pen {
 }
 
 impl Pen {
+    /// Creates a solid GDI pen for native-control resources. For custom
+    /// drawing, use the line methods on [`LiceSurface`].
     pub fn solid(width: u32, color: Color) -> ReaperResult<Self> {
         Self::with_style(width, color, PenStyle::Solid)
     }
 
-    pub fn with_style(width: u32, color: Color, style: PenStyle) -> ReaperResult<Self> {
+    pub fn with_style(
+        width: u32,
+        color: Color,
+        style: PenStyle,
+    ) -> ReaperResult<Self> {
         if width == 0 {
             return Err(ReaRsError::UnsuccessfulOperation(
                 "invalid pen width",
             ));
         }
         let color = swell_color(color);
-        let handle = Reaper::get().swell().CreatePen(style.int_value(), width.min(i32::MAX as u32) as i32, color);
+        let handle = Reaper::get().swell().CreatePen(
+            style.int_value(),
+            width.min(i32::MAX as u32) as i32,
+            color,
+        );
         NonNull::new(handle)
             .map(|handle| Self {
                 handle,
@@ -471,7 +492,9 @@ impl Pen {
         }
         #[cfg(target_family = "windows")]
         {
-            log::warn!("alpha pens are unsupported on Windows; using a solid pen");
+            log::warn!(
+                "alpha pens are unsupported on Windows; using a solid pen"
+            );
             Self::solid(width, color)
         }
     }
@@ -553,11 +576,19 @@ impl LiceBitmap {
         Self::new(kind, width, height)
     }
 
-    pub fn new(kind: LiceBitmapKind, width: u32, height: u32) -> ReaperResult<Self> {
+    pub fn new(
+        kind: LiceBitmapKind,
+        width: u32,
+        height: u32,
+    ) -> ReaperResult<Self> {
         Self::create(kind, width, height)
     }
 
-    fn create(kind: LiceBitmapKind, width: u32, height: u32) -> ReaperResult<Self> {
+    fn create(
+        kind: LiceBitmapKind,
+        width: u32,
+        height: u32,
+    ) -> ReaperResult<Self> {
         let width = width.min(i32::MAX as u32) as i32;
         let height = height.min(i32::MAX as u32) as i32;
         if width < 1 || height < 1 {
@@ -566,7 +597,9 @@ impl LiceBitmap {
             ));
         }
         let handle =
-            Reaper::get().low().LICE_CreateBitmap(kind.raw(), width, height);
+            Reaper::get()
+                .low()
+                .LICE_CreateBitmap(kind.raw(), width, height);
         NonNull::new(handle)
             .map(|handle| Self {
                 handle,
@@ -754,7 +787,9 @@ impl ImageList {
             self.swell.ImageList_Add(
                 self.handle.as_ptr(),
                 bitmap.handle.as_ptr() as raw::HBITMAP,
-                mask.map_or(std::ptr::null_mut(), |mask| mask.handle.as_ptr() as raw::HBITMAP),
+                mask.map_or(std::ptr::null_mut(), |mask| {
+                    mask.handle.as_ptr() as raw::HBITMAP
+                }),
             )
         };
         if result < 0 {
@@ -779,8 +814,11 @@ impl ImageList {
         icon: &Icon,
     ) -> ReaperResult<i32> {
         let result = unsafe {
-            self.swell
-                .ImageList_ReplaceIcon(self.handle.as_ptr(), index, icon.raw())
+            self.swell.ImageList_ReplaceIcon(
+                self.handle.as_ptr(),
+                index,
+                icon.raw(),
+            )
         };
         if result < 0 {
             Err(ReaRsError::UnsuccessfulOperation("ImageList_ReplaceIcon"))
@@ -812,8 +850,11 @@ impl ImageList {
             ));
         }
         unsafe {
-            self.swell
-                .ListView_SetImageList(hwnd, self.handle.as_ptr(), which.int_value())
+            self.swell.ListView_SetImageList(
+                hwnd,
+                self.handle.as_ptr(),
+                which.int_value(),
+            )
         };
         if !self.attached.contains(&(hwnd, which.int_value())) {
             self.attached.push((hwnd, which.int_value()));
@@ -828,7 +869,8 @@ impl ImageList {
     ) -> ReaperResult<()> {
         let hwnd = list_view.hwnd();
         if hwnd.is_null() || !unsafe { self.swell.IsWindow(hwnd) } {
-            self.attached.retain(|entry| *entry != (hwnd, which.int_value()));
+            self.attached
+                .retain(|entry| *entry != (hwnd, which.int_value()));
             return Ok(());
         }
         let attached = self.attached.contains(&(hwnd, which.int_value()));
@@ -841,7 +883,8 @@ impl ImageList {
                 )
             };
         }
-        self.attached.retain(|entry| *entry != (hwnd, which.int_value()));
+        self.attached
+            .retain(|entry| *entry != (hwnd, which.int_value()));
         Ok(())
     }
 }
@@ -849,7 +892,7 @@ impl ImageList {
 impl Drop for ImageList {
     fn drop(&mut self) {
         for (hwnd, which) in self.attached.drain(..) {
-                if !hwnd.is_null() && unsafe { self.swell.IsWindow(hwnd) } {
+            if !hwnd.is_null() && unsafe { self.swell.IsWindow(hwnd) } {
                 unsafe {
                     self.swell.ListView_SetImageList(
                         hwnd,
@@ -1161,8 +1204,10 @@ impl LiceSurface<'_> {
         if points.len() < 3 || points.len() > i32::MAX as usize {
             return;
         }
-        let mut xs: Vec<_> = points.iter().map(|point| native_coord(point.x)).collect();
-        let mut ys: Vec<_> = points.iter().map(|point| native_coord(point.y)).collect();
+        let mut xs: Vec<_> =
+            points.iter().map(|point| native_coord(point.x)).collect();
+        let mut ys: Vec<_> =
+            points.iter().map(|point| native_coord(point.y)).collect();
         unsafe {
             self.low.LICE_FillConvexPolygon(
                 self.handle.as_ptr(),
@@ -1534,17 +1579,17 @@ impl LiceSurface<'_> {
         &mut self,
         text: &str,
         rect: Rect,
-        font: &mut LiceFont,
+        font: &LiceFont,
         options: LiceTextOptions,
     ) -> ReaperResult<()> {
         let text = CString::new(text)?;
         let mut native = raw::RECT {
-                left: i32::try_from(rect.x).unwrap_or(i32::MAX),
-                top: i32::try_from(rect.y).unwrap_or(i32::MAX),
-                right: i32::try_from(rect.x.saturating_add(rect.width))
-                    .unwrap_or(i32::MAX),
-                bottom: i32::try_from(rect.y.saturating_add(rect.height))
-                    .unwrap_or(i32::MAX),
+            left: i32::try_from(rect.x).unwrap_or(i32::MAX),
+            top: i32::try_from(rect.y).unwrap_or(i32::MAX),
+            right: i32::try_from(rect.x.saturating_add(rect.width))
+                .unwrap_or(i32::MAX),
+            bottom: i32::try_from(rect.y.saturating_add(rect.height))
+                .unwrap_or(i32::MAX),
         };
         unsafe {
             self.low.LICE__SetTextCombineMode(
@@ -1589,41 +1634,12 @@ impl LiceSurface<'_> {
     }
 }
 
-/// A borrowed view of the HDC for exactly one active paint callback.
-pub struct HdcSurface<'paint> {
+/// The narrow HDC bridge used by the paint transaction for background
+/// preservation and presenting a completed LICE bitmap.
+pub(super) struct HdcSurface<'paint> {
     hdc: NonNull<raw::HDC__>,
     _paint: PhantomData<&'paint mut ()>,
     swell: rea_rs_low::Swell,
-}
-
-struct SelectedObject<'dc, 'paint> {
-    surface: &'dc mut HdcSurface<'paint>,
-    previous: raw::HGDIOBJ,
-}
-
-impl<'dc, 'paint> SelectedObject<'dc, 'paint> {
-    fn select(
-        surface: &'dc mut HdcSurface<'paint>,
-        object: raw::HGDIOBJ,
-    ) -> Option<Self> {
-        let previous =
-            unsafe { surface.swell.SelectObject(surface.raw(), object) };
-        (!previous.is_null()).then_some(Self { surface, previous })
-    }
-
-    fn hdc(&self) -> raw::HDC {
-        self.surface.raw()
-    }
-}
-
-impl Drop for SelectedObject<'_, '_> {
-    fn drop(&mut self) {
-        unsafe {
-            self.surface
-                .swell
-                .SelectObject(self.surface.raw(), self.previous);
-        }
-    }
 }
 
 impl<'paint> HdcSurface<'paint> {
@@ -1642,99 +1658,38 @@ impl<'paint> HdcSurface<'paint> {
         self.hdc.as_ptr()
     }
 
-    pub fn fill_rect(&mut self, rect: Rect, brush: &Brush) {
-        let rect = raw::RECT::from(rect);
-        unsafe { self.swell.FillRect(self.raw(), &rect, brush.raw()) }
-    }
-
-    pub fn frame_rect(&mut self, rect: Rect, brush: &Brush) {
-        if rect.width == 0 || rect.height == 0 {
-            return;
-        }
-        self.fill_rect(Rect::new(rect.x, rect.y, rect.width, 1), brush);
-        if rect.height > 1 {
-            self.fill_rect(
-                Rect::new(rect.x, rect.y + rect.height - 1, rect.width, 1),
-                brush,
-            );
-        }
-        if rect.height > 2 {
-            self.fill_rect(
-                Rect::new(rect.x, rect.y + 1, 1, rect.height - 2),
-                brush,
-            );
-            if rect.width > 1 {
-                self.fill_rect(
-                    Rect::new(
-                        rect.x + rect.width - 1,
-                        rect.y + 1,
-                        1,
-                        rect.height - 2,
-                    ),
-                    brush,
-                );
-            }
-        }
-    }
-
-    /// Sets the foreground color used by subsequent text drawing on this HDC.
-    pub fn set_text_color(&mut self, color: Color) {
-        unsafe { self.swell.SetTextColor(self.raw(), color.to_native()) };
-    }
-
-    pub fn line(&mut self, from: Point, to: Point, pen: &Pen) {
-        let Some(selection) =
-            SelectedObject::select(self, pen.raw() as raw::HGDIOBJ)
-        else {
-            return;
-        };
-        unsafe {
-            selection.surface.swell.MoveToEx(
-                selection.hdc(),
-                i32::try_from(from.x).unwrap_or(i32::MAX),
-                i32::try_from(from.y).unwrap_or(i32::MAX),
-                std::ptr::null_mut(),
-            );
-            selection
-                .surface
-                .swell
-                .SWELL_LineTo(
-                    selection.hdc(),
-                    i32::try_from(to.x).unwrap_or(i32::MAX),
-                    i32::try_from(to.y).unwrap_or(i32::MAX),
-                );
-        }
-    }
-
-    pub fn draw_text(
+    /// Copies the already-erased paint background into a LICE bitmap before
+    /// LICE rendering. This is the only HDC drawing support used by custom
+    /// rendering; primitives are drawn through [`LiceSurface`].
+    pub(super) fn copy_background_to_bitmap(
         &mut self,
-        text: &str,
+        destination: &LiceBitmap,
         rect: Rect,
-        font: &Font,
-        options: DrawTextOptions,
-    ) -> ReaperResult<i32> {
-        let text = CString::new(text)?;
-        let mut rect = raw::RECT::from(rect);
-        let Some(selection) =
-            SelectedObject::select(self, font.raw() as raw::HGDIOBJ)
-        else {
-            return Err(ReaRsError::UnsuccessfulOperation(
-                "SelectObject font",
+    ) -> ReaperResult<()> {
+        let bitmap_dc =
+            unsafe { destination.low.LICE__GetDC(destination.raw()) };
+        if bitmap_dc.is_null() {
+            return Err(ReaRsError::UnexpectedAPI(
+                "LICE bitmap does not expose a compatible HDC".into(),
             ));
-        };
-        let result = unsafe {
-            selection.surface.swell.DrawText(
-                selection.hdc(),
-                text.as_ptr(),
-                -1,
-                &mut rect,
-                options.alignment.raw(),
-            )
-        };
-        Ok(result)
+        }
+        unsafe {
+            destination.swell.BitBlt(
+                bitmap_dc,
+                native_coord(rect.x),
+                native_coord(rect.y),
+                native_coord(rect.width),
+                native_coord(rect.height),
+                self.raw(),
+                native_coord(rect.x),
+                native_coord(rect.y),
+                raw::SRCCOPY as i32,
+            );
+        }
+        Ok(())
     }
 
-    pub fn blit_bitmap(
+    pub(super) fn blit_bitmap(
         &mut self,
         source: &LiceBitmap,
         source_origin: Point,

@@ -1,10 +1,13 @@
 use log::info;
 use rea_rs::{
-    swell_gui::layout::{Point, WidgetFills, WidgetSize},
-    ActionKind, Brush, Canvas, CheckBox, ComboBox, ControlEvent, ControlId,
-    Color, DrawTextFlags, DrawTextOptions, EditField, EventResponse, ExtState,
-    Font, FontSpec, ListBox, PaintInfo, Pen, Reaper, ReaperWindow,
-    WindowCommand, WindowHandler, WindowId, WindowSpec,
+    swell_gui::{
+        layout::{Point, Rect, WidgetFills, WidgetSize},
+        DrawTextFlags, LiceCombineMode, LiceTextOptions,
+    },
+    ActionKind, Canvas, CheckBox, Color, ComboBox, ControlEvent, ControlId,
+    EditField, EventResponse, ExtState, Font, FontSpec, LiceFont, LiceSurface,
+    ListBox, PaintInfo, Reaper, ReaperWindow, ThemeColor, WindowCommand,
+    WindowHandler, WindowId, WindowSpec,
 };
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
@@ -17,9 +20,6 @@ struct DemoWindow {
     checkbox: CheckBox,
     combo: ComboBox,
     list: ListBox,
-    background: Brush,
-    border: Pen,
-    title_font: Font,
     canvas: Canvas,
 }
 
@@ -80,12 +80,57 @@ impl DemoWindow {
         )?;
         list.add_item("List item one")?;
         list.add_item("List item two")?;
-        let background = Brush::solid(Color::new(24, 32, 48))?;
-        let border = Pen::solid(2, Color::new(64, 144, 208))?;
-        let title_font = Font::new(FontSpec::new("Arial").set_size(18))?;
+        let title_font = LiceFont::from_font(Font::new(
+            FontSpec::new("Arial").set_size(18),
+        )?)?;
 
         let canvas =
             ui.canvas(ControlId(CANVAS_ID), WidgetSize::new(280, 84))?;
+        window.on_render(move |info, surface| {
+            surface.clear(ThemeColor::windowtab_bg.into());
+            surface.bordered_rect(
+                info.client_rect,
+                Color::YELLOW,
+                Color::new(64, 144, 208),
+                1.0,
+                LiceCombineMode::Copy,
+            );
+            let _ = surface.draw_text(
+                "Retained LICE drawing",
+                Rect::new(24, 0, 380, 32),
+                &title_font,
+                LiceTextOptions {
+                    flags: DrawTextFlags::LEFT | DrawTextFlags::TOP,
+                    ..Default::default()
+                },
+            );
+            surface.line(
+                Point { x: 18, y: 52 },
+                Point { x: 620, y: 52 },
+                Color::new(64, 144, 208),
+                1.0,
+                LiceCombineMode::Copy,
+                true,
+            );
+            Ok(())
+        })?;
+        window.on_render_widget(|id, info, surface| {
+            if id == ControlId(CANVAS_ID) {
+                surface.fill_rect(
+                    info.client_rect,
+                    Color::BLUE,
+                    1.0,
+                    LiceCombineMode::Copy,
+                );
+                surface.draw_rect(
+                    info.client_rect,
+                    Color::MAGENTA,
+                    1.0,
+                    LiceCombineMode::Copy,
+                );
+            }
+            Ok(())
+        })?;
         ui.on_widget_event(ControlId(BUTTON_ID), |event| {
             log::debug!("button event: {:?}", event);
             EventResponse::Handled
@@ -144,9 +189,6 @@ impl DemoWindow {
             checkbox,
             combo,
             list,
-            background,
-            border,
-            title_font,
             canvas,
         })
     }
@@ -188,25 +230,32 @@ impl WindowHandler for DemoWindow {
     fn window_id(&self) -> WindowId {
         "rea-rs.widget-gallery".to_string()
     }
+
     fn window(&self) -> &ReaperWindow {
         &self.window
     }
+
     fn on_open(&mut self) {
         self.update_dock_state();
         self.log_control_values();
     }
+
     fn on_resize(&mut self, width: i32, height: i32) {
         log::debug!("widget gallery resized: client={}x{}", width, height);
     }
+
     fn on_close(&mut self) -> bool {
         true
     }
+
     fn on_destroy(&mut self) {
         info!("window destroyed");
     }
+
     fn on_command(&mut self, command: WindowCommand) {
         log::debug!("window command: {:?}", command);
     }
+
     fn on_control_event(&mut self, event: ControlEvent) {
         if let ControlEvent::CheckBoxChanged { control } = event {
             if control == ControlId(DOCK_STATE_ID) {
@@ -230,35 +279,6 @@ impl WindowHandler for DemoWindow {
         }
     }
 
-    fn render(
-        &mut self,
-        info: &PaintInfo,
-        surface: &mut rea_rs::HdcSurface<'_>,
-    ) {
-        surface.fill_rect(info.client_rect, &self.background);
-        surface.frame_rect(info.client_rect, &self.background);
-        surface.set_text_color(Color::WHITE);
-        let _ = surface.draw_text(
-            "Retained SWELL drawing",
-            rea_rs::swell_gui::layout::Rect::new(24, 16, 380, 32),
-            &self.title_font,
-            DrawTextOptions::new(DrawTextFlags::LEFT | DrawTextFlags::TOP),
-        );
-        surface.line(Point { x: 18, y: 52 }, Point { x: 620, y: 52 }, &self.border);
-    }
-
-    fn render_widget(
-        &mut self,
-        id: ControlId,
-        info: &PaintInfo,
-        surface: &mut rea_rs::HdcSurface<'_>,
-    ) {
-        if id == self.canvas.id() {
-            surface.fill_rect(info.client_rect, &self.background);
-            surface.frame_rect(info.client_rect, &self.background);
-        }
-    }
-
     fn on_widget_event(
         &mut self,
         id: ControlId,
@@ -276,8 +296,6 @@ impl WindowHandler for DemoWindow {
             } else {
                 log::debug!("canvas event: {:?}", event);
             }
-            // This demo only observes Canvas events; leave them unhandled so
-            // the general window callback can also observe them.
             false
         } else {
             false

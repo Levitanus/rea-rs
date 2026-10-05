@@ -12,10 +12,10 @@ use rea_rs_low::raw;
 
 pub use drawing::{
     default_logfont, Bitmap, Brush, DrawTextFlags, DrawTextOptions, Font,
-    FontCharset, FontSpec, HdcSurface, Icon, ImageList, ImageSize,
+    FontCharset, FontSpec, Icon, ImageList, ImageSize,
     LiceBitmap, LiceBitmapKind, LiceBlitOptions, LiceCombineMode, LiceFont,
-    LiceSurface, LiceTextOptions, ListViewImageListKind, PaintInfo, Pen,
-    PenStyle,
+    LicePoint, LiceRect, LiceSurface, LiceTextOptions, ListViewImageListKind,
+    PaintInfo, Pen, PenStyle,
 };
 pub use events::{
     CommandNotification, ContainerEvent, ControlEvent, EventResponse,

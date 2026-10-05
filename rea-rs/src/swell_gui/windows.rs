@@ -1,5 +1,7 @@
 use super::{
-    drawing::{HdcSurface, PaintInfo},
+    drawing::{
+        HdcSurface, LiceBitmap, LiceBitmapKind, LiceSurface, PaintInfo,
+    },
     events::{EventRegistry, ScrollViewEvent, ScrollViewEventSource},
     layout::{
         self, Align, Axis, LayoutItem, LayoutOutput, OverflowPolicy, Rect,
@@ -13,8 +15,7 @@ use super::{
 };
 use crate::{
     keys::VKeys, ptr_wrappers::Hwnd, swell_gui::widgets::CreationContext,
-    IntEnum, ReaRsError,
-    Reaper, ReaperResult,
+    IntEnum, ReaRsError, Reaper, ReaperResult,
 };
 use rea_rs_low::raw;
 use serde_derive::{Deserialize, Serialize};
@@ -31,6 +32,20 @@ static CONTAINER_WINDOW_PROCS: OnceLock<Mutex<HashMap<usize, isize>>> =
     OnceLock::new();
 static HOST_WINDOW_PROCS: OnceLock<Mutex<HashMap<usize, isize>>> =
     OnceLock::new();
+
+type RenderCallback = Box<
+    dyn for<'surface> FnMut(
+        &PaintInfo,
+        &mut LiceSurface<'surface>,
+    ) -> anyhow::Result<()>,
+>;
+type WidgetRenderCallback = Box<
+    dyn for<'surface> FnMut(
+        ControlId,
+        &PaintInfo,
+        &mut LiceSurface<'surface>,
+    ) -> anyhow::Result<()>,
+>;
 
 pub type WindowId = String;
 
@@ -169,14 +184,6 @@ pub trait WindowHandler: 'static {
     fn on_resize(&mut self, _width: i32, _height: i32) {}
     fn on_activate(&mut self, _active: bool) {}
     fn on_timer(&mut self, _id: usize) {}
-    fn render(&mut self, _info: &PaintInfo, _surface: &mut HdcSurface<'_>) {}
-    fn render_widget(
-        &mut self,
-        _id: ControlId,
-        _info: &PaintInfo,
-        _surface: &mut HdcSurface<'_>,
-    ) {
-    }
     fn on_event(&mut self, _event: super::events::WindowEvent) -> bool {
         false
     }
@@ -204,6 +211,9 @@ pub struct ReaperWindow {
     pub(super) events: RefCell<EventRegistry>,
     pub(super) scroll_views: RefCell<HashMap<usize, ScrollViewRuntime>>,
     pub(super) layout: RefCell<WindowLayout>,
+    pub(super) render_bitmap: RefCell<Option<LiceBitmap>>,
+    pub(super) render_callback: RefCell<Option<RenderCallback>>,
+    pub(super) widget_render_callback: RefCell<Option<WidgetRenderCallback>>,
 }
 
 #[derive(Clone, Copy)]
@@ -314,6 +324,81 @@ impl PaintTransaction {
 impl Drop for PaintTransaction {
     fn drop(&mut self) {
         unsafe { self.swell.EndPaint(self.hwnd, &mut self.paint) };
+    }
+}
+
+/// Runs a handler's custom paint callback against a retained LICE bitmap and
+/// presents the result to the active paint HDC. The HDC is used only for
+/// preserving SWELL's pre-painted background and copying the completed image.
+fn render_with_lice(
+    window: &ReaperWindow,
+    info: &PaintInfo,
+    hdc: &mut HdcSurface<'_>,
+    widget: Option<ControlId>,
+) {
+    let width = info.client_rect.width;
+    let height = info.client_rect.height;
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let has_callback = match widget {
+        Some(_) => window.widget_render_callback.borrow().is_some(),
+        None => window.render_callback.borrow().is_some(),
+    };
+    if !has_callback {
+        return;
+    }
+
+    // Move the optional bitmap out so its RefCell borrow does not overlap the
+    // callback's mutable borrow. It is restored whether drawing succeeds.
+    let mut bitmap = window.render_bitmap.borrow_mut().take();
+    let result = (|| -> ReaperResult<()> {
+        if let Some(existing) = bitmap.as_mut() {
+            if existing.width() != width || existing.height() != height {
+                existing.resize(width, height)?;
+            }
+        } else {
+            bitmap =
+                Some(LiceBitmap::new(LiceBitmapKind::System, width, height)?);
+        }
+        let target = bitmap.as_mut().expect("bitmap created above");
+        hdc.copy_background_to_bitmap(target, info.damage_rect)?;
+        {
+            let mut surface = target.surface();
+            match widget {
+                Some(id) => {
+                    if let Some(callback) =
+                        window.widget_render_callback.borrow_mut().as_mut()
+                    {
+                        if let Err(e) = callback(id, info, &mut surface) {
+                            return Err(ReaRsError::UnderlyingError(e));
+                        };
+                    }
+                }
+                None => {
+                    if let Some(callback) =
+                        window.render_callback.borrow_mut().as_mut()
+                    {
+                        if let Err(e) = callback(info, &mut surface) {
+                            return Err(ReaRsError::UnderlyingError(e));
+                        }
+                    }
+                }
+            }
+        }
+        hdc.blit_bitmap(
+            target,
+            super::layout::Point {
+                x: info.damage_rect.x,
+                y: info.damage_rect.y,
+            },
+            info.damage_rect,
+        )
+    })();
+    window.render_bitmap.replace(bitmap);
+    if let Err(error) = result {
+        log::warn!("LICE window rendering failed: {error}");
     }
 }
 
@@ -477,6 +562,60 @@ impl<'a> ScrollView<'a> {
 }
 
 impl ReaperWindow {
+    /// Registers or replaces the custom LICE renderer for this window.
+    ///
+    /// The LICE render bitmap is allocated lazily on the next paint.
+    /// The callback's error is logged and the partially rendered bitmap is
+    /// not presented.
+    pub fn on_render<F>(&self, callback: F) -> anyhow::Result<()>
+    where
+        F: for<'surface> FnMut(
+                &PaintInfo,
+                &mut LiceSurface<'surface>,
+            ) -> anyhow::Result<()>
+            + 'static,
+    {
+        self.check_window()?;
+        self.render_callback.replace(Some(Box::new(callback)));
+        self.invalidate_render_if_visible()?;
+        Ok(())
+    }
+
+    /// Registers or replaces a LICE renderer for custom child widgets.
+    pub fn on_render_widget<F>(&self, callback: F) -> anyhow::Result<()>
+    where
+        F: for<'surface> FnMut(
+                ControlId,
+                &PaintInfo,
+                &mut LiceSurface<'surface>,
+            ) -> anyhow::Result<()>
+            + 'static,
+    {
+        self.check_window()?;
+        self.widget_render_callback
+            .replace(Some(Box::new(callback)));
+        self.invalidate_render_if_visible()?;
+        Ok(())
+    }
+
+    fn invalidate_render_if_visible(&self) -> ReaperResult<()> {
+        if Reaper::get().window_id_for_hwnd(self.hwnd()).is_some()
+            && self.is_visible()?
+        {
+            self.invalidate(None)?;
+        }
+        Ok(())
+    }
+
+    /// Removes the custom renderers and releases the retained LICE bitmap.
+    pub fn clear_render(&self) -> ReaperResult<()> {
+        self.check_window()?;
+        self.render_callback.borrow_mut().take();
+        self.widget_render_callback.borrow_mut().take();
+        self.render_bitmap.borrow_mut().take();
+        self.invalidate(None)
+    }
+
     /// Replaces the window's child UI by invoking `build` with a fresh root
     /// creation context. The top-level window and its lifecycle remain intact.
     pub fn build_ui<'a>(&'a self) -> anyhow::Result<CreationContext<'a>> {
@@ -512,10 +651,13 @@ impl ReaperWindow {
                     && !view.is_null()
                     && unsafe { reaper.swell().IsWindow(view) }
                 {
-                    unsafe { let _ = reaper.low().UninitializeCoolSB(view); }
+                    unsafe {
+                        let _ = reaper.low().UninitializeCoolSB(view);
+                    }
                 }
             }
-            let mut hwnds: Vec<_> = controls.iter().map(|control| control.hwnd).collect();
+            let mut hwnds: Vec<_> =
+                controls.iter().map(|control| control.hwnd).collect();
             hwnds.extend(structural.iter().map(|(_, hwnd)| *hwnd));
             for runtime in self.scroll_views.borrow().values() {
                 if runtime.content != self.hwnd() {
@@ -841,6 +983,9 @@ impl ReaperWindow {
             events: RefCell::new(EventRegistry::default()),
             scroll_views: RefCell::new(HashMap::new()),
             layout: RefCell::new(WindowLayout::default()),
+            render_bitmap: RefCell::new(None),
+            render_callback: RefCell::new(None),
+            widget_render_callback: RefCell::new(None),
         })
     }
 
@@ -878,6 +1023,9 @@ impl ReaperWindow {
             events: RefCell::new(EventRegistry::default()),
             scroll_views: RefCell::new(HashMap::new()),
             layout: RefCell::new(WindowLayout::default()),
+            render_bitmap: RefCell::new(None),
+            render_callback: RefCell::new(None),
+            widget_render_callback: RefCell::new(None),
         })
     }
 
@@ -1140,7 +1288,9 @@ fn decode_window_event(
             position: point,
             buttons: mouse_buttons,
         }),
-        raw::WM_LBUTTONDOWN | raw::WM_RBUTTONDOWN | raw::WM_MBUTTONDOWN
+        raw::WM_LBUTTONDOWN
+        | raw::WM_RBUTTONDOWN
+        | raw::WM_MBUTTONDOWN
         | 0x020B => {
             let button = match msg {
                 raw::WM_LBUTTONDOWN => MouseButton::Left,
@@ -1149,7 +1299,11 @@ fn decode_window_event(
                 _ if (wparam >> 16) as u16 == 1 => MouseButton::X1,
                 _ => MouseButton::X2,
             };
-            Some(WindowEvent::Mouse { message: MouseMessage::Down(button), position: point, buttons: mouse_buttons })
+            Some(WindowEvent::Mouse {
+                message: MouseMessage::Down(button),
+                position: point,
+                buttons: mouse_buttons,
+            })
         }
         raw::WM_LBUTTONUP | raw::WM_RBUTTONUP | raw::WM_MBUTTONUP | 0x020C => {
             let button = match msg {
@@ -1159,9 +1313,15 @@ fn decode_window_event(
                 _ if (wparam >> 16) as u16 == 1 => MouseButton::X1,
                 _ => MouseButton::X2,
             };
-            Some(WindowEvent::Mouse { message: MouseMessage::Up(button), position: point, buttons: mouse_buttons })
+            Some(WindowEvent::Mouse {
+                message: MouseMessage::Up(button),
+                position: point,
+                buttons: mouse_buttons,
+            })
         }
-        raw::WM_LBUTTONDBLCLK | raw::WM_RBUTTONDBLCLK | raw::WM_MBUTTONDBLCLK
+        raw::WM_LBUTTONDBLCLK
+        | raw::WM_RBUTTONDBLCLK
+        | raw::WM_MBUTTONDBLCLK
         | 0x020D => {
             let button = match msg {
                 raw::WM_LBUTTONDBLCLK => MouseButton::Left,
@@ -1170,21 +1330,32 @@ fn decode_window_event(
                 _ if (wparam >> 16) as u16 == 1 => MouseButton::X1,
                 _ => MouseButton::X2,
             };
-            Some(WindowEvent::Mouse { message: MouseMessage::DoubleClick(button), position: point, buttons: mouse_buttons })
+            Some(WindowEvent::Mouse {
+                message: MouseMessage::DoubleClick(button),
+                position: point,
+                buttons: mouse_buttons,
+            })
         }
         raw::WM_MOUSEWHEEL | raw::WM_MOUSEHWHEEL => {
             let mut screen_point = raw::POINT {
                 x: ((lparam as u32) as u16 as i16) as i32,
                 y: ((lparam as u32 >> 16) as u16 as i16) as i32,
             };
-            unsafe { Reaper::get().swell().ScreenToClient(hwnd, &mut screen_point) };
+            unsafe {
+                Reaper::get()
+                    .swell()
+                    .ScreenToClient(hwnd, &mut screen_point)
+            };
             Some(WindowEvent::Wheel {
                 horizontal: msg == raw::WM_MOUSEHWHEEL,
                 delta: ((wparam >> 16) & 0xffff) as i16 as i32,
                 position: screen_point.into(),
             })
         }
-        raw::WM_KEYDOWN | raw::WM_KEYUP | raw::WM_SYSKEYDOWN | raw::WM_SYSKEYUP => {
+        raw::WM_KEYDOWN
+        | raw::WM_KEYUP
+        | raw::WM_SYSKEYDOWN
+        | raw::WM_SYSKEYUP => {
             let key = wparam as u32;
             Some(WindowEvent::Key {
                 message: match msg {
@@ -1197,7 +1368,14 @@ fn decode_window_event(
                     .map(NativeKey::Known)
                     .unwrap_or(NativeKey::Other(key)),
                 stroke: (lparam as isize).into(),
-                modifiers: if matches!(msg, raw::WM_SYSKEYDOWN | raw::WM_SYSKEYUP) { KeyModifiers::ALT } else { KeyModifiers::empty() },
+                modifiers: if matches!(
+                    msg,
+                    raw::WM_SYSKEYDOWN | raw::WM_SYSKEYUP
+                ) {
+                    KeyModifiers::ALT
+                } else {
+                    KeyModifiers::empty()
+                },
             })
         }
         raw::WM_CHAR | raw::WM_SYSCHAR => {
@@ -1219,27 +1397,34 @@ pub(crate) unsafe extern "C" fn window_proc(
     if !Reaper::is_available() {
         return 0;
     }
-    let reaper = Reaper::get_mut();
-    // Structural ScrollView HWNDs use this procedure too. Resolve their
-    // owner through the parent chain so scroll, resize and command messages
-    // are associated with the correct registered window.
-    let direct_host = reaper.window_routes.get(&(hwnd as usize)).cloned();
-    let mut current = hwnd;
-    let mut key = direct_host.clone();
-    while key.is_none() && !current.is_null() {
-        if let Some(owner) = reaper.window_id_for_hwnd(current) {
-            key = Some(owner);
-            break;
+    // Window creation synchronously dispatches messages before its HWND is
+    // registered. Resolve those with shared access only: taking the mutable
+    // global Reaper reference here would alias the create_window caller.
+    let (direct_host, key) = {
+        let reaper = Reaper::get();
+        // Structural ScrollView HWNDs use this procedure too. Resolve their
+        // owner through the parent chain so messages reach the registered
+        // top-level window.
+        let direct_host = reaper.window_routes.get(&(hwnd as usize)).cloned();
+        let mut current = hwnd;
+        let mut key = direct_host.clone();
+        while key.is_none() && !current.is_null() {
+            if let Some(owner) = reaper.window_id_for_hwnd(current) {
+                key = Some(owner);
+                break;
+            }
+            current = reaper.swell().GetParent(current);
         }
-        current = reaper.swell().GetParent(current);
-    }
-    let Some(key) = key else {
-        log::warn!("window message for unregistered HWND {:p}", hwnd);
-        return Reaper::get()
-            .swell()
-            .DefWindowProc(hwnd, msg, wparam, lparam)
-            as raw::INT_PTR;
+        let Some(key) = key else {
+            log::warn!("window message for unregistered HWND {:p}", hwnd);
+            return reaper
+                .swell()
+                .DefWindowProc(hwnd, msg, wparam, lparam)
+                as raw::INT_PTR;
+        };
+        (direct_host, key)
     };
+    let reaper = Reaper::get_mut();
     let is_borrowed_host = direct_host.is_some()
         && reaper
             .windows
@@ -1309,7 +1494,12 @@ pub(crate) unsafe extern "C" fn window_proc(
                                 *Reaper::get().swell(),
                             )
                         {
-                            handler.render(&info, &mut surface);
+                            render_with_lice(
+                                handler.window(),
+                                &info,
+                                &mut surface,
+                                None,
+                            );
                         }
                     }
                     Reaper::get().swell().ReleaseDC(hwnd, hdc);
@@ -1341,14 +1531,11 @@ pub(crate) unsafe extern "C" fn window_proc(
                 .iter()
                 .find_map(|(id, child)| (*child == hwnd).then_some(*id))
                 .or_else(|| {
-                    handler
-                        .window()
-                        .scroll_views
-                        .borrow()
-                        .values()
-                        .find_map(|runtime| {
+                    handler.window().scroll_views.borrow().values().find_map(
+                        |runtime| {
                             (runtime.content == hwnd).then_some(runtime.id)
-                        })
+                        },
+                    )
                 })
         });
         if matches!(
@@ -1558,9 +1745,13 @@ pub(crate) unsafe extern "C" fn window_proc(
                     control: control.id,
                     code: (wparam as usize & 0xffff) as i32,
                 };
-                let result = handler.window().events.borrow_mut().dispatch(event);
+                let result =
+                    handler.window().events.borrow_mut().dispatch(event);
                 log::debug!("control scroll dispatch: event={event:?} result={result:?}");
-                if matches!(result, super::events::DispatchResult::ForwardToWindow) {
+                if matches!(
+                    result,
+                    super::events::DispatchResult::ForwardToWindow
+                ) {
                     handler.on_control_event(event);
                 }
             }
@@ -1636,9 +1827,13 @@ pub(crate) unsafe extern "C" fn window_proc(
                     control: control_id,
                     code: header.code,
                 };
-                let result = handler.window().events.borrow_mut().dispatch(event);
+                let result =
+                    handler.window().events.borrow_mut().dispatch(event);
                 log::debug!("control notification dispatch: event={event:?} result={result:?}");
-                if matches!(result, super::events::DispatchResult::ForwardToWindow) {
+                if matches!(
+                    result,
+                    super::events::DispatchResult::ForwardToWindow
+                ) {
                     handler.on_control_event(event);
                 }
             }
@@ -1650,17 +1845,21 @@ pub(crate) unsafe extern "C" fn window_proc(
                 .get(&key)
                 .map(|handler| {
                     let window = handler.window();
-                    let id =
-                        window.layout.borrow().structural.iter().find_map(
-                            |(id, child)| (*child == hwnd).then_some(*id),
-                        ).or_else(|| {
-                            window
-                                .scroll_views
-                                .borrow()
-                                .values()
-                                .find_map(|runtime| {
-                                    (runtime.content == hwnd).then_some(runtime.id)
-                                })
+                    let id = window
+                        .layout
+                        .borrow()
+                        .structural
+                        .iter()
+                        .find_map(|(id, child)| {
+                            (*child == hwnd).then_some(*id)
+                        })
+                        .or_else(|| {
+                            window.scroll_views.borrow().values().find_map(
+                                |runtime| {
+                                    (runtime.content == hwnd)
+                                        .then_some(runtime.id)
+                                },
+                            )
                         });
                     (window.hwnd() == hwnd, id)
                 })
@@ -1672,9 +1871,19 @@ pub(crate) unsafe extern "C" fn window_proc(
                 let handler = Reaper::get_mut().windows.get_mut(&key);
                 if let Some(handler) = handler {
                     if top_level {
-                        handler.render(&info, &mut surface);
+                        render_with_lice(
+                            handler.window(),
+                            &info,
+                            &mut surface,
+                            None,
+                        );
                     } else if let Some(id) = child_id {
-                        handler.render_widget(id, &info, &mut surface);
+                        render_with_lice(
+                            handler.window(),
+                            &info,
+                            &mut surface,
+                            Some(id),
+                        );
                     }
                 }
             }
