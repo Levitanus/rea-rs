@@ -297,6 +297,7 @@ fn compile_glue_code() {
         // To make it compile for ARM targets (armv7 and aarch64) whose char
         // type is unsigned.
         .define("WDL_ALLOW_UNSIGNED_DEFAULT_CHAR", None)
+        .define("SWELL_PROVIDED_BY_APP", None)
         // To make it compile for ARM targets (armv7)
         .define("_FILE_OFFSET_BITS", "64")
         .file("src/control_surface.cpp")
@@ -306,7 +307,17 @@ fn compile_glue_code() {
         .file("src/resample.cpp")
         .file("src/pitch_shift.cpp")
         .file("src/project_state_context.cpp")
+        .file("src/virtual_controls.cpp")
+        .file("lib/WDL/wingui/virtwnd.cpp")
+        .file("lib/WDL/wingui/virtwnd-iconbutton.cpp")
+        .file("lib/WDL/wingui/virtwnd-slider.cpp")
+        .file("lib/WDL/wingui/virtwnd-listbox.cpp")
+        .file("lib/WDL/lice/lice.cpp")
+        .file("lib/WDL/lice/lice_line.cpp")
+        .file("lib/WDL/lice/lice_arc.cpp")
         .file("lib/WDL/projectcontext.cpp");
+    println!("cargo:rerun-if-changed=src/virtual_controls.cpp");
+    println!("cargo:rerun-if-changed=src/virtual_controls.hpp");
     if cfg!(target_os = "macos") {
         build.cpp_set_stdlib("c++");
     }

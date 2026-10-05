@@ -688,7 +688,7 @@ impl LiceBitmap {
         }
     }
 
-    fn raw(&self) -> *mut LICE_IBitmap {
+    pub(crate) fn raw(&self) -> *mut LICE_IBitmap {
         self.handle.as_ptr()
     }
 }
@@ -907,6 +907,10 @@ impl Drop for ImageList {
 }
 
 impl LiceSurface<'_> {
+    pub(crate) fn raw_bitmap(&mut self) -> *mut LICE_IBitmap {
+        self.handle.as_ptr()
+    }
+
     pub fn dimensions(&self) -> ImageSize {
         unsafe {
             ImageSize::new(

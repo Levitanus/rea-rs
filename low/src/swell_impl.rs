@@ -338,6 +338,59 @@ impl Swell {
         }
     }
 
+    /// Creates a child from one of the built-in SWELL/Win32 control classes.
+    /// The class name is passed through SWELL_MakeControl on Unix and to
+    /// CreateWindowExW on Windows, keeping the platform factory choice here.
+    pub unsafe fn create_native_control(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        class_name: &str,
+        text: *const ::std::os::raw::c_char,
+        style: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            use std::ffi::CString;
+            let class_name = CString::new(class_name).ok()?;
+            let make_set_cur_parms = root::swell_functions::SWELL_MakeSetCurParms?;
+            let make_control = root::swell_functions::SWELL_MakeControl?;
+            make_set_cur_parms(1.0, 1.0, 0.0, 0.0, parent, false, false);
+            let hwnd = make_control(
+                text,
+                id,
+                class_name.as_ptr(),
+                style,
+                x,
+                y,
+                width,
+                height,
+                0,
+            );
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent,
+                id,
+                text,
+                class_name,
+                winapi::um::winuser::WS_CHILD
+                    | winapi::um::winuser::WS_VISIBLE
+                    | style as u32,
+                x,
+                y,
+                width,
+                height,
+            )
+        }
+    }
+
     #[cfg(target_family = "windows")]
     unsafe fn create_windows_control(
         &self,

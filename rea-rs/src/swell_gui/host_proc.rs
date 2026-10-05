@@ -229,7 +229,6 @@ pub(crate) unsafe extern "C" fn window_proc(
             current = reaper.swell().GetParent(current);
         }
         let Some(key) = key else {
-            log::warn!("window message for unregistered HWND {:p}", hwnd);
             return reaper.swell().DefWindowProc(hwnd, msg, wparam, lparam)
                 as raw::INT_PTR;
         };
@@ -332,8 +331,7 @@ pub(crate) unsafe extern "C" fn window_proc(
         }
         return call_saved_host_proc(hwnd, msg, wparam, lparam).unwrap_or(0);
     }
-    if let Some(event) = decode_window_event(hwnd, msg, wparam, lparam) {
-        let widget_id = Reaper::get().windows.get(&key).and_then(|handler| {
+    let widget_id = Reaper::get().windows.get(&key).and_then(|handler| {
             handler
                 .window()
                 .layout
@@ -349,6 +347,172 @@ pub(crate) unsafe extern "C" fn window_proc(
                     )
                 })
         });
+    if msg == raw::WM_CAPTURECHANGED {
+        let canvas_id = Reaper::get().windows.get(&key).and_then(|handler| {
+            handler.window().layout.borrow().structural.iter().find_map(
+                |(id, child)| (*child == hwnd).then_some(*id),
+            )
+        });
+        if let (Some(id), Some(handler)) = (
+            canvas_id,
+            Reaper::get_mut().windows.get_mut(&key),
+        ) {
+            if let Ok(mut hosts) = handler.window().virtual_hosts.try_borrow_mut() {
+                if let Some(host) = hosts.get_mut(&id) {
+                    host.capture_lost();
+                }
+            }
+            return 0;
+        }
+    }
+
+    if let Some(super::events::WindowEvent::Focus(false)) =
+        decode_window_event(hwnd, msg, wparam, lparam)
+    {
+        let canvas_id = Reaper::get().windows.get(&key).and_then(|handler| {
+            handler.window().layout.borrow().structural.iter().find_map(
+                |(id, child)| (*child == hwnd).then_some(*id),
+            )
+        });
+        if let (Some(id), Some(handler)) = (
+            canvas_id,
+            Reaper::get_mut().windows.get_mut(&key),
+        ) {
+            if let Ok(mut hosts) = handler.window().virtual_hosts.try_borrow_mut() {
+                if let Some(host) = hosts.get_mut(&id) {
+                    host.capture_lost();
+                }
+            }
+        }
+    }
+
+    if let Some(event) = decode_window_event(hwnd, msg, wparam, lparam) {
+        if let Some(id) = widget_id {
+            let canvas_id = Reaper::get()
+                .windows
+                .get(&key)
+                .and_then(|handler| {
+                    let window = handler.window();
+                    if window
+                        .virtual_hosts
+                        .try_borrow()
+                        .is_ok_and(|hosts| hosts.contains_key(&id))
+                    {
+                        Some(id)
+                    } else {
+                        window.layout.borrow().virtual_parents.get(&id).copied()
+                    }
+                });
+            if let Some(canvas_id) = canvas_id {
+                let release_capture = matches!(
+                    event,
+                    super::events::WindowEvent::Mouse {
+                        message: super::events::MouseMessage::Up(
+                            super::events::MouseButton::Left
+                        ),
+                        ..
+                    }
+                );
+                let point = match &event {
+                    super::events::WindowEvent::Mouse { position, .. }
+                    | super::events::WindowEvent::Wheel { position, .. } => Some(*position),
+                    _ => None,
+                };
+                let handled = if let Some(handler) = Reaper::get_mut().windows.get_mut(&key) {
+                    let window = handler.window();
+                    if let (Ok(mut hosts), Some(point)) =
+                        (window.virtual_hosts.try_borrow_mut(), point)
+                    {
+                        let host = hosts.get_mut(&canvas_id);
+                        if let Some(host) = host {
+                            match &event {
+                                super::events::WindowEvent::Mouse {
+                                    message: super::events::MouseMessage::Down(
+                                        super::events::MouseButton::Left,
+                                    ),
+                                    ..
+                                } => host.mouse_down(
+                                    point.x as i32,
+                                    point.y as i32,
+                                ),
+                                super::events::WindowEvent::Mouse {
+                                    message: super::events::MouseMessage::Move,
+                                    ..
+                                } => {
+                                    host.mouse_move(
+                                        point.x as i32,
+                                        point.y as i32,
+                                    );
+                                    true
+                                }
+                                super::events::WindowEvent::Mouse {
+                                    message: super::events::MouseMessage::Up(
+                                        super::events::MouseButton::Left,
+                                    ),
+                                    ..
+                                } => {
+                                    host.mouse_up(
+                                        point.x as i32,
+                                        point.y as i32,
+                                    );
+                                    true
+                                }
+                                super::events::WindowEvent::Mouse {
+                                    message:
+                                        super::events::MouseMessage::DoubleClick(
+                                            super::events::MouseButton::Left,
+                                        ),
+                                    ..
+                                } => host.mouse_double_click(
+                                    point.x as i32,
+                                    point.y as i32,
+                                ),
+                                super::events::WindowEvent::Wheel {
+                                    delta, ..
+                                } => host.mouse_wheel(
+                                    point.x as i32,
+                                    point.y as i32,
+                                    *delta,
+                                ),
+                                _ => false,
+                            }
+                        } else {
+                            false
+                        }
+                    } else { false }
+                } else { false };
+                let acquire_capture = handled
+                    && matches!(
+                        event,
+                        super::events::WindowEvent::Mouse {
+                            message: super::events::MouseMessage::Down(
+                                super::events::MouseButton::Left
+                            ),
+                            ..
+                        }
+                    );
+                if acquire_capture {
+                    Reaper::get().swell().SetCapture(hwnd);
+                }
+                if release_capture {
+                    Reaper::get().swell().ReleaseCapture();
+                }
+                let commands = Reaper::get()
+                    .windows
+                    .get(&key)
+                    .map(|handler| handler.window().dispatch_virtual_commands())
+                    .unwrap_or_default();
+                if let Some(handler) = Reaper::get_mut().windows.get_mut(&key) {
+                    for command in commands {
+                        let result = handler.window().events.borrow_mut().dispatch(command);
+                        if matches!(result, super::events::DispatchResult::ForwardToWindow) {
+                            handler.on_control_event(command);
+                        }
+                    }
+                }
+                if handled { return 0; }
+            }
+        }
         if matches!(
             &event,
             super::events::WindowEvent::Mouse {
@@ -362,6 +526,20 @@ pub(crate) unsafe extern "C" fn window_proc(
             log::debug!("window input: hwnd={hwnd:?} widget={widget_id:?} event={event:?}");
         }
         if let Some(handler) = Reaper::get_mut().windows.get_mut(&key) {
+            let virtual_events = handler.window().dispatch_virtual_commands();
+            for virtual_event in virtual_events {
+                let result = handler
+                    .window()
+                    .events
+                    .borrow_mut()
+                    .dispatch(virtual_event);
+                if matches!(
+                    result,
+                    super::events::DispatchResult::ForwardToWindow
+                ) {
+                    handler.on_control_event(virtual_event);
+                }
+            }
             if let Some(id) = widget_id {
                 let handled = handler.on_widget_event(id, event.clone());
                 if handled || handler.on_event(event) {
@@ -387,6 +565,13 @@ pub(crate) unsafe extern "C" fn window_proc(
                 return 1;
             };
             reaper.window_routes.remove(&(hwnd as usize));
+                let virtual_events = handler.window().dispatch_virtual_commands();
+                for virtual_event in virtual_events {
+                    let result = handler.window().events.borrow_mut().dispatch(virtual_event);
+                    if matches!(result, super::events::DispatchResult::ForwardToWindow) {
+                        handler.on_control_event(virtual_event);
+                    }
+                }
             let allow = handler.on_close();
             if !unsafe { reaper.swell().IsWindow(hwnd) } {
                 handler.window().relinquish_native_ownership();
@@ -552,9 +737,15 @@ pub(crate) unsafe extern "C" fn window_proc(
                 .borrow()
                 .get_by_hwnd(lparam as raw::HWND);
             if let Some(control) = control {
-                let event = super::events::ControlEvent::Scroll {
-                    control: control.id,
-                    code: (wparam as usize & 0xffff) as i32,
+                let event = if control.kind == super::widgets::ControlKind::Trackbar {
+                    super::events::ControlEvent::TrackbarChanged {
+                        control: control.id,
+                    }
+                } else {
+                    super::events::ControlEvent::Scroll {
+                        control: control.id,
+                        code: (wparam as usize & 0xffff) as i32,
+                    }
                 };
                 let result =
                     handler.window().events.borrow_mut().dispatch(event);
@@ -633,11 +824,12 @@ pub(crate) unsafe extern "C" fn window_proc(
             }
             let header = &*(lparam as *const super::events::NotifyHeader);
             let control_id = super::widgets::ControlId(header.id_from as i32);
-            if handler.window().control(control_id).is_some() {
-                let event = super::events::ControlEvent::Notified {
-                    control: control_id,
-                    code: header.code,
-                };
+            if let Some(control) = handler.window().control(control_id) {
+                let event = super::events::decode_notify_event(
+                    control.kind,
+                    control_id,
+                    header.code,
+                );
                 let result =
                     handler.window().events.borrow_mut().dispatch(event);
                 log::debug!("control notification dispatch: event={event:?} result={result:?}");
@@ -755,7 +947,9 @@ pub(super) unsafe extern "C" fn container_event_proc(
     wparam: raw::WPARAM,
     lparam: raw::LPARAM,
 ) -> raw::INT_PTR {
-    if msg == raw::WM_COMMAND && Reaper::is_available() {
+    if matches!(msg, raw::WM_COMMAND | raw::WM_HSCROLL | raw::WM_VSCROLL | raw::WM_NOTIFY)
+        && Reaper::is_available()
+    {
         let mut parent = Reaper::get().swell().GetParent(hwnd);
         while !parent.is_null() {
             if Reaper::get().window_id_for_hwnd(parent).is_some() {

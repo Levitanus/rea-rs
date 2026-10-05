@@ -295,6 +295,43 @@ typed_control!(TabControl, Tab);
 typed_control!(ListView, ListView);
 typed_control!(TreeView, TreeView);
 
+macro_rules! virtual_typed_control {
+    ($name:ident) => {
+        #[derive(Clone, Copy)]
+        pub struct $name(rea_rs_low::VirtualControl);
+        impl $name {
+            pub fn id(&self) -> ControlId { ControlId(self.0.id()) }
+            pub fn set_rect(&self, rect: ControlRect) { self.0.set_rect(rect.x, rect.y, rect.width, rect.height); }
+            pub fn set_visible(&self, visible: bool) { self.0.set_visible(visible); }
+            pub fn set_enabled(&self, enabled: bool) { self.0.set_enabled(enabled); }
+            pub fn set_text(&self, text: &str) -> Result<(), std::ffi::NulError> { self.0.set_text(text) }
+        }
+    };
+}
+
+virtual_typed_control!(VirtualIconButton);
+virtual_typed_control!(VirtualStaticText);
+virtual_typed_control!(VirtualComboBox);
+virtual_typed_control!(VirtualSlider);
+virtual_typed_control!(VirtualListBox);
+
+impl VirtualIconButton {
+    pub fn set_checked(&self, checked: bool) { self.0.set_checked(checked); }
+}
+impl VirtualComboBox {
+    pub fn add_item(&self, text: &str) -> Result<i32, std::ffi::NulError> { self.0.add_item(text) }
+    pub fn selection(&self) -> i32 { self.0.selection() }
+    pub fn set_selection(&self, index: i32) { self.0.set_selection(index); }
+}
+impl VirtualSlider {
+    pub fn set_range(&self, min: i32, max: i32, center: i32) { self.0.set_range(min, max, center); }
+    pub fn value(&self) -> i32 { self.0.value() }
+    pub fn set_value(&self, value: i32) { self.0.set_value(value); }
+}
+impl VirtualListBox {
+    pub fn add_item(&self, text: &str) -> Result<i32, std::ffi::NulError> { self.0.add_item(text) }
+}
+
 impl ListView {
     pub fn from_control(control: ReaperControl) -> ReaperResult<Self> {
         if control.kind() != ControlKind::ListView {
@@ -398,8 +435,9 @@ impl ProgressBar {
         self.send_message(raw::PBM_SETPOS, value as usize, 0)
             .map(|_| ())
     }
-    pub fn set_range(&self, min: i32, max: i32) -> ReaperResult<()> {
-        self.send_message(raw::PBM_SETRANGE32, min as usize, max as isize)
+    pub fn set_range(&self, min: u16, max: u16) -> ReaperResult<()> {
+        let packed = ((max as u32) << 16) | min as u32;
+        self.send_message(raw::PBM_SETRANGE, 0, packed as isize)
             .map(|_| ())
     }
 }
@@ -499,6 +537,70 @@ impl<'a> CreationContext<'a> {
             id,
             label,
             self.size(size),
+        )?;
+        self.window.register_layout_entry(self.container, id, size);
+        Ok(control)
+    }
+
+    pub fn radio_button(
+        &self,
+        id: ControlId,
+        label: &str,
+        size: WidgetSize,
+        styles: i32,
+    ) -> anyhow::Result<RadioButton> {
+        let control = self.window.create_radio_button_in(
+            self.parent, id, label, self.size(size), styles,
+        )?;
+        self.window.register_layout_entry(self.container, id, size);
+        Ok(control)
+    }
+
+    pub fn trackbar(
+        &self, id: ControlId, size: WidgetSize, styles: i32,
+    ) -> anyhow::Result<Trackbar> {
+        let control = self.window.create_trackbar_in(
+            self.parent, id, self.size(size), styles,
+        )?;
+        self.window.register_layout_entry(self.container, id, size);
+        Ok(control)
+    }
+
+    pub fn progress_bar(
+        &self, id: ControlId, size: WidgetSize, styles: i32,
+    ) -> anyhow::Result<ProgressBar> {
+        let control = self.window.create_progress_bar_in(
+            self.parent, id, self.size(size), styles,
+        )?;
+        self.window.register_layout_entry(self.container, id, size);
+        Ok(control)
+    }
+
+    pub fn tab_control(
+        &self, id: ControlId, size: WidgetSize, styles: i32,
+    ) -> anyhow::Result<TabControl> {
+        let control = self.window.create_tab_control_in(
+            self.parent, id, self.size(size), styles,
+        )?;
+        self.window.register_layout_entry(self.container, id, size);
+        Ok(control)
+    }
+
+    pub fn list_view(
+        &self, id: ControlId, size: WidgetSize, styles: i32,
+    ) -> anyhow::Result<ListView> {
+        let control = self.window.create_list_view_in(
+            self.parent, id, self.size(size), styles,
+        )?;
+        self.window.register_layout_entry(self.container, id, size);
+        Ok(control)
+    }
+
+    pub fn tree_view(
+        &self, id: ControlId, size: WidgetSize, styles: i32,
+    ) -> anyhow::Result<TreeView> {
+        let control = self.window.create_tree_view_in(
+            self.parent, id, self.size(size), styles,
         )?;
         self.window.register_layout_entry(self.container, id, size);
         Ok(control)
@@ -683,9 +785,89 @@ impl<'a> CreationContext<'a> {
         let hwnd = self
             .window
             .create_structural_child(self.parent, self.size(size))?;
-        self.window.layout.borrow_mut().structural.insert(id, hwnd);
+        self.window.install_container_event_proc(hwnd)?;
+        {
+            let mut layout = self.window.layout.borrow_mut();
+            layout.structural.insert(id, hwnd);
+            layout.groups.insert(
+                id,
+                LayoutNode {
+                    entries: Vec::new(),
+                    axis: Axis::Y,
+                    spacing: 8,
+                    policy: OverflowPolicy::Wrap,
+                },
+            );
+        }
         self.window.register_layout_entry(self.container, id, size);
         Ok(Canvas { id, hwnd })
+    }
+
+    pub fn virtual_icon_button(
+        &self, id: ControlId, canvas: ControlId, size: WidgetSize,
+    ) -> anyhow::Result<VirtualIconButton> {
+        self.virtual_widget(id, canvas, size, rea_rs_low::VirtualControlKind::IconButton)
+            .map(VirtualIconButton)
+    }
+
+    pub fn virtual_static_text(
+        &self, id: ControlId, canvas: ControlId, size: WidgetSize,
+    ) -> anyhow::Result<VirtualStaticText> {
+        self.virtual_widget(id, canvas, size, rea_rs_low::VirtualControlKind::StaticText)
+            .map(VirtualStaticText)
+    }
+
+    pub fn virtual_combo_box(
+        &self, id: ControlId, canvas: ControlId, size: WidgetSize,
+    ) -> anyhow::Result<VirtualComboBox> {
+        self.virtual_widget(id, canvas, size, rea_rs_low::VirtualControlKind::ComboBox)
+            .map(VirtualComboBox)
+    }
+
+    pub fn virtual_slider(
+        &self, id: ControlId, canvas: ControlId, size: WidgetSize,
+    ) -> anyhow::Result<VirtualSlider> {
+        self.virtual_widget(id, canvas, size, rea_rs_low::VirtualControlKind::Slider)
+            .map(VirtualSlider)
+    }
+
+    pub fn virtual_list_box(
+        &self, id: ControlId, canvas: ControlId, size: WidgetSize,
+    ) -> anyhow::Result<VirtualListBox> {
+        self.virtual_widget(id, canvas, size, rea_rs_low::VirtualControlKind::ListBox)
+            .map(VirtualListBox)
+    }
+
+    fn virtual_widget(
+        &self,
+        id: ControlId,
+        canvas_id: ControlId,
+        size: WidgetSize,
+        kind: rea_rs_low::VirtualControlKind,
+    ) -> anyhow::Result<rea_rs_low::VirtualControl> {
+        let parent = self.window.layout.borrow().structural.get(&canvas_id).copied()
+            .ok_or_else(|| anyhow::anyhow!("virtual controls require a registered Canvas"))?;
+        let mut hosts = self.window.virtual_hosts.borrow_mut();
+        let host = hosts.entry(canvas_id).or_insert_with(|| {
+            let queue = Rc::clone(&self.window.virtual_command_queue);
+            rea_rs_low::VirtualControlHost::new(move |command, p1, p2, source_id| {
+                queue.borrow_mut().push((command, p1, p2, source_id));
+            })
+        });
+        host.set_real_parent(parent as *mut std::ffi::c_void);
+        let control = host
+            .create_control(kind, id.0)
+            .ok_or_else(|| anyhow::anyhow!("could not create virtual control"))?;
+        let rect = self.size(size);
+        control.set_rect(0, 0, rect.width, rect.height);
+        control.set_visible(true);
+        self.window
+            .layout
+            .borrow_mut()
+            .virtual_controls
+            .insert(id, control);
+        self.window.register_layout_entry(Some(canvas_id), id, size);
+        Ok(control)
     }
 
     pub fn on_widget_event(
@@ -766,6 +948,95 @@ impl Canvas {
 }
 
 impl ReaperWindow {
+    fn create_native_in(
+        &self,
+        parent: raw::HWND,
+        id: ControlId,
+        kind: ControlKind,
+        class: &str,
+        text: Option<&str>,
+        rect: ControlRect,
+        styles: i32,
+    ) -> ReaperResult<ControlHandle> {
+        self.prepare_control_creation(rect)?;
+        let text = text.map(CString::new).transpose()?;
+        let hwnd = unsafe {
+            Self::swell()?.create_native_control(
+                parent,
+                id.0,
+                class,
+                text.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+                styles,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+            )
+        }
+        .ok_or(ReaRsError::NullPtr("native control"))?;
+        self.create_control_handle(id, kind, hwnd)
+    }
+
+    pub(super) fn create_radio_button_in(
+        &self, parent: raw::HWND, id: ControlId, label: &str,
+        rect: ControlRect, styles: i32,
+    ) -> ReaperResult<RadioButton> {
+        Ok(RadioButton::new(self.create_native_in(
+            parent, id, ControlKind::RadioButton, "Button", Some(label), rect,
+            0x00000009 | styles,
+        )?))
+    }
+
+    pub(super) fn create_trackbar_in(
+        &self, parent: raw::HWND, id: ControlId, rect: ControlRect,
+        styles: i32,
+    ) -> ReaperResult<Trackbar> {
+        Ok(Trackbar::new(self.create_native_in(
+            parent, id, ControlKind::Trackbar, "msctls_trackbar32", None,
+            rect, styles,
+        )?))
+    }
+
+    pub(super) fn create_progress_bar_in(
+        &self, parent: raw::HWND, id: ControlId, rect: ControlRect,
+        styles: i32,
+    ) -> ReaperResult<ProgressBar> {
+        Ok(ProgressBar::new(self.create_native_in(
+            parent, id, ControlKind::ProgressBar, "msctls_progress32", None,
+            rect, styles,
+        )?))
+    }
+
+    pub(super) fn create_tab_control_in(
+        &self, parent: raw::HWND, id: ControlId, rect: ControlRect,
+        styles: i32,
+    ) -> ReaperResult<TabControl> {
+        Ok(TabControl::new(self.create_native_in(
+            parent, id, ControlKind::Tab, "SysTabControl32", None, rect,
+            styles,
+        )?))
+    }
+
+    pub(super) fn create_list_view_in(
+        &self, parent: raw::HWND, id: ControlId, rect: ControlRect,
+        styles: i32,
+    ) -> ReaperResult<ListView> {
+        Ok(ListView::new(self.create_native_in(
+            parent, id, ControlKind::ListView, "SysListView32", None, rect,
+            styles,
+        )?))
+    }
+
+    pub(super) fn create_tree_view_in(
+        &self, parent: raw::HWND, id: ControlId, rect: ControlRect,
+        styles: i32,
+    ) -> ReaperResult<TreeView> {
+        Ok(TreeView::new(self.create_native_in(
+            parent, id, ControlKind::TreeView, "SysTreeView32", None, rect,
+            styles,
+        )?))
+    }
+
     pub(super) fn create_button_in(
         &self,
         parent: raw::HWND,

@@ -209,6 +209,10 @@ pub struct ReaperWindow {
     pub(super) render_bitmap: RefCell<Option<LiceBitmap>>,
     pub(super) render_callback: RefCell<Option<RenderCallback>>,
     pub(super) widget_render_callback: RefCell<Option<WidgetRenderCallback>>,
+    pub(super) virtual_hosts:
+        RefCell<HashMap<ControlId, rea_rs_low::VirtualControlHost>>,
+    pub(super) virtual_command_queue:
+        Rc<RefCell<Vec<(i32, isize, isize, i32)>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -228,6 +232,9 @@ pub(super) struct WindowLayout {
     pub(super) root: LayoutNode,
     pub(super) groups: HashMap<ControlId, LayoutNode>,
     pub(super) structural: HashMap<ControlId, raw::HWND>,
+    pub(super) virtual_controls:
+        HashMap<ControlId, rea_rs_low::VirtualControl>,
+    pub(super) virtual_parents: HashMap<ControlId, ControlId>,
 }
 
 impl Default for WindowLayout {
@@ -245,6 +252,8 @@ impl Default for WindowLayout {
             },
             groups: HashMap::new(),
             structural: HashMap::new(),
+            virtual_controls: HashMap::new(),
+            virtual_parents: HashMap::new(),
         }
     }
 }
@@ -340,7 +349,23 @@ pub(super) fn render_with_lice(
     let has_callback = match widget {
         Some(_) => window.widget_render_callback.borrow().is_some(),
         None => window.render_callback.borrow().is_some(),
-    };
+    } || widget.is_some_and(|id| {
+        window
+            .virtual_hosts
+            .try_borrow()
+            .is_ok_and(|hosts| hosts.contains_key(&id))
+            || window
+                .layout
+                .borrow()
+                .structural
+                .keys()
+                .any(|canvas| {
+                    window
+                        .virtual_hosts
+                        .try_borrow()
+                        .is_ok_and(|hosts| hosts.contains_key(canvas))
+                })
+    });
     if !has_callback {
         return;
     }
@@ -377,6 +402,37 @@ pub(super) fn render_with_lice(
                     {
                         if let Err(e) = callback(info, &mut surface) {
                             return Err(ReaRsError::UnderlyingError(e));
+                        }
+                    }
+                }
+            }
+            if let Some(id) = widget {
+                let canvas = window
+                    .layout
+                    .borrow()
+                    .virtual_parents
+                    .get(&id)
+                    .copied()
+                    .unwrap_or(id);
+                if let Ok(mut hosts) = window.virtual_hosts.try_borrow_mut() {
+                    if let Some(host) = hosts.get_mut(&canvas) {
+                        let dimensions = info.client_rect;
+                        unsafe {
+                            host.paint(
+                                surface.raw_bitmap(),
+                                dimensions.width as i32,
+                                dimensions.height as i32,
+                                [
+                                    info.damage_rect.x as i32,
+                                    info.damage_rect.y as i32,
+                                    (info.damage_rect.x
+                                        + info.damage_rect.width)
+                                        as i32,
+                                    (info.damage_rect.y
+                                        + info.damage_rect.height)
+                                        as i32,
+                                ],
+                            );
                         }
                     }
                 }
@@ -557,6 +613,37 @@ impl<'a> ScrollView<'a> {
 }
 
 impl ReaperWindow {
+    pub(super) fn dispatch_virtual_commands(
+        &self,
+    ) -> Vec<super::events::ControlEvent> {
+        let commands =
+            std::mem::take(&mut *self.virtual_command_queue.borrow_mut());
+        commands
+            .into_iter()
+            .filter_map(|(command, _p1, p2, source_id)| {
+                let id = ControlId(source_id);
+                let control = self
+                    .layout
+                    .borrow()
+                    .virtual_controls
+                    .get(&id)
+                    .copied()?;
+                if control.control_kind() == rea_rs_low::VirtualControlKind::Slider {
+                    if command == raw::WM_HSCROLL as i32
+                        || command == raw::WM_VSCROLL as i32
+                    {
+                        control.set_value(p2 as i32);
+                    }
+                }
+                super::events::decode_virtual_event(
+                    control.control_kind(),
+                    id,
+                    command,
+                )
+            })
+            .collect()
+    }
+
     /// Registers or replaces the custom LICE renderer for this window.
     ///
     /// The LICE render bitmap is allocated lazily on the next paint.
@@ -608,6 +695,9 @@ impl ReaperWindow {
         self.render_callback.borrow_mut().take();
         self.widget_render_callback.borrow_mut().take();
         self.render_bitmap.borrow_mut().take();
+        self.virtual_hosts.borrow_mut().clear();
+        self.layout.borrow_mut().virtual_controls.clear();
+        self.layout.borrow_mut().virtual_parents.clear();
         self.invalidate(None)
     }
 
@@ -763,6 +853,19 @@ impl ReaperWindow {
                             raw::SWP_NOZORDER as i32,
                         );
                     }
+                } else if let Some(control) = self
+                    .layout
+                    .borrow()
+                    .virtual_controls
+                    .get(&entry.id)
+                    .copied()
+                {
+                    control.set_rect(
+                        placement.rect.x as i32,
+                        placement.rect.y as i32,
+                        placement.rect.width.max(1) as i32,
+                        placement.rect.height.max(1) as i32,
+                    );
                 }
             }
         }
@@ -794,7 +897,8 @@ impl ReaperWindow {
         } else {
             OverflowPolicy::Scroll
         };
-        let bounds = if scroll_view.is_some() {
+        let is_structural = layout.structural.contains_key(&id);
+        let bounds = if is_structural {
             Rect::new(0, 0, rect.width, rect.height)
         } else {
             Rect::new(
@@ -981,6 +1085,8 @@ impl ReaperWindow {
             render_bitmap: RefCell::new(None),
             render_callback: RefCell::new(None),
             widget_render_callback: RefCell::new(None),
+            virtual_hosts: RefCell::new(HashMap::new()),
+            virtual_command_queue: Rc::new(RefCell::new(Vec::new())),
         })
     }
 
@@ -1021,6 +1127,8 @@ impl ReaperWindow {
             render_bitmap: RefCell::new(None),
             render_callback: RefCell::new(None),
             widget_render_callback: RefCell::new(None),
+            virtual_hosts: RefCell::new(HashMap::new()),
+            virtual_command_queue: Rc::new(RefCell::new(Vec::new())),
         })
     }
 

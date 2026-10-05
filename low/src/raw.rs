@@ -129,7 +129,15 @@ pub const LB_ADDSTRING: u32 = 0x0180;
 pub const LB_SETCURSEL: u32 = 0x0186;
 pub const LB_GETCURSEL: u32 = 0x0188;
 pub const PBM_SETPOS: u32 = WM_USER + 2;
-pub const PBM_SETRANGE32: u32 = WM_USER + 6;
+pub const PBM_SETRANGE: u32 = WM_USER + 1;
+pub const PBM_DELTAPOS: u32 = WM_USER + 3;
+// Common-controls notification values defined as macros in SWELL headers.
+pub const TCN_SELCHANGE: u32 = 0xffff_fdd9;
+pub const LVN_ITEMCHANGED: u32 = 0xffff_ff9b;
+pub const LVN_COLUMNCLICK: u32 = 0xffff_ff94;
+pub const TVN_SELCHANGED: u32 = 0xffff_fe6e;
+pub const TVN_ITEMEXPANDING: u32 = 0xffff_fe6b;
+pub const TVN_BEGINDRAG: u32 = 0xffff_fe69;
 /// Native keyboard-focus loss message (Win32/SWELL value).
 pub const WM_KILLFOCUS: u32 = 0x0008;
 /// Native keyboard-focus gain message (Win32/SWELL value).

@@ -33,7 +33,8 @@ pub use widgets::{
     Button, Canvas, CheckBox, ComboBox, ContainerId, ControlHandle, ControlId,
     ControlKind, ControlRect, EditField, GroupBox, ListBox, ListView,
     NativeContainer, ProgressBar, RadioButton, ReaperControl, StaticLabel,
-    TabControl, Trackbar, TreeView,
+    TabControl, Trackbar, TreeView, VirtualComboBox, VirtualIconButton,
+    VirtualListBox, VirtualSlider, VirtualStaticText,
 };
 pub use windows::{
     DockPosition, ReaperWindow, ScrollView, WindowHandler, WindowId,
@@ -124,6 +125,61 @@ mod tests {
             .contains(DrawTextFlags::LEFT | DrawTextFlags::TOP));
         assert_eq!(LiceBlitOptions::default().mode, LiceCombineMode::Copy);
         assert_eq!(ImageSize::new(32, 16).width, 32);
+    }
+
+    #[test]
+    fn added_native_notifications_decode_to_semantic_events() {
+        let id = ControlId(77);
+        assert_eq!(
+            events::decode_notify_event(ControlKind::Tab, id, raw::TCN_SELCHANGE),
+            ControlEvent::TabSelectionChanged { control: id },
+        );
+        assert_eq!(
+            events::decode_notify_event(ControlKind::ListView, id, raw::LVN_ITEMCHANGED),
+            ControlEvent::ListViewItemChanged { control: id },
+        );
+        assert_eq!(
+            events::decode_notify_event(ControlKind::TreeView, id, raw::TVN_SELCHANGED),
+            ControlEvent::TreeSelectionChanged { control: id },
+        );
+        assert_eq!(
+            events::decode_notify_event(ControlKind::TreeView, id, 123),
+            ControlEvent::Notified { control: id, code: 123 },
+        );
+    }
+
+    #[test]
+    fn trackbar_scroll_commands_decode_as_value_changes() {
+        let id = ControlId(88);
+        assert_eq!(
+            events::decode_control_event(
+                ControlKind::Trackbar,
+                id,
+                CommandNotification::Other(0),
+            ),
+            Some(ControlEvent::TrackbarChanged { control: id }),
+        );
+    }
+
+    #[test]
+    fn virtual_widget_commands_ignore_nonsemantic_messages() {
+        let id = ControlId(91);
+        assert_eq!(
+            events::decode_virtual_event(
+                rea_rs_low::VirtualControlKind::Slider,
+                id,
+                raw::WM_HSCROLL as i32,
+            ),
+            Some(ControlEvent::VirtualSliderChanged { control: id }),
+        );
+        assert_eq!(
+            events::decode_virtual_event(
+                rea_rs_low::VirtualControlKind::Slider,
+                id,
+                0,
+            ),
+            None,
+        );
     }
 }
 

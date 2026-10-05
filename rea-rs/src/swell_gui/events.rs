@@ -79,6 +79,29 @@ pub enum ControlEvent {
     TrackbarChanged {
         control: ControlId,
     },
+    TabSelectionChanged {
+        control: ControlId,
+    },
+    ListViewItemChanged {
+        control: ControlId,
+    },
+    ListViewColumnClicked {
+        control: ControlId,
+    },
+    TreeSelectionChanged {
+        control: ControlId,
+    },
+    TreeItemExpanding {
+        control: ControlId,
+    },
+    TreeBeginDrag {
+        control: ControlId,
+    },
+    VirtualButtonClicked { control: ControlId },
+    VirtualSliderChanged { control: ControlId },
+    VirtualComboSelectionChanged { control: ControlId },
+    VirtualListSelectionChanged { control: ControlId },
+    VirtualListDoubleClick { control: ControlId },
     Scroll {
         control: ControlId,
         code: i32,
@@ -390,12 +413,51 @@ impl ControlEvent {
             | Self::ListSelectionChanged { control }
             | Self::ListDoubleClick { control }
             | Self::TrackbarChanged { control }
+            | Self::TabSelectionChanged { control }
+            | Self::ListViewItemChanged { control }
+            | Self::ListViewColumnClicked { control }
+            | Self::TreeSelectionChanged { control }
+            | Self::TreeItemExpanding { control }
+            | Self::TreeBeginDrag { control }
+            | Self::VirtualButtonClicked { control }
+            | Self::VirtualSliderChanged { control }
+            | Self::VirtualComboSelectionChanged { control }
+            | Self::VirtualListSelectionChanged { control }
+            | Self::VirtualListDoubleClick { control }
             | Self::Scroll { control, .. }
             | Self::Notified { control, .. }
             | Self::FocusGained { control }
             | Self::FocusLost { control }
             | Self::OtherCommand { control, .. } => control,
         }
+    }
+}
+
+pub(super) fn decode_notify_event(
+    kind: ControlKind,
+    id: ControlId,
+    code: u32,
+) -> ControlEvent {
+    match (kind, code) {
+        (ControlKind::Tab, raw::TCN_SELCHANGE) => {
+            ControlEvent::TabSelectionChanged { control: id }
+        }
+        (ControlKind::ListView, raw::LVN_ITEMCHANGED) => {
+            ControlEvent::ListViewItemChanged { control: id }
+        }
+        (ControlKind::ListView, raw::LVN_COLUMNCLICK) => {
+            ControlEvent::ListViewColumnClicked { control: id }
+        }
+        (ControlKind::TreeView, raw::TVN_SELCHANGED) => {
+            ControlEvent::TreeSelectionChanged { control: id }
+        }
+        (ControlKind::TreeView, raw::TVN_ITEMEXPANDING) => {
+            ControlEvent::TreeItemExpanding { control: id }
+        }
+        (ControlKind::TreeView, raw::TVN_BEGINDRAG) => {
+            ControlEvent::TreeBeginDrag { control: id }
+        }
+        _ => ControlEvent::Notified { control: id, code },
     }
 }
 
@@ -413,6 +475,47 @@ pub(super) struct NotifyHeader {
     pub hwnd_from: raw::HWND,
     pub id_from: usize,
     pub code: u32,
+}
+
+pub(super) fn decode_virtual_event(
+    kind: rea_rs_low::VirtualControlKind,
+    id: ControlId,
+    command: i32,
+) -> Option<ControlEvent> {
+    match kind {
+        rea_rs_low::VirtualControlKind::IconButton
+            if command == raw::WM_COMMAND as i32 =>
+        {
+            Some(ControlEvent::VirtualButtonClicked { control: id })
+        }
+        rea_rs_low::VirtualControlKind::Slider
+            if command == raw::WM_HSCROLL as i32
+                || command == raw::WM_VSCROLL as i32 =>
+        {
+            Some(ControlEvent::VirtualSliderChanged { control: id })
+        }
+        rea_rs_low::VirtualControlKind::Slider
+            if command != raw::WM_COMMAND as i32 =>
+        {
+            None
+        }
+        rea_rs_low::VirtualControlKind::ComboBox
+            if command == raw::WM_COMMAND as i32 =>
+        {
+            Some(ControlEvent::VirtualComboSelectionChanged { control: id })
+        }
+        rea_rs_low::VirtualControlKind::ListBox
+            if command == raw::WM_USER as i32 + 101 =>
+        {
+            Some(ControlEvent::VirtualListSelectionChanged { control: id })
+        }
+        rea_rs_low::VirtualControlKind::ListBox
+            if command == raw::WM_USER as i32 + 102 =>
+        {
+            Some(ControlEvent::VirtualListDoubleClick { control: id })
+        }
+        _ => None,
+    }
 }
 
 pub(super) fn decode_control_event(

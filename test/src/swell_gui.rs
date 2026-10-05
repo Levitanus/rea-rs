@@ -5,9 +5,9 @@ use rea_rs::{
         DrawTextFlags, LiceCombineMode, LiceTextOptions,
     },
     ActionKind, Canvas, CheckBox, Color, ComboBox, ControlEvent, ControlId,
-    EditField, EventResponse, ExtState, Font, FontSpec, LiceFont, LiceSurface,
-    ListBox, PaintInfo, Reaper, ReaperWindow, ThemeColor, WindowCommand,
-    WindowHandler, WindowId, WindowSpec,
+    EditField, EventResponse, ExtState, Font, FontSpec, LiceFont, ListBox,
+    Reaper, ReaperWindow, ThemeColor, WindowCommand, WindowHandler, WindowId,
+    WindowSpec,
 };
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
@@ -80,6 +80,81 @@ impl DemoWindow {
         )?;
         list.add_item("List item one")?;
         list.add_item("List item two")?;
+
+        let native = ui.group_box(
+            ControlId(NATIVE_GROUP_ID),
+            "Additional native controls",
+            WidgetSize::new_fill_both(380, 190),
+        )?;
+        native.radio_button(
+            ControlId(RADIO_ID),
+            "Radio option",
+            WidgetSize::new(180, 24),
+            0,
+        )?;
+        let trackbar = native.trackbar(
+            ControlId(TRACKBAR_ID),
+            WidgetSize::new(280, 28),
+            0,
+        )?;
+        trackbar.set_range(0, 100)?;
+        trackbar.set_position(35)?;
+        let progress = native.progress_bar(
+            ControlId(PROGRESS_ID),
+            WidgetSize::new(260, 20),
+            0,
+        )?;
+        progress.set_range(0, 100)?;
+        progress.set_position(60)?;
+        native.tab_control(ControlId(TAB_ID), WidgetSize::new(280, 36), 0)?;
+        native.list_view(
+            ControlId(LIST_VIEW_ID),
+            WidgetSize::new(280, 70),
+            0,
+        )?;
+        native.tree_view(
+            ControlId(TREE_VIEW_ID),
+            WidgetSize::new(280, 70),
+            0,
+        )?;
+
+        let virtual_canvas = ui
+            .canvas(ControlId(VIRTUAL_CANVAS_ID), WidgetSize::new(420, 180))?;
+        let _ = virtual_canvas;
+        let virtual_button = ui.virtual_icon_button(
+            ControlId(VIRTUAL_BUTTON_ID),
+            ControlId(VIRTUAL_CANVAS_ID),
+            WidgetSize::new(140, 28),
+        )?;
+        virtual_button.set_text("Virtual button")?;
+        let virtual_label = ui.virtual_static_text(
+            ControlId(VIRTUAL_LABEL_ID),
+            ControlId(VIRTUAL_CANVAS_ID),
+            WidgetSize::new(180, 24),
+        )?;
+        virtual_label.set_text("WDL virtual controls")?;
+        let virtual_combo = ui.virtual_combo_box(
+            ControlId(VIRTUAL_COMBO_ID),
+            ControlId(VIRTUAL_CANVAS_ID),
+            WidgetSize::new(180, 28),
+        )?;
+        virtual_combo.add_item("Virtual item one")?;
+        virtual_combo.add_item("Virtual item two")?;
+        virtual_combo.set_selection(0);
+        let virtual_slider = ui.virtual_slider(
+            ControlId(VIRTUAL_SLIDER_ID),
+            ControlId(VIRTUAL_CANVAS_ID),
+            WidgetSize::new(240, 32),
+        )?;
+        virtual_slider.set_range(0, 1000, 500);
+        virtual_slider.set_value(420);
+        let virtual_list = ui.virtual_list_box(
+            ControlId(VIRTUAL_LIST_ID),
+            ControlId(VIRTUAL_CANVAS_ID),
+            WidgetSize::new(240, 72),
+        )?;
+        virtual_list.add_item("Virtual row one")?;
+        virtual_list.add_item("Virtual row two")?;
         let title_font = LiceFont::from_font(Font::new(
             FontSpec::new("Arial").set_size(18),
         )?)?;
@@ -163,6 +238,26 @@ impl DemoWindow {
             }
             EventResponse::Handled
         });
+        ui.on_widget_event(ControlId(TRACKBAR_ID), move |event| {
+            if matches!(event, ControlEvent::TrackbarChanged { .. }) {
+                log::debug!(
+                    "native trackbar position: {:?}",
+                    trackbar.position()
+                );
+            }
+            EventResponse::Handled
+        });
+        for id in [
+            VIRTUAL_BUTTON_ID,
+            VIRTUAL_COMBO_ID,
+            VIRTUAL_SLIDER_ID,
+            VIRTUAL_LIST_ID,
+        ] {
+            ui.on_widget_event(ControlId(id), move |event| {
+                log::debug!("virtual widget event: {:?}", event);
+                EventResponse::Handled
+            });
+        }
 
         let docked = ExtState::<bool, Reaper>::existing(
             WINDOW_STATE_SECTION,
@@ -328,6 +423,19 @@ const GROUP_ID: i32 = 105;
 const COMBO_ID: i32 = 106;
 const LIST_ID: i32 = 107;
 const CANVAS_ID: i32 = 108;
+const NATIVE_GROUP_ID: i32 = 109;
+const RADIO_ID: i32 = 110;
+const TRACKBAR_ID: i32 = 111;
+const PROGRESS_ID: i32 = 112;
+const TAB_ID: i32 = 113;
+const LIST_VIEW_ID: i32 = 114;
+const TREE_VIEW_ID: i32 = 115;
+const VIRTUAL_CANVAS_ID: i32 = 116;
+const VIRTUAL_BUTTON_ID: i32 = 117;
+const VIRTUAL_LABEL_ID: i32 = 118;
+const VIRTUAL_COMBO_ID: i32 = 119;
+const VIRTUAL_SLIDER_ID: i32 = 120;
+const VIRTUAL_LIST_ID: i32 = 121;
 
 pub fn register_actions(reaper: &mut Reaper) -> anyhow::Result<()> {
     reaper.register_action(

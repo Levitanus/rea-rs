@@ -97,6 +97,9 @@ pub use static_context::*;
 
 mod swell_impl;
 
+mod virtual_controls;
+pub use virtual_controls::*;
+
 mod midi;
 // pub use midi::*;
 
