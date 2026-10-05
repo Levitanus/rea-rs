@@ -354,17 +354,12 @@ pub(super) fn render_with_lice(
             .virtual_hosts
             .try_borrow()
             .is_ok_and(|hosts| hosts.contains_key(&id))
-            || window
-                .layout
-                .borrow()
-                .structural
-                .keys()
-                .any(|canvas| {
-                    window
-                        .virtual_hosts
-                        .try_borrow()
-                        .is_ok_and(|hosts| hosts.contains_key(canvas))
-                })
+            || window.layout.borrow().structural.keys().any(|canvas| {
+                window
+                    .virtual_hosts
+                    .try_borrow()
+                    .is_ok_and(|hosts| hosts.contains_key(canvas))
+            })
     });
     if !has_callback {
         return;
@@ -622,13 +617,11 @@ impl ReaperWindow {
             .into_iter()
             .filter_map(|(command, _p1, p2, source_id)| {
                 let id = ControlId(source_id);
-                let control = self
-                    .layout
-                    .borrow()
-                    .virtual_controls
-                    .get(&id)
-                    .copied()?;
-                if control.control_kind() == rea_rs_low::VirtualControlKind::Slider {
+                let control =
+                    self.layout.borrow().virtual_controls.get(&id).copied()?;
+                if control.control_kind()
+                    == rea_rs_low::VirtualControlKind::Slider
+                {
                     if command == raw::WM_HSCROLL as i32
                         || command == raw::WM_VSCROLL as i32
                     {
@@ -883,12 +876,18 @@ impl ReaperWindow {
             return Ok(rect.size());
         };
         let scroll_view = layout.structural.get(&id).copied();
-        let wraps = if scroll_view.is_some() {
+        let explicit_single_line =
+            node.axis == Axis::X && node.policy == OverflowPolicy::Clip;
+        let wraps = if explicit_single_line {
+            false
+        } else if scroll_view.is_some() {
             rect.width > rect.height
         } else {
             parent_wraps
         };
-        let policy = if wraps {
+        let policy = if explicit_single_line {
+            OverflowPolicy::Clip
+        } else if wraps {
             if scroll_view.is_some() {
                 OverflowPolicy::WrapScroll
             } else {
@@ -959,6 +958,11 @@ impl ReaperWindow {
                 .set_layout_sizes(bounds.size(), content_extent);
             }
             Ok(content_extent)
+        } else if is_structural {
+            // Explicit structural rows are single-line clipping viewports.
+            // Their children may overflow horizontally, but that must not
+            // resize the row and expose the overflow.
+            Ok(rect.size())
         } else {
             // GroupBox child HWNDs clip their descendants, so expand the
             // native group to contain wrapped child lanes. Its parent (the

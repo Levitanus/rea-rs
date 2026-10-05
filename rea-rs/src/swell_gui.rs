@@ -2,21 +2,21 @@
 
 pub mod drawing;
 pub mod events;
+pub(crate) mod host_proc;
 pub mod layout;
 pub mod scroll;
 pub mod widgets;
 pub mod windowing;
 pub mod windows;
-pub(crate) mod host_proc;
 
 use rea_rs_low::raw;
 
 pub use drawing::{
     default_logfont, Bitmap, Brush, DrawTextFlags, DrawTextOptions, Font,
-    FontCharset, FontSpec, Icon, ImageList, ImageSize,
-    LiceBitmap, LiceBitmapKind, LiceBlitOptions, LiceCombineMode, LiceFont,
-    LicePoint, LiceRect, LiceSurface, LiceTextOptions, ListViewImageListKind,
-    PaintInfo, Pen, PenStyle,
+    FontCharset, FontSpec, Icon, ImageList, ImageSize, LiceBitmap,
+    LiceBitmapKind, LiceBlitOptions, LiceCombineMode, LiceFont, LicePoint,
+    LiceRect, LiceSurface, LiceTextOptions, ListViewImageListKind, PaintInfo,
+    Pen, PenStyle,
 };
 pub use events::{
     CommandNotification, ContainerEvent, ControlEvent, EventResponse,
@@ -131,20 +131,35 @@ mod tests {
     fn added_native_notifications_decode_to_semantic_events() {
         let id = ControlId(77);
         assert_eq!(
-            events::decode_notify_event(ControlKind::Tab, id, raw::TCN_SELCHANGE),
+            events::decode_notify_event(
+                ControlKind::Tab,
+                id,
+                raw::TCN_SELCHANGE
+            ),
             ControlEvent::TabSelectionChanged { control: id },
         );
         assert_eq!(
-            events::decode_notify_event(ControlKind::ListView, id, raw::LVN_ITEMCHANGED),
+            events::decode_notify_event(
+                ControlKind::ListView,
+                id,
+                raw::LVN_ITEMCHANGED
+            ),
             ControlEvent::ListViewItemChanged { control: id },
         );
         assert_eq!(
-            events::decode_notify_event(ControlKind::TreeView, id, raw::TVN_SELCHANGED),
+            events::decode_notify_event(
+                ControlKind::TreeView,
+                id,
+                raw::TVN_SELCHANGED
+            ),
             ControlEvent::TreeSelectionChanged { control: id },
         );
         assert_eq!(
             events::decode_notify_event(ControlKind::TreeView, id, 123),
-            ControlEvent::Notified { control: id, code: 123 },
+            ControlEvent::Notified {
+                control: id,
+                code: 123
+            },
         );
     }
 

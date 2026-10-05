@@ -27,6 +27,20 @@ pub fn db_to_linear(db: f64) -> f64 {
 }
 
 impl Reaper {
+    /// Converts decibels to REAPER's normalized slider domain.
+    ///
+    /// The returned value follows REAPER's `DB2SLIDER` taper and range.
+    pub fn db_to_slider(&self, db: f64) -> f64 {
+        self.low().DB2SLIDER(db)
+    }
+
+    /// Converts a normalized REAPER slider value to decibels.
+    ///
+    /// The input uses REAPER's `SLIDER2DB` normalized slider domain.
+    pub fn slider_to_db(&self, normalized: f64) -> f64 {
+        self.low().SLIDER2DB(normalized)
+    }
+
     /// Returns the REAPER main window handle (HWND).
     ///
     /// On Linux/macOS this is a SWELL window handle, not a native X11 or

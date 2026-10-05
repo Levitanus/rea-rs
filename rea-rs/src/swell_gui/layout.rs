@@ -181,6 +181,14 @@ impl WidgetSize {
         Self::new_flex(x, y, WidgetFills::Fill, WidgetFills::Fill)
     }
 
+    pub const fn new_fill_x(x: u32, y: u32) -> Self {
+        Self::new_flex(x, y, WidgetFills::Fill, WidgetFills::Fixed)
+    }
+
+    pub const fn new_fill_y(x: u32, y: u32) -> Self {
+        Self::new_flex(x, y, WidgetFills::Fixed, WidgetFills::Fill)
+    }
+
     pub const fn set_min_x(self, value: u32) -> Self {
         self.with_bounds(Some(value), None, None, None)
     }
@@ -747,41 +755,25 @@ fn distribute_primary(
     result
 }
 
-pub fn layout_flow(
-    bounds: Rect,
-    axis: Axis,
+fn assign_lanes(
     items: &[LayoutItem],
+    sizes: &[u32],
+    primary_limit: u32,
+    axis: Axis,
     spacing: u32,
     policy: OverflowPolicy,
-) -> LayoutOutput {
-    let mut output = LayoutOutput::empty();
-    if items.is_empty() {
-        return output;
-    }
-    let primary_limit = axis_value(bounds.size(), axis);
-    let cross_limit = axis_value(bounds.size(), axis.cross());
-    let sizes = distribute_primary(items, primary_limit, axis, spacing);
-    let mut primary = 0u32;
-    let mut cross = 0u32;
-    let mut lane_cross = 0u32;
+) -> Vec<u32> {
+    let may_wrap = matches!(
+        policy,
+        OverflowPolicy::WrapScroll
+            | OverflowPolicy::WrapClip
+            | OverflowPolicy::Wrap
+    );
+    let mut lanes = Vec::with_capacity(items.len());
     let mut lane = 0u32;
-    let mut used_primary = 0u32;
-    let mut used_cross = 0u32;
+    let mut primary = 0u32;
 
     for (index, item) in items.iter().enumerate() {
-        let mut item_cross =
-            cross_size(item.size, axis, cross_limit.saturating_sub(cross));
-        let mut item_primary = sizes[index];
-        // `primary` already includes the gap after the previous item. Do not
-        // add `spacing` a second time here: doing so falsely wraps an item
-        // that exactly fits after the previous gap (most visible with a
-        // fixed button followed by a filling edit field).
-        let may_wrap = matches!(
-            policy,
-            OverflowPolicy::WrapScroll
-                | OverflowPolicy::WrapClip
-                | OverflowPolicy::Wrap
-        );
         let next_fill_item = items.get(index + 1).map_or(false, |next| {
             axis == Axis::Y
                 && next
@@ -796,27 +788,146 @@ pub fn layout_flow(
         let next_primary = sizes.get(index + 1).copied().unwrap_or(0);
         let would_leave_fill_item_out = next_fill_item
             && primary
-                .saturating_add(item_primary)
+                .saturating_add(sizes[index])
                 .saturating_add(spacing)
                 .saturating_add(next_primary)
                 > primary_limit;
+
         if may_wrap
             && primary > 0
-            && (primary.saturating_add(item_primary) > primary_limit
+            && (primary.saturating_add(sizes[index]) > primary_limit
                 || would_leave_fill_item_out)
         {
-            cross = cross.saturating_add(lane_cross).saturating_add(spacing);
-            lane_cross = 0;
-            primary = 0;
             lane = lane.saturating_add(1);
-            // A fill-sized item in a wrapped lane must fill the space that
-            // remains to the right of the preceding lane, not the complete
-            // cross-axis extent.  Otherwise a list/control that follows a
-            // vertical stack consumes the whole width again and is reported
-            // as clipped even though a valid placement exists on the right.
-            item_cross =
-                cross_size(item.size, axis, cross_limit.saturating_sub(cross));
+            primary = 0;
         }
+        lanes.push(lane);
+        primary = primary.saturating_add(sizes[index]).saturating_add(spacing);
+    }
+    lanes
+}
+
+pub fn layout_flow(
+    bounds: Rect,
+    axis: Axis,
+    items: &[LayoutItem],
+    spacing: u32,
+    policy: OverflowPolicy,
+) -> LayoutOutput {
+    let mut output = LayoutOutput::empty();
+    if items.is_empty() {
+        return output;
+    }
+    let primary_limit = axis_value(bounds.size(), axis);
+    let cross_limit = axis_value(bounds.size(), axis.cross());
+    let mut sizes = distribute_primary(items, primary_limit, axis, spacing);
+    let lanes =
+        assign_lanes(items, &sizes, primary_limit, axis, spacing, policy);
+    let lane_count = lanes.last().copied().unwrap_or(0).saturating_add(1);
+    // A bounded-height container (e.g. a GroupBox) still needs its declared
+    // preferred height after a preceding lane wraps. Re-run the primary-axis
+    // distribution per lane; the global pre-wrap distribution can otherwise
+    // starve a later fill group to a thin remainder.
+    if axis == Axis::Y && lane_count > 1 {
+        for lane_index in 0..lane_count {
+            let lane_items: Vec<_> = items
+                .iter()
+                .zip(&lanes)
+                .filter_map(|(item, lane)| {
+                    (*lane == lane_index).then_some(*item)
+                })
+                .collect();
+            let lane_sizes =
+                distribute_primary(&lane_items, primary_limit, axis, spacing);
+            let mut lane_size_index = 0;
+            for (index, item_lane) in lanes.iter().enumerate() {
+                if *item_lane == lane_index {
+                    sizes[index] = lane_sizes[lane_size_index];
+                    lane_size_index += 1;
+                }
+            }
+        }
+    }
+    // A wrapped lane's cross-axis size is driven by its children, not
+    // automatically by the viewport. Bounded fill controls use their maximum
+    // as their intrinsic lane width; unbounded fill lanes share whatever
+    // cross-axis space remains after bounded/fixed lanes.
+    let mut lane_cross_sizes = vec![0; lane_count as usize];
+    let mut flexible_lanes = vec![false; lane_count as usize];
+    for (item, lane) in items.iter().zip(&lanes) {
+        let lane_index = *lane as usize;
+        let cross_axis = axis.cross();
+        let fill = if cross_axis == Axis::X {
+            item.size.fill_x()
+        } else {
+            item.size.fill_y()
+        };
+        let maximum = axis_value(item.size.maximum(), cross_axis);
+        let unbounded_fill = fill
+            .is_some_and(WidgetFills::participates_in_fill)
+            && maximum == u32::MAX;
+        flexible_lanes[lane_index] |= unbounded_fill;
+        let required = if unbounded_fill {
+            axis_value(item.size.preferred(), cross_axis)
+        } else {
+            cross_size(item.size, axis, cross_limit)
+        };
+        lane_cross_sizes[lane_index] =
+            lane_cross_sizes[lane_index].max(required);
+    }
+    if lane_count == 1 {
+        // Preserve ordinary fill behavior when no wrapping occurs: the sole
+        // lane gets the viewport extent, with each child's own bounds applied
+        // later by `cross_size`.
+        lane_cross_sizes[0] = cross_limit;
+    }
+    let gaps = spacing.saturating_mul(lane_count.saturating_sub(1));
+    let used_cross = lane_cross_sizes
+        .iter()
+        .fold(0u32, |sum, size| sum.saturating_add(*size))
+        .saturating_add(gaps);
+    let flexible_count =
+        flexible_lanes.iter().filter(|flexible| **flexible).count();
+    if flexible_count > 0 && lane_count > 1 {
+        let share =
+            cross_limit.saturating_sub(used_cross) / flexible_count as u32;
+        let mut remainder =
+            cross_limit.saturating_sub(used_cross) % flexible_count as u32;
+        for (index, flexible) in flexible_lanes.iter().enumerate() {
+            if *flexible {
+                let extra = share + u32::from(remainder > 0);
+                remainder = remainder.saturating_sub(1);
+                lane_cross_sizes[index] =
+                    lane_cross_sizes[index].saturating_add(extra);
+            }
+        }
+    }
+    let mut lane_cross_offsets = vec![0u32; lane_count as usize];
+    for lane_index in 1..lane_count as usize {
+        lane_cross_offsets[lane_index] = lane_cross_offsets[lane_index - 1]
+            .saturating_add(lane_cross_sizes[lane_index - 1])
+            .saturating_add(spacing);
+    }
+    let mut primary = 0u32;
+    let mut cross = 0u32;
+    let mut lane = 0u32;
+    let mut used_primary = 0u32;
+    let mut used_cross = 0u32;
+
+    for (index, item) in items.iter().enumerate() {
+        let target_lane = lanes[index];
+        if target_lane > lane {
+            lane = target_lane;
+            cross = lane_cross_offsets[lane as usize];
+            primary = 0;
+        }
+        let item_cross =
+            cross_size(item.size, axis, lane_cross_sizes[lane as usize]);
+        let mut item_primary = sizes[index];
+        // `primary` already includes the gap after the previous item. Do not
+        // add `spacing` a second time here: doing so falsely wraps an item
+        // that exactly fits after the previous gap (most visible with a
+        // fixed button followed by a filling edit field).
         if axis == Axis::Y
             && item
                 .size
@@ -868,7 +979,6 @@ pub fn layout_flow(
             output.overflow_x |= axis == Axis::X;
         }
         primary = primary_end.saturating_add(spacing);
-        lane_cross = lane_cross.max(item_cross);
         used_primary = used_primary.max(primary_end);
         used_cross = used_cross.max(cross_end);
     }
@@ -1110,6 +1220,76 @@ mod tests {
         assert_eq!(output.placements[1].rect, Rect::new(0, 40, 50, 40));
         assert_eq!(output.placements[2].rect, Rect::new(50, 0, 50, 40));
         assert_eq!(output.wrapped_lanes, 1);
+    }
+
+    #[test]
+    fn fill_width_items_keep_space_in_wrapped_columns() {
+        let item = LayoutItem {
+            size: WidgetSize::new_fill_x(90, 40),
+        };
+        let output = layout_flow(
+            Rect::new(0, 0, 200, 80),
+            Axis::Y,
+            &[item, item, item],
+            0,
+            OverflowPolicy::Wrap,
+        );
+
+        assert_eq!(output.placements.len(), 3);
+        assert_eq!(output.placements[0].rect, Rect::new(0, 0, 100, 40));
+        assert_eq!(output.placements[1].rect, Rect::new(0, 40, 100, 40));
+        assert_eq!(output.placements[2].rect, Rect::new(100, 0, 100, 40));
+        assert_eq!(output.content_extent.x, 200);
+        assert_eq!(output.wrapped_lanes, 1);
+    }
+
+    #[test]
+    fn bounded_fill_item_places_next_column_after_its_max_width() {
+        let tracklist = LayoutItem {
+            size: WidgetSize::new_fill_both(900, 70).set_max_x(400),
+        };
+        let next = LayoutItem {
+            size: WidgetSize::new_fill_both(300, 100),
+        };
+        let output = layout_flow(
+            Rect::new(0, 0, 900, 160),
+            Axis::Y,
+            &[tracklist, tracklist, next],
+            8,
+            OverflowPolicy::WrapScroll,
+        );
+
+        assert_eq!(output.placements[0].rect.width, 400);
+        assert_eq!(output.placements[1].rect.width, 400);
+        assert_eq!(output.placements[2].rect.x, 408);
+        assert_eq!(output.placements[2].rect.width, 492);
+        assert_eq!(output.wrapped_lanes, 1);
+    }
+
+    #[test]
+    fn wrapped_fill_container_gets_vertical_space_in_its_lane() {
+        let output = layout_flow(
+            Rect::new(0, 0, 600, 180),
+            Axis::Y,
+            &[
+                LayoutItem {
+                    size: WidgetSize::fixed(300, 60),
+                },
+                LayoutItem {
+                    size: WidgetSize::new_fill_both(300, 100),
+                },
+                LayoutItem {
+                    size: WidgetSize::new_fill_both(300, 100),
+                },
+            ],
+            8,
+            OverflowPolicy::WrapScroll,
+        );
+
+        assert_eq!(output.wrapped_lanes, 1);
+        assert_eq!(output.placements[2].rect.x, 308);
+        assert_eq!(output.placements[2].rect.y, 0);
+        assert_eq!(output.placements[2].rect.height, 180);
     }
 
     #[test]
@@ -1391,5 +1571,55 @@ mod tests {
         assert_eq!(output.placements[1].rect, Rect::new(55, 20, 40, 15));
         assert_eq!(output.placements[2].rect, Rect::new(10, 40, 40, 15));
         assert_eq!(output.wrapped_lanes, 1);
+    }
+
+    #[test]
+    fn single_line_row_reports_horizontal_overflow_without_wrapping() {
+        let item = LayoutItem {
+            size: WidgetSize::fixed(40, 15),
+        };
+        let output = layout_flow(
+            Rect::new(0, 0, 90, 24),
+            Axis::X,
+            &[item, item, item],
+            8,
+            OverflowPolicy::Clip,
+        );
+
+        assert_eq!(output.placements.len(), 3);
+        assert_eq!(output.placements[1].rect, Rect::new(48, 0, 40, 15));
+        assert_eq!(output.placements[2].rect, Rect::new(96, 0, 40, 15));
+        assert_eq!(output.wrapped_lanes, 0);
+        assert!(output.overflow_x);
+        assert!(!output.overflow_y);
+    }
+
+    #[test]
+    fn single_line_row_distributes_flex_width_and_respects_bounds() {
+        let output = layout_flow(
+            Rect::new(0, 0, 180, 24),
+            Axis::X,
+            &[
+                LayoutItem {
+                    size: WidgetSize::new_flex(
+                        40,
+                        20,
+                        WidgetFills::Fill,
+                        WidgetFills::Fixed,
+                    )
+                    .set_min_x(50)
+                    .set_max_x(100),
+                },
+                LayoutItem {
+                    size: WidgetSize::fixed(40, 20),
+                },
+            ],
+            8,
+            OverflowPolicy::Clip,
+        );
+
+        assert_eq!(output.placements[0].rect.width, 100);
+        assert_eq!(output.placements[1].rect.x, 108);
+        assert_eq!(output.placements[1].rect.width, 40);
     }
 }

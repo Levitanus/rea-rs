@@ -1,8 +1,8 @@
-use super::scroll::ScrollOffset;
 use super::layout::Point;
-use crate::keys::{KeyStroke, VKeys};
+use super::scroll::ScrollOffset;
 use super::widgets::{ControlId, ControlKind};
 use super::windows::ReaperWindow;
+use crate::keys::{KeyStroke, VKeys};
 use rea_rs_low::raw;
 use std::collections::HashMap;
 
@@ -97,11 +97,21 @@ pub enum ControlEvent {
     TreeBeginDrag {
         control: ControlId,
     },
-    VirtualButtonClicked { control: ControlId },
-    VirtualSliderChanged { control: ControlId },
-    VirtualComboSelectionChanged { control: ControlId },
-    VirtualListSelectionChanged { control: ControlId },
-    VirtualListDoubleClick { control: ControlId },
+    VirtualButtonClicked {
+        control: ControlId,
+    },
+    VirtualSliderChanged {
+        control: ControlId,
+    },
+    VirtualComboSelectionChanged {
+        control: ControlId,
+    },
+    VirtualListSelectionChanged {
+        control: ControlId,
+    },
+    VirtualListDoubleClick {
+        control: ControlId,
+    },
     Scroll {
         control: ControlId,
         code: i32,
