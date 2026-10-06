@@ -59,14 +59,12 @@ fn window_registered() -> bool {
 }
 
 fn read_paint_over() -> bool {
-    ExtState::<bool, Reaper>::existing(
+    ExtState::<bool, Reaper>::load_value(
         DEMO_SECTION,
         PAINT_OVER_KEY,
-        true,
         Reaper::get(),
         None,
     )
-    .get()
     .ok()
     .flatten()
     .unwrap_or(false)
@@ -612,14 +610,12 @@ impl DemoWindow {
             0,
         )?;
         volume_row.label(ControlId(111), "dB", WidgetSize::new(25, 28))?;
-        let docked = ExtState::<bool, Reaper>::existing(
+        let docked = ExtState::<bool, Reaper>::load_value(
             WINDOW_STATE_SECTION,
             DOCK_STATE_KEY,
-            true,
             Reaper::get(),
             None,
-        )
-        .get()?
+        )?
         .unwrap_or(false);
         let paint_over = read_paint_over();
         paint_checkbox.set_checked(paint_over)?;
@@ -871,18 +867,12 @@ impl DemoWindow {
             .select(index.map_or(-1, |index| index as i32))
             .ok();
         self.sync_inspector();
-        if let Some(selected_track) = Reaper::get()
+        if let Some(mut selected_track) = Reaper::get()
             .current_project()
             .iter_tracks()
             .find(|track| track.selected().unwrap_or(false))
         {
-            if let Ok(pointer) = selected_track.get() {
-                unsafe {
-                    Reaper::get()
-                        .low()
-                        .CSurf_OnTrackSelection(pointer.as_ptr());
-                }
-            }
+            let _ = selected_track.set_selected(true).ok();
         }
     }
 
