@@ -4,10 +4,11 @@ use super::{
     },
     events::{EventRegistry, ScrollViewEvent, ScrollViewEventSource},
     layout::{
-        self, Align, Axis, LayoutItem, LayoutOutput, OverflowPolicy, Rect,
-        WidgetSize,
+        self, Align, Axis, Insets, LayoutItem, LayoutOutput, OverflowPolicy,
+        Rect, WidgetSize,
     },
-    scroll::{ScrollMetrics, ScrollOffset, ScrollState, ScrollbarRenderer},
+    menu::Menu,
+    scroll::{ScrollOffset, ScrollState, ScrollbarRenderer},
     widgets::{
         ControlHandle, ControlId, ControlKind, ControlRect, ControlRegistry,
         ReaperControl,
@@ -24,8 +25,15 @@ use crate::{
 use rea_rs_low::raw;
 use serde_derive::{Deserialize, Serialize};
 use std::{
-    cell::Cell, cell::RefCell, collections::HashMap, ptr::NonNull, rc::Rc,
-    sync::Mutex,
+    cell::Cell,
+    cell::RefCell,
+    collections::HashMap,
+    ptr::NonNull,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
 };
 
 type RenderCallback = Box<
@@ -43,6 +51,9 @@ type WidgetRenderCallback = Box<
 >;
 
 pub type WindowId = String;
+
+pub(super) const SHOW_MENU_POPUP_MESSAGE: raw::UINT = raw::WM_USER + 0x3A1;
+static NEXT_POPUP_REQUEST: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct WindowPlacement {
@@ -205,6 +216,9 @@ pub struct ReaperWindow {
     pub(super) controls: RefCell<ControlRegistry>,
     pub(super) events: RefCell<EventRegistry>,
     pub(super) scroll_views: RefCell<HashMap<usize, ScrollViewRuntime>>,
+    pub(super) menu: RefCell<Option<Menu>>,
+    pub(super) popup_request: Cell<Option<(usize, i32, i32, usize)>>,
+    pub(super) lifecycle_generation: Cell<usize>,
     pub(super) layout: RefCell<WindowLayout>,
     pub(super) render_bitmap: RefCell<Option<LiceBitmap>>,
     pub(super) render_callback: RefCell<Option<RenderCallback>>,
@@ -226,6 +240,7 @@ pub(super) struct LayoutNode {
     pub(super) axis: Axis,
     pub(super) spacing: u32,
     pub(super) policy: OverflowPolicy,
+    pub(super) insets: Insets,
 }
 
 pub(super) struct WindowLayout {
@@ -240,15 +255,12 @@ pub(super) struct WindowLayout {
 impl Default for WindowLayout {
     fn default() -> Self {
         Self {
-            // The central panel is a flow container too.  When its vertical
-            // space is exhausted, the next root item (including a GroupBox)
-            // belongs in a new horizontal lane rather than being left
-            // outside the panel's usable bounds.
             root: LayoutNode {
                 entries: Vec::new(),
                 axis: Axis::Y,
                 spacing: 8,
                 policy: OverflowPolicy::WrapScroll,
+                insets: Insets::default(),
             },
             groups: HashMap::new(),
             structural: HashMap::new(),
@@ -258,25 +270,30 @@ impl Default for WindowLayout {
     }
 }
 
-/// A two-HWND scrolling container. The viewport owns the native scrollbar
-/// state; the content window is the parent for user controls.
+/// A three-HWND scrolling container. `view` owns the scrollbars, `clip` is the
+/// fixed client-area viewport, and `content` is the oversized translated
+/// child that contains the widgets.
 pub struct ScrollView<'a> {
     window: &'a ReaperWindow,
     id: ControlId,
     view: raw::HWND,
+    clip: raw::HWND,
+    scrollbar_hwnd: raw::HWND,
     content: raw::HWND,
     state: Rc<RefCell<ScrollState>>,
     renderer: ScrollbarRenderer,
+    viewport: Cell<super::layout::Size>,
 }
 
 pub(super) struct ScrollViewRuntime {
     pub(super) id: ControlId,
+    pub(super) scrollbar_hwnd: raw::HWND,
+    pub(super) view: raw::HWND,
+    pub(super) clip: raw::HWND,
     pub(super) content: raw::HWND,
     pub(super) state: Rc<RefCell<ScrollState>>,
     pub(super) renderer: ScrollbarRenderer,
 }
-
-const SCROLLBAR_THICKNESS: u32 = 16;
 
 /// Private guard for the one BeginPaint/EndPaint pair owned by WM_PAINT.
 pub(super) struct PaintTransaction {
@@ -448,19 +465,6 @@ pub(super) fn render_with_lice(
     }
 }
 
-impl<'a> Drop for ScrollView<'a> {
-    fn drop(&mut self) {
-        if self.renderer == ScrollbarRenderer::CoolSb
-            && Reaper::is_available()
-            && Reaper::get().low().supports_cool_scrollbars()
-        {
-            unsafe {
-                let _ = Reaper::get().low().UninitializeCoolSB(self.view);
-            }
-        }
-    }
-}
-
 impl<'a> ScrollView<'a> {
     pub fn id(&self) -> ControlId {
         self.id
@@ -483,15 +487,20 @@ impl<'a> ScrollView<'a> {
     }
 
     pub fn set_content_size(&self, size: super::layout::Size) {
-        let mut state = self.state.borrow_mut();
-        *state = state.set_content(size);
+        let state = {
+            let mut state = self.state.borrow_mut();
+            *state = state.set_content(size);
+            *state
+        };
         self.move_content(state.offset());
         self.sync_scrollbars();
     }
 
     pub fn set_viewport_size(&self, size: super::layout::Size) {
+        self.viewport.set(size);
         let mut state = self.state.borrow_mut();
         *state = state.set_viewport(size);
+        drop(state);
         self.sync_scrollbars();
     }
 
@@ -500,13 +509,43 @@ impl<'a> ScrollView<'a> {
         viewport: super::layout::Size,
         content: super::layout::Size,
     ) {
-        let state = {
+        self.viewport.set(viewport);
+        {
             let mut state = self.state.borrow_mut();
             *state = state.set_viewport(viewport).set_content(content);
-            *state
+        }
+        let mut effective_viewport = viewport;
+        for _ in 0..3 {
+            self.sync_scrollbars();
+            let measured = self.client_size();
+            let mut state = self.state.borrow_mut();
+            *state = state.set_effective_viewport(measured);
+            drop(state);
+            if measured == effective_viewport {
+                effective_viewport = measured;
+                break;
+            }
+            effective_viewport = measured;
+        }
+        let state = *self.state.borrow();
+        let client = self.client_size();
+        let content = super::layout::Size {
+            x: content.x.max(client.x),
+            y: content.y.max(client.y),
         };
+        let state = state.set_content(content);
         let offset = state.offset();
         unsafe {
+            let _ = Reaper::get().swell().SetWindowPos(
+                self.clip,
+                std::ptr::null_mut(),
+                0,
+                0,
+                client.x.max(1).min(i32::MAX as u32) as i32,
+                client.y.max(1).min(i32::MAX as u32) as i32,
+                (raw::SWP_NOZORDER | raw::SWP_NOACTIVATE | raw::SWP_NOREDRAW)
+                    as i32,
+            );
             let _ = Reaper::get().swell().SetWindowPos(
                 self.content,
                 std::ptr::null_mut(),
@@ -514,18 +553,35 @@ impl<'a> ScrollView<'a> {
                 -(offset.y.min(i32::MAX as u32) as i32),
                 content.x.max(1).min(i32::MAX as u32) as i32,
                 content.y.max(1).min(i32::MAX as u32) as i32,
-                (raw::SWP_NOZORDER | raw::SWP_NOACTIVATE) as i32,
+                (raw::SWP_NOZORDER | raw::SWP_NOACTIVATE | raw::SWP_NOREDRAW)
+                    as i32,
+            );
+            let _ = Reaper::get().swell().InvalidateRect(
+                self.clip,
+                std::ptr::null(),
+                1,
             );
         }
+        *self.state.borrow_mut() =
+            state.set_effective_viewport(effective_viewport);
         self.sync_scrollbars();
     }
 
-    fn sync_scrollbars(&self) {
-        let (_, visibility) = ScrollMetrics::with_visibility(
-            self.state.borrow().content(),
-            self.state.borrow().viewport(),
-            SCROLLBAR_THICKNESS,
-        );
+    fn client_size(&self) -> super::layout::Size {
+        let mut rect = raw::RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        unsafe { Reaper::get().swell().GetClientRect(self.view, &mut rect) };
+        super::layout::Size {
+            x: (rect.right - rect.left).max(0) as u32,
+            y: (rect.bottom - rect.top).max(0) as u32,
+        }
+    }
+
+    pub(super) fn sync_scrollbars(&self) {
         let Some(reaper) = Reaper::is_available().then(Reaper::get) else {
             return;
         };
@@ -536,45 +592,94 @@ impl<'a> ScrollView<'a> {
                 raw::SB_VERT
             }
         };
-        let state = self.state.borrow();
-        let metrics = state.metrics();
-        let update = |which, visible, position, page, max| unsafe {
-            if self.renderer == ScrollbarRenderer::CoolSb
-                && reaper.low().supports_cool_scrollbars()
-            {
-                let mut info = raw::SCROLLINFO {
-                    cbSize: std::mem::size_of::<raw::SCROLLINFO>() as u32,
-                    fMask: (raw::SIF_RANGE | raw::SIF_PAGE | raw::SIF_POS)
-                        as u32,
-                    nMin: 0,
-                    nMax: max as i32,
-                    nPage: page,
-                    nPos: position as i32,
-                    nTrackPos: 0,
-                };
-                reaper
-                    .low()
-                    .CoolSB_SetScrollInfo(self.view, which, &mut info, 1);
-                reaper.low().CoolSB_ShowScrollBar(
-                    self.view,
-                    which,
-                    visible as i8,
-                );
-            }
+        let apply = |state: ScrollState, page: super::layout::Size| unsafe {
+            let update = |which: i32,
+                          visible: bool,
+                          position: u32,
+                          page: u32,
+                          max: u32| {
+                if self.renderer == ScrollbarRenderer::CoolSb
+                    && reaper.low().supports_cool_scrollbars()
+                {
+                    let mut info = raw::SCROLLINFO {
+                        cbSize: std::mem::size_of::<raw::SCROLLINFO>() as u32,
+                        fMask: (raw::SIF_RANGE | raw::SIF_PAGE | raw::SIF_POS)
+                            as u32,
+                        nMin: 0,
+                        nMax: max as i32,
+                        nPage: page,
+                        nPos: position as i32,
+                        nTrackPos: 0,
+                    };
+                    reaper.low().CoolSB_SetScrollInfo(
+                        self.scrollbar_hwnd,
+                        which,
+                        &mut info,
+                        1,
+                    );
+                    reaper.low().CoolSB_ShowScrollBar(
+                        self.scrollbar_hwnd,
+                        which,
+                        visible as i8,
+                    );
+                } else if self.renderer == ScrollbarRenderer::Native {
+                    let mut info = raw::SCROLLINFO {
+                        cbSize: std::mem::size_of::<raw::SCROLLINFO>() as u32,
+                        fMask: (raw::SIF_RANGE | raw::SIF_PAGE | raw::SIF_POS)
+                            as u32,
+                        nMin: 0,
+                        nMax: max as i32,
+                        nPage: page,
+                        nPos: position as i32,
+                        nTrackPos: 0,
+                    };
+                    let _ = reaper.swell().set_native_scrollbar(
+                        self.scrollbar_hwnd,
+                        which,
+                        &mut info,
+                        visible,
+                    );
+                }
+            };
+            update(
+                bar(true) as i32,
+                state.content().x > page.x,
+                state.offset().x,
+                page.x,
+                state.content().x.saturating_sub(1),
+            );
+            update(
+                bar(false) as i32,
+                state.content().y > page.y,
+                state.offset().y,
+                page.y,
+                state.content().y.saturating_sub(1),
+            );
         };
-        update(
-            bar(true) as i32,
-            visibility.horizontal,
-            metrics.offset.x,
-            metrics.viewport.x,
-            metrics.max_offset.x,
-        );
-        update(
-            bar(false) as i32,
-            visibility.vertical,
-            metrics.offset.y,
-            metrics.viewport.y,
-            metrics.max_offset.y,
+        let mut state = *self.state.borrow();
+        let mut page = state.viewport();
+        for _ in 0..3 {
+            apply(state, page);
+            let measured = self.client_size();
+            state = state.set_effective_viewport(measured);
+            *self.state.borrow_mut() = state;
+            if measured == page {
+                break;
+            }
+            page = measured;
+        }
+        apply(state, page);
+        log::trace!(
+            "scrollbar sync: renderer={:?} view={:?} scrollbar_host={:?} viewport={:?} client={:?} content={:?} offset={:?} visible=({}, {})",
+            self.renderer,
+            self.view,
+            self.scrollbar_hwnd,
+            self.viewport.get(),
+            page,
+            state.content(),
+            state.offset(),
+            state.content().x > page.x,
+            state.content().y > page.y,
         );
     }
 
@@ -600,14 +705,134 @@ impl<'a> ScrollView<'a> {
                 -(offset.y as i32),
                 0,
                 0,
-                (raw::SWP_NOSIZE | raw::SWP_NOZORDER | raw::SWP_NOACTIVATE)
-                    as i32,
+                (raw::SWP_NOSIZE
+                    | raw::SWP_NOZORDER
+                    | raw::SWP_NOACTIVATE
+                    | raw::SWP_NOREDRAW) as i32,
+            );
+            let _ = Reaper::get().swell().InvalidateRect(
+                self.clip,
+                std::ptr::null(),
+                1,
             );
         }
     }
 }
 
 impl ReaperWindow {
+    pub(super) fn sync_scroll_view(&self, view: raw::HWND) {
+        let runtime =
+            self.scroll_views
+                .borrow()
+                .get(&(view as usize))
+                .map(|runtime| {
+                    (
+                        runtime.id,
+                        runtime.view,
+                        runtime.clip,
+                        runtime.scrollbar_hwnd,
+                        runtime.content,
+                        Rc::clone(&runtime.state),
+                        runtime.renderer,
+                    )
+                });
+        if let Some((
+            id,
+            view,
+            clip,
+            scrollbar_hwnd,
+            content,
+            state,
+            renderer,
+        )) = runtime
+        {
+            ScrollView {
+                window: self,
+                id,
+                view,
+                clip,
+                scrollbar_hwnd,
+                content,
+                state,
+                renderer,
+                viewport: Cell::new(super::layout::Size { x: 0, y: 0 }),
+            }
+            .sync_scrollbars();
+        }
+    }
+
+    /// Replaces the window's attached menu bar. Passing `None` detaches and
+    /// releases the currently owned menu.
+    pub fn set_menu_bar(&self, menu: Option<Menu>) -> ReaperResult<()> {
+        self.check_window()?;
+        let handle = menu.as_ref().map_or(std::ptr::null_mut(), Menu::handle);
+        let result =
+            unsafe { Reaper::get().swell().SetMenu(self.hwnd(), handle) };
+        if result == 0 {
+            return Err(ReaRsError::UnexpectedAPI("SetMenu failed".into()));
+        }
+        self.menu.replace(menu);
+        unsafe {
+            Reaper::get().swell().DrawMenuBar(self.hwnd());
+        }
+        Ok(())
+    }
+
+    /// Shows a popup at screen coordinates and returns the selected item ID.
+    pub fn popup_menu_at(
+        &self,
+        menu: &Menu,
+        x: i32,
+        y: i32,
+    ) -> ReaperResult<Option<super::menu::MenuCommandId>> {
+        self.check_window()?;
+        Ok(menu.popup_at(self.hwnd(), x, y))
+    }
+
+    /// Shows the currently attached menu bar as a popup and returns the
+    /// selected command. This runs a nested native message loop; do not call
+    /// it from a window callback that holds mutable access to REAPER state.
+    pub fn popup_menu_bar_at(
+        &self,
+        x: i32,
+        y: i32,
+    ) -> ReaperResult<Option<super::menu::MenuCommandId>> {
+        self.check_window()?;
+        let menu = self.menu.borrow();
+        let Some(menu) = menu.as_ref() else {
+            return Ok(None);
+        };
+        Ok(menu.popup_at(self.hwnd(), x, y))
+    }
+
+    /// Queues the attached menu bar to be shown as a popup at screen
+    /// coordinates. Unlike `popup_menu_bar_at`, this runs after the current
+    /// window callback has returned, avoiding modal-menu reentrancy into it.
+    pub fn post_popup_menu_bar_at(&self, x: i32, y: i32) -> ReaperResult<()> {
+        self.check_window()?;
+        let request = NEXT_POPUP_REQUEST.fetch_add(1, Ordering::Relaxed);
+        self.popup_request.set(Some((
+            request,
+            x,
+            y,
+            self.lifecycle_generation.get(),
+        )));
+        let ok = unsafe {
+            Reaper::get().swell().PostMessage(
+                self.hwnd(),
+                SHOW_MENU_POPUP_MESSAGE,
+                request,
+                0,
+            )
+        };
+        if ok == 0 {
+            self.popup_request.set(None);
+            Err(ReaRsError::UnsuccessfulOperation("PostMessage"))
+        } else {
+            Ok(())
+        }
+    }
+
     pub(super) fn dispatch_virtual_commands(
         &self,
     ) -> Vec<super::events::ControlEvent> {
@@ -706,7 +931,7 @@ impl ReaperWindow {
             .scroll_views
             .borrow()
             .iter()
-            .map(|(view, runtime)| (*view as raw::HWND, runtime.renderer))
+            .map(|(_, runtime)| (runtime.scrollbar_hwnd, runtime.renderer))
             .collect();
         let controls: Vec<_> = self
             .controls
@@ -723,14 +948,15 @@ impl ReaperWindow {
             .collect();
         if Reaper::is_available() {
             let reaper = Reaper::get();
-            for (view, renderer) in scroll_views {
-                if renderer == ScrollbarRenderer::CoolSb
+            for (scrollbar_hwnd, renderer) in &scroll_views {
+                if *renderer == ScrollbarRenderer::CoolSb
                     && reaper.low().supports_cool_scrollbars()
-                    && !view.is_null()
-                    && unsafe { reaper.swell().IsWindow(view) }
+                    && !scrollbar_hwnd.is_null()
+                    && unsafe { reaper.swell().IsWindow(*scrollbar_hwnd) }
                 {
                     unsafe {
-                        let _ = reaper.low().UninitializeCoolSB(view);
+                        let _ =
+                            reaper.low().UninitializeCoolSB(*scrollbar_hwnd);
                     }
                 }
             }
@@ -875,7 +1101,13 @@ impl ReaperWindow {
         let Some(node) = layout.groups.get(&id) else {
             return Ok(rect.size());
         };
-        let scroll_view = layout.structural.get(&id).copied();
+        let insets = node.insets;
+        let scroll_view = self
+            .scroll_views
+            .borrow()
+            .values()
+            .find(|runtime| runtime.id == id)
+            .map(|runtime| runtime.view);
         let explicit_single_line =
             node.axis == Axis::X && node.policy == OverflowPolicy::Clip;
         let wraps = if explicit_single_line {
@@ -897,23 +1129,22 @@ impl ReaperWindow {
             OverflowPolicy::Scroll
         };
         let is_structural = layout.structural.contains_key(&id);
-        let bounds = if is_structural {
-            Rect::new(0, 0, rect.width, rect.height)
-        } else {
-            Rect::new(
-                15,
-                28,
-                rect.width.saturating_sub(30),
-                rect.height.saturating_sub(38),
-            )
-        };
+        let bounds = insets.apply(Rect::new(0, 0, rect.width, rect.height));
         // A ScrollView wraps against its viewport; nested containers may
         // extend farther than their declared size, so their extents are
         // included below when sizing the scrolling content window.
         let output = self.apply_layout_node(bounds, node, policy)?;
         let mut content_extent = super::layout::Size {
-            x: output.content_extent.x.max(bounds.width),
-            y: output.content_extent.y.max(bounds.height),
+            x: output
+                .content_extent
+                .x
+                .max(bounds.width)
+                .saturating_add(insets.horizontal()),
+            y: output
+                .content_extent
+                .y
+                .max(bounds.height)
+                .saturating_add(insets.vertical()),
         };
         for placement in output.placements {
             let Some(entry) = node.entries.get(placement.index) else {
@@ -935,27 +1166,89 @@ impl ReaperWindow {
             }
         }
         if let Some(view) = scroll_view {
-            if let Some((runtime_id, content_hwnd, state, renderer)) =
-                self.scroll_views.borrow().get(&(view as usize)).map(
-                    |runtime| {
-                        (
-                            runtime.id,
-                            runtime.content,
-                            Rc::clone(&runtime.state),
-                            runtime.renderer,
-                        )
-                    },
-                )
-            {
+            if let Some((
+                runtime_id,
+                clip_hwnd,
+                content_hwnd,
+                scrollbar_hwnd,
+                state,
+                renderer,
+            )) = self.scroll_views.borrow().get(&(view as usize)).map(
+                |runtime| {
+                    (
+                        runtime.id,
+                        runtime.clip,
+                        runtime.content,
+                        runtime.scrollbar_hwnd,
+                        Rc::clone(&runtime.state),
+                        runtime.renderer,
+                    )
+                },
+            ) {
+                let mut view_rect = raw::RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
+                let mut content_rect = view_rect;
+                unsafe {
+                    Self::swell()?.GetWindowRect(view, &mut view_rect);
+                    Self::swell()?
+                        .GetWindowRect(content_hwnd, &mut content_rect);
+                }
+                log::trace!(
+                    "scroll layout allocation: window={:?} id={runtime_id:?} parent={:?} view={view:?} view_rect={view_rect:?} requested_viewport={:?} content={content_hwnd:?} content_rect_before={content_rect:?} measured_content_extent={content_extent:?} renderer={renderer:?}",
+                    self.hwnd(),
+                    unsafe { Self::swell()?.GetParent(view) },
+                    rect.size(),
+                );
+                let initial_state = *state.borrow();
                 ScrollView {
                     window: self,
                     id: runtime_id,
                     view,
+                    clip: clip_hwnd,
+                    scrollbar_hwnd,
                     content: content_hwnd,
                     state,
                     renderer,
+                    viewport: Cell::new(rect.size()),
                 }
-                .set_layout_sizes(bounds.size(), content_extent);
+                .set_layout_sizes(rect.size(), content_extent);
+                let mut view_rect = raw::RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
+                let mut content_rect = view_rect;
+                unsafe {
+                    Self::swell()?.GetWindowRect(view, &mut view_rect);
+                    Self::swell()?
+                        .GetWindowRect(content_hwnd, &mut content_rect);
+                }
+                let mut view_client_rect = raw::RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
+                unsafe {
+                    Self::swell()?.GetClientRect(view, &mut view_client_rect);
+                }
+                let client_size = super::layout::Size {
+                    x: (view_client_rect.right - view_client_rect.left).max(0)
+                        as u32,
+                    y: (view_client_rect.bottom - view_client_rect.top).max(0)
+                        as u32,
+                };
+                log::trace!(
+                    "scroll layout applied: window={:?} id={runtime_id:?} view={view:?} view_rect={view_rect:?} client={:?} content={content_hwnd:?} content_rect={content_rect:?} state={:?}",
+                    self.hwnd(),
+                    client_size,
+                    initial_state,
+                );
             }
             Ok(content_extent)
         } else if is_structural {
@@ -967,10 +1260,7 @@ impl ReaperWindow {
             // GroupBox child HWNDs clip their descendants, so expand the
             // native group to contain wrapped child lanes. Its parent (the
             // ScrollView) then incorporates this size into its scroll range.
-            let required = super::layout::Size {
-                x: content_extent.x.saturating_add(30),
-                y: content_extent.y.saturating_add(38),
-            };
+            let required = content_extent;
             if required.x > rect.width || required.y > rect.height {
                 if let Some(control) = self.control(id) {
                     ReaperControl::new(control).set_rect(ControlRect::new(
@@ -994,14 +1284,24 @@ impl ReaperWindow {
         parent: raw::HWND,
         rect: ControlRect,
     ) -> ReaperResult<raw::HWND> {
+        self.create_structural_child_with_style(parent, rect, 0)
+    }
+
+    pub(super) fn create_structural_child_with_style(
+        &self,
+        parent: raw::HWND,
+        rect: ControlRect,
+        extra_style: i32,
+    ) -> ReaperResult<raw::HWND> {
         self.prepare_control_creation(rect)?;
         let hwnd = unsafe {
-            Self::swell()?.create_child_window(
+            Self::swell()?.create_child_window_with_style(
                 parent,
                 rect.width,
                 rect.height,
                 Some(super::window_proc),
                 0,
+                extra_style,
             )
         }
         .ok_or(ReaRsError::NullPtr("structural child"))?;
@@ -1030,10 +1330,6 @@ impl ReaperWindow {
         unsafe {
             Self::swell()?.GetClientRect(self.hwnd(), &mut client);
         }
-        // Keep the root flow away from the native window edge.  GroupBox
-        // frames draw their border and caption slightly outside their logical
-        // content rectangle, so giving the root layout a margin prevents a
-        // fill-sized GroupBox from touching or overflowing the window frame.
         let client = Rect::from(client);
         log::trace!(
             "applying window layout: hwnd={:?} client={}x{} entries={}",
@@ -1042,18 +1338,19 @@ impl ReaperWindow {
             client.height,
             self.layout.borrow().root.entries.len(),
         );
-        let bounds = Rect::new(
-            20,
-            20,
-            client.width.saturating_sub(40),
-            client.height.saturating_sub(40),
-        );
+        let bounds = self.layout.borrow().root.insets.apply(Rect::new(
+            0,
+            0,
+            client.width,
+            client.height,
+        ));
         let layout = self.layout.borrow();
         let root = LayoutNode {
             entries: layout.root.entries.clone(),
             axis: layout.root.axis,
             spacing: layout.root.spacing,
             policy: layout.root.policy,
+            insets: layout.root.insets,
         };
         let output = self.apply_layout_node(bounds, &root, root.policy)?;
         for placement in output.placements {
@@ -1085,6 +1382,9 @@ impl ReaperWindow {
             controls: RefCell::new(ControlRegistry::default()),
             events: RefCell::new(EventRegistry::default()),
             scroll_views: RefCell::new(HashMap::new()),
+            menu: RefCell::new(None),
+            popup_request: Cell::new(None),
+            lifecycle_generation: Cell::new(0),
             layout: RefCell::new(WindowLayout::default()),
             render_bitmap: RefCell::new(None),
             render_callback: RefCell::new(None),
@@ -1127,6 +1427,9 @@ impl ReaperWindow {
             controls: RefCell::new(ControlRegistry::default()),
             events: RefCell::new(EventRegistry::default()),
             scroll_views: RefCell::new(HashMap::new()),
+            menu: RefCell::new(None),
+            popup_request: Cell::new(None),
+            lifecycle_generation: Cell::new(0),
             layout: RefCell::new(WindowLayout::default()),
             render_bitmap: RefCell::new(None),
             render_callback: RefCell::new(None),

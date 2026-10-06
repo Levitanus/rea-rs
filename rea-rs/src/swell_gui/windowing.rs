@@ -493,6 +493,21 @@ impl ReaperWindow {
         allow_show: bool,
     ) -> ReaperResult<()> {
         self.check_window()?;
+        if self.docked.get() {
+            log::debug!(
+                "dock request ignored: hwnd={:?} already docked",
+                self.hwnd()
+            );
+            return Ok(());
+        }
+        log::warn!(
+            "dock transition begin: hwnd={:?} parent={:?} generation={}",
+            self.hwnd(),
+            unsafe { Self::swell()?.GetParent(self.hwnd()) },
+            self.lifecycle_generation.get(),
+        );
+        self.lifecycle_generation
+            .set(self.lifecycle_generation.get().wrapping_add(1));
         let name = CString::new(name)?;
         let ident = CString::new(ident)?;
         // Preserve only the floating geometry. A docker resize is not a
@@ -514,6 +529,11 @@ impl ReaperWindow {
                 allow_show,
             );
         }
+        if !unsafe { Self::swell()?.IsWindow(self.hwnd()) } {
+            return Err(ReaRsError::InvalidObject(
+                "window was destroyed while docking",
+            ));
+        }
         self.docked.set(true);
         // Docking can leave a newly-created SWELL window hidden until the
         // next host layout pass. Explicitly show and repaint it so the docked
@@ -526,12 +546,49 @@ impl ReaperWindow {
         }
         self.rebind_controls()?;
         self.apply_default_layout()?;
+        log::warn!(
+            "dock transition complete: hwnd={:?} parent={:?} generation={}",
+            self.hwnd(),
+            unsafe { Self::swell()?.GetParent(self.hwnd()) },
+            self.lifecycle_generation.get(),
+        );
         Ok(())
     }
 
     pub fn float(&self) -> ReaperResult<()> {
         self.check_window()?;
+        if !self.docked.get() {
+            log::debug!(
+                "float request ignored: hwnd={:?} already floating",
+                self.hwnd()
+            );
+            return Ok(());
+        }
+        let floating_rect =
+            self.saved_floating_rect()?
+                .ok_or(ReaRsError::InvalidObject(
+                    "floating window rectangle is unavailable",
+                ))?;
         let low = Reaper::get().low();
+        let main_hwnd_fn =
+            low.pointers().GetMainHwnd.as_ref().ok_or_else(|| {
+                ReaRsError::UnexpectedAPI("GetMainHwnd not available".into())
+            })?;
+        let main_hwnd = main_hwnd_fn();
+        if main_hwnd.is_null()
+            || !unsafe { Self::swell()?.IsWindow(main_hwnd) }
+        {
+            return Err(ReaRsError::NullPtr("valid main window"));
+        }
+        log::warn!(
+            "float transition begin: hwnd={:?} parent={:?} owner={:?} generation={} rect={floating_rect:?}",
+            self.hwnd(),
+            unsafe { Self::swell()?.GetParent(self.hwnd()) },
+            unsafe { Self::swell()?.GetWindow(self.hwnd(), raw::GW_OWNER) },
+            self.lifecycle_generation.get(),
+        );
+        self.lifecycle_generation
+            .set(self.lifecycle_generation.get().wrapping_add(1));
         if low.pointers().DockWindowRemove.is_none() {
             return Err(ReaRsError::UnexpectedAPI(
                 "DockWindowRemove not available".into(),
@@ -539,6 +596,11 @@ impl ReaperWindow {
         }
         unsafe {
             low.DockWindowRemove(self.hwnd());
+        }
+        if !unsafe { Self::swell()?.IsWindow(self.hwnd()) } {
+            return Err(ReaRsError::InvalidObject(
+                "window was destroyed while removing it from the docker",
+            ));
         }
         self.docked.set(false);
         // Docking reparents the HWND into REAPER's docker. Removing the
@@ -549,14 +611,6 @@ impl ReaperWindow {
         // floating window.
         // Restore top-level ownership and the last floating geometry. SWELL
         // removes the native frame while the HWND is a docker child.
-        let main_hwnd =
-            low.pointers().GetMainHwnd.as_ref().ok_or_else(|| {
-                ReaRsError::UnexpectedAPI("GetMainHwnd not available".into())
-            })?;
-        let main_hwnd = main_hwnd();
-        if main_hwnd.is_null() {
-            return Err(ReaRsError::NullPtr("main window"));
-        }
         unsafe {
             Self::swell()?.SetParent(self.hwnd(), std::ptr::null_mut());
             Self::swell()?.SetWindowLong(
@@ -564,6 +618,11 @@ impl ReaperWindow {
                 raw::GWL_HWNDPARENT,
                 main_hwnd as isize,
             );
+        }
+        if !unsafe { Self::swell()?.IsWindow(self.hwnd()) } {
+            return Err(ReaRsError::InvalidObject(
+                "window was destroyed while restoring its parent",
+            ));
         }
         let style = unsafe {
             Self::swell()?.GetWindowLong(self.hwnd(), raw::GWL_STYLE)
@@ -579,18 +638,13 @@ impl ReaperWindow {
                 raw::GWL_STYLE,
                 style | raw::WS_CAPTION as isize | raw::WS_THICKFRAME as isize,
             );
-            let rect = self.saved_floating_rect()?.ok_or(
-                ReaRsError::InvalidObject(
-                    "floating window rectangle is unavailable",
-                ),
-            )?;
             Self::swell()?.SetWindowPos(
                 self.hwnd(),
                 std::ptr::null_mut(),
-                rect.left,
-                rect.top,
-                rect.right - rect.left,
-                rect.bottom - rect.top,
+                floating_rect.left,
+                floating_rect.top,
+                floating_rect.right - floating_rect.left,
+                floating_rect.bottom - floating_rect.top,
                 (raw::SWP_NOZORDER | raw::SWP_FRAMECHANGED) as i32,
             );
         }
@@ -602,19 +656,19 @@ impl ReaperWindow {
         // The SWELL native-surface transition can reset the top-level
         // position to its default (0, 0). Apply the saved floating geometry
         // once more after the surface has been recreated.
-        let rect =
-            self.saved_floating_rect()?
-                .ok_or(ReaRsError::InvalidObject(
-                    "floating window rectangle is unavailable",
-                ))?;
+        if !unsafe { Self::swell()?.IsWindow(self.hwnd()) } {
+            return Err(ReaRsError::InvalidObject(
+                "window was destroyed while recreating its floating surface",
+            ));
+        }
         unsafe {
             Self::swell()?.SetWindowPos(
                 self.hwnd(),
                 std::ptr::null_mut(),
-                rect.left,
-                rect.top,
-                rect.right - rect.left,
-                rect.bottom - rect.top,
+                floating_rect.left,
+                floating_rect.top,
+                floating_rect.right - floating_rect.left,
+                floating_rect.bottom - floating_rect.top,
                 (raw::SWP_NOZORDER | raw::SWP_FRAMECHANGED) as i32,
             );
         }
@@ -685,6 +739,14 @@ impl ReaperWindow {
             return;
         }
         self.reset_ui();
+        if !self.hwnd().is_null() && Reaper::is_available() {
+            unsafe {
+                Reaper::get()
+                    .swell()
+                    .SetMenu(self.hwnd(), std::ptr::null_mut());
+            }
+        }
+        self.menu.replace(None);
         if !Reaper::is_available() {
             return;
         }

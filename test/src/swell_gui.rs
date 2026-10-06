@@ -3,7 +3,8 @@ use rea_rs::{
     db_to_linear, linear_to_db,
     swell_gui::{
         layout::{WidgetFills, WidgetSize},
-        LiceCombineMode, LiceTextOptions,
+        LiceCombineMode, LiceTextOptions, Menu, MenuItem, MouseButton,
+        MouseMessage, WindowEvent,
     },
     ActionHook, ActionKind, AutomationMode, CheckBox, Color, ComboBox,
     ControlEvent, ControlId, ControlSurface, EditField, ExtState, Font,
@@ -13,10 +14,13 @@ use rea_rs::{
 };
 use rea_rs_low::raw;
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, sync::Arc};
+use std::{cell::RefCell, ffi::CString, sync::Arc};
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
 const DOCK_STATE_KEY: &str = "rea_rs_widget_gallery.dock";
+const MENU_DOCK: u32 = 0x7101;
+const MENU_FLOAT: u32 = 0x7102;
+const PREFS_PAGE_ID: &str = "rea_rs_widget_gallery";
 const DEMO_SECTION: &str = "rea-rs.track-gallery";
 const EVENT_QUEUE_KEY: &str = "events";
 const PAINT_OVER_KEY: &str = "paint_over";
@@ -104,6 +108,35 @@ fn append_events(events: Vec<DemoEvent>) {
     if let Err(error) = result {
         warn!("could not enqueue gallery event: {error}");
     }
+}
+
+unsafe extern "C" fn preferences_page_proc(
+    hwnd: raw::HWND,
+    message: raw::UINT,
+    _wparam: raw::WPARAM,
+    _lparam: raw::LPARAM,
+) -> raw::INT_PTR {
+    if message == raw::WM_CREATE && Reaper::is_available() {
+        let text = CString::new("This page is hosted by REAPER Preferences.")
+            .expect("static text contains no NUL");
+        let _ = Reaper::get().swell().create_label(
+            hwnd,
+            1,
+            text.as_ptr(),
+            12,
+            12,
+            320,
+            24,
+        );
+    }
+    0
+}
+
+unsafe fn create_preferences_page(parent: raw::HWND) -> raw::HWND {
+    Reaper::get()
+        .swell()
+        .create_child_window(parent, 360, 80, Some(preferences_page_proc), 0)
+        .unwrap_or(std::ptr::null_mut())
 }
 
 #[derive(Default)]
@@ -424,7 +457,7 @@ impl Drop for DemoCSurf {
 
 struct DemoWindow {
     window: ReaperWindow,
-    dock_state: CheckBox,
+    menu_manager: DynamicManager,
     paint_checkbox: CheckBox,
     cursor_position: ProgressBar,
     tracklist: ListBox,
@@ -443,6 +476,33 @@ struct DemoWindow {
     timer: Option<usize>,
 }
 
+/// Keeps the gallery's attached menu synchronized with host dock state.
+/// The same attached menu is displayed as a popup on right-click.
+#[derive(Default)]
+struct DynamicManager {
+    docked: Option<bool>,
+}
+
+impl DynamicManager {
+    fn refresh(&mut self, window: &ReaperWindow) -> anyhow::Result<()> {
+        let docked = window.is_docked().unwrap_or(false);
+        if self.docked == Some(docked) {
+            return Ok(());
+        }
+        let menu = Menu::new([
+            MenuItem::command(MENU_DOCK, "Dock gallery")
+                .enabled(!docked)
+                .checked(docked),
+            MenuItem::command(MENU_FLOAT, "Float gallery")
+                .enabled(docked)
+                .checked(!docked),
+        ])?;
+        window.set_menu_bar(Some(menu))?;
+        self.docked = Some(docked);
+        Ok(())
+    }
+}
+
 impl DemoWindow {
     fn new() -> anyhow::Result<Self> {
         let (width, height) = (400_u32, 620_u32);
@@ -451,50 +511,56 @@ impl DemoWindow {
                 .size(width, height)
                 .dock_ident("rea_rs_widget_gallery"),
         )?;
-        let ui = window.build_ui()?.central_panel();
-        let content = ui.scroll_view(
-            ControlId::new(),
-            WidgetSize::new_fill_both(width, height),
-            ScrollbarRenderer::Native,
-        )?;
+        let ui = window.build_ui()?;
+        let menu = Menu::new([
+            MenuItem::command(MENU_DOCK, "Dock gallery"),
+            MenuItem::command(MENU_FLOAT, "Float gallery"),
+        ])?;
+        window.set_menu_bar(Some(menu))?;
+        let content = ui
+            .scroll_view(
+                ControlId::new(),
+                WidgetSize::new_fill_both(width, height),
+                ScrollbarRenderer::Auto,
+            )?
+            .with_insets(rea_rs::swell_gui::layout::Insets {
+                left: 10,
+                top: 10,
+                right: 10,
+                bottom: 10,
+            });
         let switches = content.row(
             ControlId::new(),
             WidgetSize::new_fill_x(width, 32)
                 .set_min_y(32)
                 .set_max_x(width),
         )?;
-        let dock_state = switches.checkbox(
-            ControlId(100),
-            "Docked",
-            WidgetSize::new_fill_x(110, 24)
-                .set_fill_x(WidgetFills::FillPortion(1)),
-        )?;
         let paint_checkbox = switches.checkbox(
-            ControlId(101),
+            ControlId(100),
             "Paint over MIDI editor",
             WidgetSize::new_fill_x(220, 24)
                 .set_fill_x(WidgetFills::FillPortion(2)),
         )?;
         let cursor_position = content.progress_bar(
-            ControlId(102),
+            ControlId(101),
             WidgetSize::new_fill_x(width, 20).set_max_x(width),
             0,
         )?;
         cursor_position.set_range(0, 1000)?;
         let tracklist = content.list_box(
-            ControlId(103),
+            ControlId(102),
             WidgetSize::new_fill_both(width, 100)
                 .set_min_y(90)
                 .set_max_x(width),
             0,
         )?;
         let inspector = content.group_box(
-            ControlId(104),
+            ControlId(103),
             "Track inspector",
             WidgetSize::new_fill_both(width, 100).set_max_x(width),
         )?;
         let name = inspector.edit_field(
-            ControlId(105),
+            ControlId(104),
             WidgetSize::new_fill_x(380, 26).set_max_x(width),
             0,
         )?;
@@ -503,25 +569,25 @@ impl DemoWindow {
             WidgetSize::new_fill_x(380, 28).set_max_x(width),
         )?;
         let normal = states.radio_button(
-            ControlId(106),
+            ControlId(105),
             "Normal",
             WidgetSize::new(95, 24),
             0,
         )?;
         let mute = states.radio_button(
-            ControlId(107),
+            ControlId(106),
             "Mute",
             WidgetSize::new(85, 24),
             0,
         )?;
         let solo = states.radio_button(
-            ControlId(108),
+            ControlId(107),
             "Solo",
             WidgetSize::new(85, 24),
             0,
         )?;
         let automation = inspector.combo_box(
-            ControlId(109),
+            ControlId(108),
             WidgetSize::new_fill_x(380, 28).set_max_x(width),
             0,
         )?;
@@ -541,7 +607,7 @@ impl DemoWindow {
             WidgetSize::new_fill_x(380, 32).set_max_x(width),
         )?;
         let volume = volume_row.trackbar(
-            ControlId(110),
+            ControlId(109),
             WidgetSize::new_fill_x(220, 28).set_max_x(width),
             0,
         )?;
@@ -552,11 +618,11 @@ impl DemoWindow {
                 .clamp(0.0, 1000.0) as i32,
         )?;
         let volume_value = volume_row.edit_field(
-            ControlId(111),
+            ControlId(110),
             WidgetSize::new(90, 28),
             0,
         )?;
-        volume_row.label(ControlId(112), "dB", WidgetSize::new(25, 28))?;
+        volume_row.label(ControlId(111), "dB", WidgetSize::new(25, 28))?;
         let docked = ExtState::<bool, Reaper>::existing(
             WINDOW_STATE_SECTION,
             DOCK_STATE_KEY,
@@ -566,7 +632,6 @@ impl DemoWindow {
         )
         .get()?
         .unwrap_or(false);
-        dock_state.set_checked(docked)?;
         let paint_over = read_paint_over();
         paint_checkbox.set_checked(paint_over)?;
         if docked {
@@ -578,7 +643,7 @@ impl DemoWindow {
         }
         Ok(Self {
             window,
-            dock_state,
+            menu_manager: DynamicManager::default(),
             paint_checkbox,
             cursor_position,
             tracklist,
@@ -608,6 +673,29 @@ impl DemoWindow {
         );
         if let Err(error) = state.set(docked) {
             warn!("could not save dock preference: {error}");
+        }
+    }
+
+    fn set_docked(&self, docked: bool) {
+        let result = if docked {
+            self.window.dock(
+                "rea-rs track gallery",
+                "rea_rs_widget_gallery",
+                true,
+            )
+        } else {
+            self.window.float()
+        };
+        if let Err(error) = result {
+            warn!("could not update gallery dock state: {error}");
+        } else {
+            self.save_dock_state(docked);
+        }
+    }
+
+    fn update_menu_state(&mut self) {
+        if let Err(error) = self.menu_manager.refresh(&self.window) {
+            warn!("could not refresh gallery menu state: {error}");
         }
     }
 
@@ -902,10 +990,51 @@ impl WindowHandler for DemoWindow {
         &self.window
     }
     fn on_open(&mut self) {
+        self.update_menu_state();
         self.timer = self.window.start_timer(TIMER_ID, TIMER_INTERVAL_MS).ok();
         self.rebuild_tracks();
         self.refresh_play_position();
         ensure_surface_registered();
+    }
+    fn on_command(&mut self, command: rea_rs::swell_gui::WindowCommand) {
+        let rea_rs::swell_gui::WindowCommand::Menu { id } = command else {
+            return;
+        };
+        match id as u32 {
+            MENU_DOCK => {
+                self.set_docked(true);
+            }
+            MENU_FLOAT => {
+                self.set_docked(false);
+            }
+            _ => (),
+        }
+    }
+    fn on_event(&mut self, event: WindowEvent) -> bool {
+        let WindowEvent::Mouse {
+            message: MouseMessage::Up(MouseButton::Right),
+            position,
+            ..
+        } = event
+        else {
+            return false;
+        };
+        let mut screen_position = raw::POINT {
+            x: position.x as i32,
+            y: position.y as i32,
+        };
+        unsafe {
+            Reaper::get()
+                .swell()
+                .ClientToScreen(self.window.hwnd(), &mut screen_position);
+        }
+        if let Err(error) = self
+            .window
+            .post_popup_menu_bar_at(screen_position.x, screen_position.y)
+        {
+            warn!("could not queue dock context menu: {error}");
+        }
+        true
     }
     fn on_timer(&mut self, id: usize) {
         if id != TIMER_ID {
@@ -913,6 +1042,7 @@ impl WindowHandler for DemoWindow {
         }
         self.drain_events();
         self.refresh_play_position();
+        self.update_menu_state();
         let paint_over = read_paint_over();
         if self.paint_over != paint_over {
             self.paint_over = paint_over;
@@ -939,23 +1069,6 @@ impl WindowHandler for DemoWindow {
             return;
         }
         match event {
-            ControlEvent::CheckBoxChanged { control }
-                if control == self.dock_state.id() =>
-            {
-                let docked = self.dock_state.checked().unwrap_or(false);
-                let result = if docked {
-                    self.window.dock(
-                        "rea-rs track gallery",
-                        "rea_rs_widget_gallery",
-                        true,
-                    )
-                } else {
-                    self.window.float()
-                };
-                if result.is_ok() {
-                    self.save_dock_state(docked);
-                }
-            }
             ControlEvent::CheckBoxChanged { control }
                 if control == self.paint_checkbox.id() =>
             {
@@ -1134,6 +1247,11 @@ fn format_db(db: f64) -> String {
 }
 
 pub fn register_actions(reaper: &mut Reaper) -> anyhow::Result<()> {
+    reaper.register_preferences_page(
+        PREFS_PAGE_ID,
+        "rea-rs Widget Gallery",
+        |parent| unsafe { create_preferences_page(parent) },
+    )?;
     let _queue = ExtState::<Vec<DemoEvent>, Reaper>::new(
         DEMO_SECTION,
         EVENT_QUEUE_KEY,

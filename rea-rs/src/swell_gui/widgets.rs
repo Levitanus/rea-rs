@@ -557,6 +557,19 @@ impl<'a> CreationContext<'a> {
         size.into()
     }
 
+    pub fn with_insets(self, insets: super::layout::Insets) -> Self {
+        let mut layout = self.window.layout.borrow_mut();
+        let node = match self.container {
+            Some(container) => layout.groups.get_mut(&container),
+            None => Some(&mut layout.root),
+        };
+        if let Some(node) = node {
+            node.insets = insets;
+        }
+        drop(layout);
+        self
+    }
+
     pub fn button(
         &self,
         id: ControlId,
@@ -784,6 +797,12 @@ impl<'a> CreationContext<'a> {
                 axis: Axis::Y,
                 spacing: 8,
                 policy: OverflowPolicy::Wrap,
+                insets: super::layout::Insets {
+                    left: 15,
+                    top: 28,
+                    right: 15,
+                    bottom: 10,
+                },
             },
         );
         Ok(CreationContext {
@@ -813,6 +832,7 @@ impl<'a> CreationContext<'a> {
                 axis: Axis::X,
                 spacing: 8,
                 policy: OverflowPolicy::Clip,
+                insets: super::layout::Insets::default(),
             },
         );
         Ok(CreationContext {
@@ -828,17 +848,74 @@ impl<'a> CreationContext<'a> {
         size: WidgetSize,
         renderer: ScrollbarRenderer,
     ) -> anyhow::Result<CreationContext<'a>> {
+        let renderer = match renderer {
+            ScrollbarRenderer::Auto
+                if Reaper::get().low().supports_cool_scrollbars() =>
+            {
+                ScrollbarRenderer::CoolSb
+            }
+            ScrollbarRenderer::Auto if cfg!(target_family = "windows") => {
+                ScrollbarRenderer::Native
+            }
+            ScrollbarRenderer::Auto => anyhow::bail!(
+                "no visible scrollbar backend is available on this platform"
+            ),
+            renderer => renderer,
+        };
+        match renderer {
+            ScrollbarRenderer::CoolSb
+                if !Reaper::get().low().supports_cool_scrollbars() =>
+            {
+                anyhow::bail!("CoolSB scrollbar renderer is unavailable");
+            }
+            ScrollbarRenderer::Native if !cfg!(target_family = "windows") => {
+                anyhow::bail!("native standard scrollbars are unavailable on this SWELL platform");
+            }
+            _ => (),
+        }
         let rect = self.size(size);
-        let view = self.window.create_structural_child(self.parent, rect)?;
-        let content = self.window.create_structural_child(
+        let extra_style = raw::WS_CLIPCHILDREN
+            | if renderer == ScrollbarRenderer::Native {
+                raw::WS_HSCROLL | raw::WS_VSCROLL
+            } else {
+                0
+            };
+        let view = self.window.create_structural_child_with_style(
+            self.parent,
+            rect,
+            extra_style,
+        )?;
+        // This fixed-size client-area child is the paint/input clip boundary.
+        // CoolSB remains on `view`; oversized content is a grandchild and can
+        // never paint into the non-client scrollbar gutter.
+        let clip = self.window.create_structural_child_with_style(
             view,
             ControlRect::new(0, 0, rect.width, rect.height),
+            raw::WS_CLIPCHILDREN | raw::WS_CLIPSIBLINGS,
         )?;
-        if renderer == ScrollbarRenderer::CoolSb
-            && Reaper::get().low().supports_cool_scrollbars()
-        {
+        let content = self.window.create_structural_child_with_style(
+            clip,
+            ControlRect::new(0, 0, rect.width, rect.height),
+            raw::WS_CLIPSIBLINGS,
+        )?;
+        match renderer {
+            ScrollbarRenderer::CoolSb
+                if Reaper::get().low().supports_cool_scrollbars() =>
             unsafe {
+                // CoolSB draws in the non-client frame of its host. Attach
+                // it to the fixed viewport, not the translated content
+                // child, so widgets cannot cover the scrollbar handles.
                 Reaper::get().low().InitializeCoolSB(view);
+            },
+            ScrollbarRenderer::CoolSb => {
+                unreachable!("renderer availability checked above")
+            }
+            ScrollbarRenderer::Native if !cfg!(target_family = "windows") => {
+                unreachable!("renderer availability checked above")
+            }
+            ScrollbarRenderer::Native => (),
+            ScrollbarRenderer::Auto => {
+                unreachable!("automatic renderer resolved above")
             }
         }
         self.window.register_layout_entry(self.container, id, size);
@@ -850,12 +927,16 @@ impl<'a> CreationContext<'a> {
                 axis: Axis::Y,
                 spacing: 8,
                 policy: OverflowPolicy::WrapScroll,
+                insets: super::layout::Insets::default(),
             },
         );
         self.window.scroll_views.borrow_mut().insert(
             view as usize,
             ScrollViewRuntime {
                 id,
+                scrollbar_hwnd: view,
+                view,
+                clip,
                 content,
                 state: Rc::new(RefCell::new(ScrollState::new())),
                 renderer,
@@ -890,6 +971,7 @@ impl<'a> CreationContext<'a> {
                     axis: Axis::Y,
                     spacing: 8,
                     policy: OverflowPolicy::Wrap,
+                    insets: super::layout::Insets::default(),
                 },
             );
         }

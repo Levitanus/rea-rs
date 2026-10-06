@@ -4,6 +4,7 @@ pub mod drawing;
 pub mod events;
 pub(crate) mod host_proc;
 pub mod layout;
+pub mod menu;
 pub mod scroll;
 pub mod widgets;
 pub mod windowing;
@@ -23,6 +24,9 @@ pub use events::{
     KeyMessage, KeyModifiers, MouseButton, MouseButtons, MouseMessage,
     NativeKey, ScrollViewEvent, ScrollViewEventSource, WidgetEventCallback,
     WindowCommand, WindowEvent, WindowEventCallback,
+};
+pub use menu::{
+    CustomMenuContext, CustomMenuPhase, Menu, MenuCommandId, MenuItem,
 };
 pub use scroll::{
     decode_scroll_command, ScrollCommand, ScrollMetrics, ScrollOffset,

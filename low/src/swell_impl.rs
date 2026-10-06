@@ -16,6 +16,30 @@ static mut INSTANCE: Option<Swell> = None;
 /// This impl block contains functions which exist in SWELL as macros and
 /// therefore are not picked up by `bindgen`.
 impl Swell {
+    /// Applies native standard scrollbar state where the platform exposes it.
+    /// SWELL Unix builds currently lack range/position APIs, so callers should
+    /// use REAPER CoolSB there instead.
+    pub unsafe fn set_native_scrollbar(
+        &self,
+        hwnd: root::HWND,
+        bar: i32,
+        info: &mut root::SCROLLINFO,
+        visible: bool,
+    ) -> bool {
+        #[cfg(target_family = "windows")]
+        {
+            use winapi::um::winuser;
+            winuser::SetScrollInfo(hwnd as _, bar, info as *mut _, 1);
+            winuser::ShowScrollBar(hwnd as _, bar, visible as i32);
+            true
+        }
+        #[cfg(target_family = "unix")]
+        {
+            let _ = (hwnd, bar, info, visible);
+            false
+        }
+    }
+
     /// Creates a hidden child window with the supplied procedure.
     ///
     /// This is intentionally lower-level than `create_window`: the caller
@@ -29,6 +53,20 @@ impl Swell {
         proc_: root::DLGPROC,
         param: root::LPARAM,
     ) -> Option<root::HWND> {
+        self.create_child_window_with_style(
+            parent, width, height, proc_, param, 0,
+        )
+    }
+
+    pub unsafe fn create_child_window_with_style(
+        &self,
+        parent: root::HWND,
+        width: i32,
+        height: i32,
+        proc_: root::DLGPROC,
+        param: root::LPARAM,
+        extra_style: i32,
+    ) -> Option<root::HWND> {
         #[cfg(target_family = "unix")]
         {
             let hwnd = self.SWELL_CreateDialog(
@@ -40,6 +78,14 @@ impl Swell {
             );
             if hwnd.is_null() {
                 return None;
+            }
+            if extra_style != 0 {
+                let style = self.GetWindowLong(hwnd, crate::raw::GWL_STYLE);
+                self.SetWindowLong(
+                    hwnd,
+                    crate::raw::GWL_STYLE,
+                    style | extra_style as isize,
+                );
             }
             self.SetWindowPos(
                 hwnd,
@@ -61,7 +107,9 @@ impl Swell {
                 0,
                 class.as_ptr(),
                 std::ptr::null(),
-                winuser::WS_CHILD | winuser::WS_CLIPCHILDREN,
+                winuser::WS_CHILD
+                    | winuser::WS_CLIPCHILDREN
+                    | extra_style as u32,
                 0,
                 0,
                 width.max(1),
@@ -357,7 +405,8 @@ impl Swell {
         {
             use std::ffi::CString;
             let class_name = CString::new(class_name).ok()?;
-            let make_set_cur_parms = root::swell_functions::SWELL_MakeSetCurParms?;
+            let make_set_cur_parms =
+                root::swell_functions::SWELL_MakeSetCurParms?;
             let make_control = root::swell_functions::SWELL_MakeControl?;
             make_set_cur_parms(1.0, 1.0, 0.0, 0.0, parent, false, false);
             let hwnd = make_control(

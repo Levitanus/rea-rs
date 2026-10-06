@@ -8,7 +8,8 @@ use std::os::raw::{c_int, c_void};
 pub use super::bindings::root::{
     accelerator_register_t, audio_hook_register_t, custom_action_register_t,
     gaccel_register_t, midi_Input, midi_Output, midi_realtime_write_struct_t,
-    preview_register_t, reaper_functions::AudioAccessor, reaper_plugin_info_t,
+    prefs_page_register_t, preview_register_t,
+    reaper_functions::AudioAccessor, reaper_plugin_info_t,
     IReaperControlSurface, IReaperPitchShift, KbdCmd, KbdSectionInfo,
     MIDI_event_t, MIDI_eventlist, MediaItem, MediaItem_Take, MediaTrack,
     PCM_sink, PCM_source, PCM_source_peaktransfer_t, PCM_source_transfer_t,
@@ -151,6 +152,10 @@ pub const WM_SETFOCUS: u32 = 0x0007;
 pub const WS_CHILD: i32 = 0x40000000;
 /// Window style: clips child windows to the client area.
 pub const WS_CLIPCHILDREN: i32 = 0x02000000;
+/// Window style: has a horizontal standard scrollbar (Windows only).
+pub const WS_HSCROLL: i32 = 0x00100000;
+/// Window style: has a vertical standard scrollbar (Windows only).
+pub const WS_VSCROLL: i32 = 0x00200000;
 /// Window style: has a title bar. Includes WS_DLGFRAME and WS_BORDER.
 pub const WS_CAPTION: i32 = 0x00C00000;
 /// Window style: has a sizing border.
@@ -242,6 +247,11 @@ pub use crate::bindings::root::{
     SW_SHOWNORMAL,
 };
 
+// SWELL's generated bindings omit this standard SetWindowPos flag although
+// the SWELL and Win32 backends both accept it.
+#[cfg(target_family = "unix")]
+pub const SWP_NOREDRAW: u32 = 0x0008;
+
 #[cfg(target_family = "windows")]
 mod windows_constants {
     // MIIM
@@ -253,6 +263,7 @@ mod windows_constants {
     // SWP
     pub const SWP_FRAMECHANGED: u32 = 0x0020;
     pub const SWP_NOACTIVATE: u32 = 0x0010;
+    pub const SWP_NOREDRAW: u32 = 0x0008;
     pub const SWP_NOCOPYBITS: u32 = 0x0100;
     pub const SWP_NOMOVE: u32 = 0x0002;
     pub const SWP_NOSIZE: u32 = 0x0001;

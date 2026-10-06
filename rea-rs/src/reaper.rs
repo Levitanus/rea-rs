@@ -26,6 +26,50 @@ static mut INSTANCE: Option<Reaper> = None;
 
 type ActionCallback = dyn Fn(&mut ActionHook) -> Result<(), anyhow::Error>;
 
+extern "C" fn custom_menu_hook(
+    menu_id: *const std::os::raw::c_char,
+    menu: *mut std::ffi::c_void,
+    flag: i32,
+) {
+    if menu_id.is_null() || menu.is_null() || !Reaper::is_available() {
+        return;
+    }
+    let menu_id =
+        unsafe { std::ffi::CStr::from_ptr(menu_id) }.to_string_lossy();
+    let context =
+        swell_gui::CustomMenuContext::new(&menu_id, menu as raw::HMENU, flag);
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some(callback) = Reaper::get_mut().custom_menu_hook.as_mut()
+            {
+                callback(&context);
+            }
+        }));
+    if result.is_err() {
+        log::error!("panic contained in REAPER customizable-menu hook");
+    }
+}
+
+unsafe extern "C" fn create_preferences_page(parent: raw::HWND) -> raw::HWND {
+    if !Reaper::is_available() {
+        return std::ptr::null_mut();
+    }
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Reaper::get_mut()
+                .preferences_page_builder
+                .as_mut()
+                .map_or(std::ptr::null_mut(), |builder| builder(parent))
+        }));
+    match result {
+        Ok(hwnd) => hwnd,
+        Err(_) => {
+            log::error!("panic contained in REAPER Preferences page creation");
+            std::ptr::null_mut()
+        }
+    }
+}
+
 pub struct Action {
     bindings: Vec<ActionBinding>,
     operation: Box<ActionCallback>,
@@ -50,6 +94,12 @@ struct DefaultKeyBindingRegistration {
     _description: CString,
     registration: raw::gaccel_register_t,
     global_text: bool,
+}
+
+struct PreferencesPageRegistration {
+    _id: CString,
+    _display_name: CString,
+    registration: raw::prefs_page_register_t,
 }
 
 /// Selects the REAPER action sections in which a custom action is registered.
@@ -342,6 +392,10 @@ pub struct Reaper {
     toggle_action_hook: extern "C" fn(i32) -> i32,
     registrations: Vec<ActionRegistration>,
     default_key_bindings: Vec<DefaultKeyBindingRegistration>,
+    custom_menu_hook: Option<Box<dyn FnMut(&swell_gui::CustomMenuContext)>>,
+    custom_menu_hook_registered: bool,
+    preferences_page: Option<PreferencesPageRegistration>,
+    preferences_page_builder: Option<Box<dyn FnMut(raw::HWND) -> raw::HWND>>,
     timers: HashMap<String, (Instant, Arc<RefCell<dyn Timer>>)>,
     pub(crate) windows: HashMap<WindowId, Box<dyn WindowHandler>>,
     pub(crate) window_routes: HashMap<usize, WindowId>,
@@ -382,6 +436,10 @@ impl Reaper {
             toggle_action_hook,
             registrations: Vec::new(),
             default_key_bindings: Vec::new(),
+            custom_menu_hook: None,
+            custom_menu_hook_registered: false,
+            preferences_page: None,
+            preferences_page_builder: None,
             timers: HashMap::new(),
             windows: HashMap::new(),
             window_routes: HashMap::new(),
@@ -406,6 +464,73 @@ impl Reaper {
 
     pub fn low(&self) -> &rea_rs_low::Reaper {
         &self.low
+    }
+
+    /// Registers a callback for REAPER customizable-menu initialization and
+    /// display phases. The supplied menu handle is borrowed for the callback.
+    pub fn register_custom_menu_hook(
+        &mut self,
+        callback: impl FnMut(&swell_gui::CustomMenuContext) + 'static,
+    ) -> anyhow::Result<()> {
+        if self.custom_menu_hook_registered {
+            anyhow::bail!("a custom menu hook is already registered");
+        }
+        self.custom_menu_hook = Some(Box::new(callback));
+        unsafe {
+            self.low.plugin_register(
+                c_str!("hookcustommenu").as_ptr(),
+                custom_menu_hook as *mut _,
+            );
+        }
+        self.custom_menu_hook_registered = true;
+        Ok(())
+    }
+
+    /// Requests that REAPER add its main Extensions menu.
+    pub fn ensure_extensions_menu(&self) -> bool {
+        self.low.AddExtensionsMainMenu()
+    }
+
+    /// Registers one REAPER Preferences page for this plugin. The host owns
+    /// `parent`; the builder must return a child HWND and must not destroy the
+    /// supplied parent. REAPER's ABI has no per-page userdata or destroy hook,
+    /// so this API intentionally permits one page per plugin instance.
+    pub fn register_preferences_page(
+        &mut self,
+        id: &str,
+        display_name: &str,
+        mut builder: impl FnMut(raw::HWND) -> raw::HWND + 'static,
+    ) -> anyhow::Result<()> {
+        if self.preferences_page.is_some() {
+            anyhow::bail!(
+                "only one Preferences page can be registered per plugin"
+            );
+        }
+        let id = CString::new(id)?;
+        let display_name = CString::new(display_name)?;
+        self.preferences_page_builder =
+            Some(Box::new(move |parent| builder(parent)));
+        let mut registration = raw::prefs_page_register_t::default();
+        registration.idstr = id.as_ptr();
+        registration.displayname = display_name.as_ptr();
+        registration.create = Some(create_preferences_page);
+        let mut retained = PreferencesPageRegistration {
+            _id: id,
+            _display_name: display_name,
+            registration,
+        };
+        unsafe {
+            let result = self.low.plugin_register(
+                c_str!("prefpage").as_ptr(),
+                &mut retained.registration as *mut _ as _,
+            );
+            if result == 0 {
+                self.preferences_page_builder = None;
+                anyhow::bail!("REAPER rejected Preferences page registration");
+            }
+        }
+        self.preferences_page = Some(retained);
+        Ok(())
     }
     pub fn swell(&self) -> &rea_rs_low::Swell {
         &self.swell
@@ -879,6 +1004,19 @@ impl Drop for Reaper {
         }
         let low = self.low().clone();
         unsafe {
+            if let Some(page) = self.preferences_page.as_mut() {
+                low.plugin_register(
+                    c_str!("-prefpage").as_ptr(),
+                    &mut page.registration as *mut _ as _,
+                );
+            }
+            if self.custom_menu_hook_registered {
+                low.plugin_register(
+                    c_str!("-hookcustommenu").as_ptr(),
+                    custom_menu_hook as *mut _,
+                );
+                self.custom_menu_hook_registered = false;
+            }
             low.plugin_register(
                 c_str!("-hookcommand2").as_ptr(),
                 self.hook2 as *mut _,
@@ -888,6 +1026,9 @@ impl Drop for Reaper {
                 self.toggle_action_hook as *mut _,
             );
         }
+        self.preferences_page_builder.take();
+        self.preferences_page.take();
+        self.custom_menu_hook.take();
         for registration in self.registrations.iter_mut() {
             unsafe {
                 low.plugin_register(

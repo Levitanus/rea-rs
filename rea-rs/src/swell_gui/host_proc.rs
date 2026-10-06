@@ -26,6 +26,61 @@ pub(super) struct HostWindowProc {
     installed: isize,
 }
 
+fn dispatch_owned_command_detached(
+    key: &str,
+    hwnd: raw::HWND,
+    command: super::events::WindowCommand,
+    control_event: Option<super::events::ControlEvent>,
+) -> bool {
+    let Some(mut handler) = Reaper::get_mut().windows.remove(key) else {
+        return false;
+    };
+    if !handler.window().is_owned() || handler.window().hwnd() != hwnd {
+        Reaper::get_mut().windows.insert(key.to_owned(), handler);
+        return false;
+    }
+
+    let generation = handler.window().lifecycle_generation.get();
+    log::debug!(
+        "owned command callback detached: hwnd={hwnd:?} window_id={key:?} command={command:?} generation={generation}",
+    );
+    handler.on_command(command);
+    if let Some(event) = control_event {
+        let result = handler.window().events.borrow_mut().dispatch(event);
+        log::debug!(
+            "detached control event dispatch: event={event:?} result={result:?}"
+        );
+        if matches!(result, super::events::DispatchResult::ForwardToWindow) {
+            handler.on_control_event(event);
+        }
+    }
+
+    if unsafe { Reaper::get().swell().IsWindow(hwnd) }
+        && handler.window().hwnd() == hwnd
+    {
+        let reaper = Reaper::get_mut();
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            reaper.windows.entry(key.to_owned())
+        {
+            entry.insert(handler);
+        } else {
+            log::error!(
+                "owned window handler could not be restored after command callback: window_id={key:?} hwnd={hwnd:?}; preserving existing registration"
+            );
+            handler.window().relinquish_native_ownership();
+            handler.on_destroy();
+        }
+    } else {
+        log::warn!(
+            "owned window destroyed during command callback: window_id={key:?} hwnd={hwnd:?}"
+        );
+        handler.window().destroy_structural_children();
+        handler.window().relinquish_native_ownership();
+        handler.on_destroy();
+    }
+    true
+}
+
 pub(super) static HOST_WINDOW_PROCS: OnceLock<
     Mutex<HashMap<usize, HostWindowProc>>,
 > = OnceLock::new();
@@ -311,6 +366,153 @@ pub(crate) unsafe extern "C" fn window_proc(
         };
         (direct_host, key)
     };
+    // Process posted popup requests before taking mutable access to the
+    // global REAPER instance. TrackPopupMenu runs a nested message loop, so
+    // the popup must own an independent menu and must not retain a RefCell
+    // borrow of the window's attached menu.
+    if msg == super::windows::SHOW_MENU_POPUP_MESSAGE {
+        let request_id = wparam;
+        log::debug!(
+            "popup request received: window_id={key:?} hwnd={hwnd:?} request_id={request_id} lifecycle_generation={:?}",
+            Reaper::get()
+                .windows
+                .get(&key)
+                .map(|handler| handler.window().lifecycle_generation.get()),
+        );
+        let request = Reaper::get()
+            .windows
+            .get(&key)
+            .filter(|handler| {
+                handler.window().hwnd() == hwnd
+                    && unsafe { Reaper::get().swell().IsWindow(hwnd) }
+            })
+            .and_then(|handler| handler.window().popup_request.replace(None))
+            .filter(|request| request.0 == request_id);
+        if let Some((_, x, y, generation)) = request {
+            log::debug!(
+                "popup request validated: window_id={key:?} hwnd={hwnd:?} request_id={request_id} position=({x}, {y}) requested_generation={generation}",
+            );
+            let popup = Reaper::get().windows.get(&key).and_then(|handler| {
+                if handler.window().lifecycle_generation.get() != generation {
+                    log::warn!(
+                        "popup request cancelled after window lifecycle change: window_id={key:?} hwnd={hwnd:?} request_generation={generation} current_generation={}",
+                        handler.window().lifecycle_generation.get(),
+                    );
+                    return None;
+                }
+                handler.window().menu.borrow().as_ref()?.duplicate().ok()
+            });
+            if let Some(popup) = popup {
+                let popup_owner = Reaper::get()
+                    .low()
+                    .pointers()
+                    .GetMainHwnd
+                    .as_ref()
+                    .map(|get_main_hwnd| get_main_hwnd())
+                    .filter(|owner| {
+                        !owner.is_null()
+                            && unsafe {
+                                Reaper::get().swell().IsWindow(*owner)
+                            }
+                    });
+                let Some(popup_owner) = popup_owner else {
+                    log::warn!(
+                        "popup request cancelled: no valid REAPER main window; window_id={key:?} hwnd={hwnd:?}",
+                    );
+                    return 0;
+                };
+                log::debug!(
+                    "tracking popup menu: window_id={key:?} hwnd={hwnd:?} owner={popup_owner:?} position=({x}, {y}) generation={generation}",
+                );
+                if let Some(super::menu::MenuCommandId(id)) =
+                    popup.popup_at(popup_owner, x, y)
+                {
+                    let still_current = Reaper::get()
+                        .windows
+                        .get(&key)
+                        .is_some_and(|handler| {
+                            handler.window().hwnd() == hwnd
+                                && handler.window().lifecycle_generation.get()
+                                    == generation
+                                && unsafe {
+                                    Reaper::get().swell().IsWindow(hwnd)
+                                }
+                        });
+                    if still_current {
+                        log::debug!(
+                            "popup command selected: window_id={key:?} hwnd={hwnd:?} command_id={id} generation={generation}; dispatching",
+                        );
+                        dispatch_owned_command_detached(
+                            &key,
+                            hwnd,
+                            super::events::WindowCommand::Menu {
+                                id: id as i32,
+                            },
+                            None,
+                        );
+                    } else {
+                        log::warn!(
+                            "popup command discarded after window lifecycle change: window_id={key:?} hwnd={hwnd:?} command_id={id} generation={generation}",
+                        );
+                    }
+                } else {
+                    log::debug!(
+                        "popup dismissed without command: window_id={key:?} hwnd={hwnd:?} generation={generation}",
+                    );
+                }
+            } else {
+                log::warn!(
+                    "popup request discarded: attached menu unavailable or request stale; window_id={key:?} hwnd={hwnd:?} generation={generation}",
+                );
+            }
+        } else {
+            log::warn!(
+                "popup request discarded: mismatched, missing, or invalid request; window_id={key:?} hwnd={hwnd:?} request_id={request_id}",
+            );
+        }
+        return 0;
+    }
+    // User callbacks can call host APIs such as DockWindowAddEx and
+    // DockWindowRemove. Those APIs synchronously send messages back through
+    // this WndProc. Detach the owned handler and end the global mutable Reaper
+    // borrow before invoking callbacks so nested WndProc calls cannot alias
+    // the same mutable registry or handler entry.
+    let owned_command = msg == raw::WM_COMMAND
+        && (wparam as usize & 0xffff) != raw::IDCANCEL as usize
+        && Reaper::get()
+            .windows
+            .get(&key)
+            .is_some_and(|handler| handler.window().is_owned());
+    if owned_command {
+        let id = (wparam as usize & 0xffff) as i32;
+        let code = ((wparam as usize >> 16) & 0xffff) as i32;
+        let command = if lparam == 0 {
+            super::events::WindowCommand::Menu { id }
+        } else {
+            super::events::WindowCommand::Control {
+                id,
+                notification: super::events::CommandNotification::from_raw(
+                    code,
+                ),
+            }
+        };
+        let control_event = if lparam != 0 {
+            Reaper::get().windows.get(&key).and_then(|handler| {
+                let control_id = super::widgets::ControlId(id);
+                handler.window().control(control_id).and_then(|control| {
+                    super::events::decode_control_event(
+                        control.kind,
+                        control_id,
+                        super::events::CommandNotification::from_raw(code),
+                    )
+                })
+            })
+        } else {
+            None
+        };
+        dispatch_owned_command_detached(&key, hwnd, command, control_event);
+        return 0;
+    }
     let reaper = Reaper::get_mut();
     let is_borrowed_host = direct_host.is_some()
         && reaper
@@ -422,7 +624,10 @@ pub(crate) unsafe extern "C" fn window_proc(
             .find_map(|(id, child)| (*child == hwnd).then_some(*id))
             .or_else(|| {
                 handler.window().scroll_views.borrow().values().find_map(
-                    |runtime| (runtime.content == hwnd).then_some(runtime.id),
+                    |runtime| {
+                        (runtime.content == hwnd || runtime.clip == hwnd)
+                            .then_some(runtime.id)
+                    },
                 )
             })
     });
@@ -725,6 +930,28 @@ pub(crate) unsafe extern "C" fn window_proc(
                 return reaper.swell().DefWindowProc(hwnd, msg, wparam, lparam)
                     as raw::INT_PTR;
             }
+            if cfg!(target_os = "linux") {
+                // Generic SWELL destroys an attached menu after WM_DESTROY.
+                // Relinquish the wrapper handle instead of calling
+                // SetMenu(NULL) here, which could resize/re-enter this proc.
+                if let Some(handler) = reaper.windows.get_mut(&key) {
+                    if handler.window().is_owned() {
+                        if let Ok(mut menu) =
+                            handler.window().menu.try_borrow_mut()
+                        {
+                            if let Some(menu) = menu.as_mut() {
+                                menu.relinquish_native_ownership();
+                            }
+                        }
+                    }
+                }
+            } else if let Some(handler) = reaper.windows.get(&key) {
+                if handler.window().is_owned() {
+                    unsafe {
+                        reaper.swell().SetMenu(hwnd, std::ptr::null_mut());
+                    }
+                }
+            }
             let handler = reaper.windows.remove(&key);
             reaper.window_routes.remove(&(hwnd as usize));
             if let Some(mut handler) = handler {
@@ -805,12 +1032,32 @@ pub(crate) unsafe extern "C" fn window_proc(
                 };
                 let code = (wparam as usize & 0xffff) as i32;
                 let position = ((wparam as usize >> 16) & 0xffff) as u32;
+                let before = runtime.state.borrow().offset();
+                log::trace!(
+                    "scrollbar input: hwnd={hwnd:?} view={:?} content={:?} id={:?} axis={axis:?} code={code} thumb_position={position} offset_before={before:?}",
+                    runtime.view,
+                    runtime.content,
+                    runtime.id,
+                );
                 if let Some(command) =
                     super::scroll::decode_scroll_command(code, position)
                 {
                     let mut state = runtime.state.borrow_mut();
                     *state = state.apply(axis, command);
                     let offset = state.offset();
+                    let position =
+                        if axis == Axis::X { offset.x } else { offset.y };
+                    let page = if axis == Axis::X {
+                        state.viewport().x
+                    } else {
+                        state.viewport().y
+                    };
+                    let max = if axis == Axis::X {
+                        state.content().x
+                    } else {
+                        state.content().y
+                    };
+                    let visible = max > page;
                     unsafe {
                         (*swell).SetWindowPos(
                             runtime.content,
@@ -824,6 +1071,68 @@ pub(crate) unsafe extern "C" fn window_proc(
                                 | raw::SWP_NOACTIVATE)
                                 as i32,
                         );
+                        if runtime.renderer
+                            == super::scroll::ScrollbarRenderer::Native
+                        {
+                            let bar = if axis == Axis::X {
+                                raw::SB_HORZ
+                            } else {
+                                raw::SB_VERT
+                            };
+                            let mut info = raw::SCROLLINFO {
+                                cbSize: std::mem::size_of::<raw::SCROLLINFO>()
+                                    as u32,
+                                fMask: (raw::SIF_RANGE
+                                    | raw::SIF_PAGE
+                                    | raw::SIF_POS)
+                                    as u32,
+                                nMin: 0,
+                                nMax: max.saturating_sub(1) as i32,
+                                nPage: page,
+                                nPos: position as i32,
+                                nTrackPos: 0,
+                            };
+                            let _ = (*swell).set_native_scrollbar(
+                                runtime.view,
+                                bar as i32,
+                                &mut info,
+                                visible,
+                            );
+                        } else if Reaper::get()
+                            .low()
+                            .supports_cool_scrollbars()
+                        {
+                            let bar = if axis == Axis::X {
+                                raw::SB_HORZ
+                            } else {
+                                raw::SB_VERT
+                            };
+                            let mut info = raw::SCROLLINFO {
+                                cbSize: std::mem::size_of::<raw::SCROLLINFO>()
+                                    as u32,
+                                fMask: (raw::SIF_RANGE
+                                    | raw::SIF_PAGE
+                                    | raw::SIF_POS)
+                                    as u32,
+                                nMin: 0,
+                                nMax: super::scroll::scrollbar_range_max(max)
+                                    as i32,
+                                nPage: page,
+                                nPos: position as i32,
+                                nTrackPos: 0,
+                            };
+                            Reaper::get().low().CoolSB_SetScrollInfo(
+                                runtime.view,
+                                bar as i32,
+                                &mut info,
+                                1,
+                            );
+                            Reaper::get().low().CoolSB_ShowScrollBar(
+                                runtime.view,
+                                bar as i32,
+                                visible as i8,
+                            );
+                        }
                     }
                     let source = match command {
                         super::scroll::ScrollCommand::LineBackward
@@ -842,7 +1151,9 @@ pub(crate) unsafe extern "C" fn window_proc(
                     };
                     let event = ScrollViewEvent { offset, source };
                     log::trace!(
-                        "scroll view moved: id={:?} source={:?} offset={:?}",
+                        "scroll view moved: hwnd={hwnd:?} view={:?} content={:?} id={:?} command={command:?} source={:?} offset={:?}",
+                        runtime.view,
+                        runtime.content,
                         runtime.id,
                         source,
                         offset,
@@ -909,8 +1220,14 @@ pub(crate) unsafe extern "C" fn window_proc(
                         Axis::Y
                     };
                     let mut state = state.borrow_mut();
+                    let before = state.offset();
                     *state = state.scroll_wheel(axis, delta);
                     let offset = state.offset();
+                    log::trace!(
+                        "scroll wheel input: hwnd={hwnd:?} view={parent:?} content={content:?} id={id:?} axis={axis:?} delta={delta} offset_before={before:?} offset_after={offset:?} viewport={:?} content_size={:?}",
+                        state.viewport(),
+                        state.content(),
+                    );
                     unsafe {
                         (*swell).SetWindowPos(
                             content,
@@ -925,6 +1242,11 @@ pub(crate) unsafe extern "C" fn window_proc(
                                 as i32,
                         );
                     }
+                    drop(state);
+                    // CoolSB is painted in the viewport's non-client area.
+                    // Moving the oversized content child can cover those
+                    // bars on SWELL, so force a scrollbar refresh afterward.
+                    handler.window().sync_scroll_view(parent);
                     let _ = handler.window().emit_scroll_view_event(
                         id,
                         ScrollViewEvent {
@@ -982,7 +1304,8 @@ pub(crate) unsafe extern "C" fn window_proc(
                         .or_else(|| {
                             window.scroll_views.borrow().values().find_map(
                                 |runtime| {
-                                    (runtime.content == hwnd)
+                                    (runtime.content == hwnd
+                                        || runtime.clip == hwnd)
                                         .then_some(runtime.id)
                                 },
                             )

@@ -42,11 +42,21 @@ pub struct ScrollMetrics {
     pub max_offset: ScrollOffset,
 }
 
+/// The native scrollbar range is expressed in content coordinates. With a
+/// page size of `viewport`, the largest legal thumb position is
+/// `content - viewport`; therefore `nMax` must be `content - 1`.
+pub(crate) const fn scrollbar_range_max(content_extent: u32) -> u32 {
+    content_extent.saturating_sub(1)
+}
+
 /// The scrollbar backend requested by a native ScrollView.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScrollbarRenderer {
     Native,
     CoolSb,
+    /// Use REAPER CoolSB when available, otherwise use the platform-native
+    /// backend when supported. The selected backend is exposed by the handle.
+    Auto,
 }
 
 /// Visibility of the two viewport-owned scrollbars.
@@ -220,6 +230,14 @@ impl ScrollState {
         self.viewport
     }
 
+    /// Replaces the current viewport while retaining content and offset
+    /// clamping semantics. Used after visibility reserves scrollbar space.
+    pub fn set_effective_viewport(mut self, viewport: Size) -> Self {
+        self.viewport = viewport;
+        self.offset = self.clamp(self.offset);
+        self
+    }
+
     pub const fn offset(self) -> ScrollOffset {
         self.offset
     }
@@ -384,6 +402,37 @@ mod tests {
         );
         assert!(visibility.horizontal);
         assert!(visibility.vertical);
+    }
+
+    #[test]
+    fn effective_viewport_reserves_cross_axis_scrollbar_space() {
+        let (metrics, visibility) = ScrollMetrics::with_visibility(
+            Size { x: 110, y: 95 },
+            Size { x: 100, y: 100 },
+            10,
+        );
+        assert!(visibility.horizontal);
+        assert!(visibility.vertical);
+        assert_eq!(metrics.viewport, Size { x: 90, y: 90 });
+        assert_eq!(metrics.max_offset, ScrollOffset::new(20, 5));
+    }
+
+    #[test]
+    fn effective_viewport_keeps_content_and_clamps_offset() {
+        let state = state()
+            .set_offset(ScrollOffset::new(400, 800))
+            .set_effective_viewport(Size { x: 150, y: 250 });
+        assert_eq!(state.content(), Size { x: 500, y: 1_000 });
+        assert_eq!(state.offset(), ScrollOffset::new(350, 750));
+    }
+
+    #[test]
+    fn native_range_max_combines_with_page_to_match_scroll_extent() {
+        let content = 138;
+        let viewport = 128;
+        let n_max = scrollbar_range_max(content);
+        assert_eq!(n_max.saturating_add(1).saturating_sub(viewport), 10);
+        assert_eq!(scrollbar_range_max(0), 0);
     }
 
     #[test]
