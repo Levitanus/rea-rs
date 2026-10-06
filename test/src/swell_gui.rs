@@ -14,7 +14,7 @@ use rea_rs::{
 };
 use rea_rs_low::raw;
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, ffi::CString, sync::Arc};
+use std::{cell::RefCell, sync::Arc};
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
 const DOCK_STATE_KEY: &str = "rea_rs_widget_gallery.dock";
@@ -110,33 +110,22 @@ fn append_events(events: Vec<DemoEvent>) {
     }
 }
 
-unsafe extern "C" fn preferences_page_proc(
-    hwnd: raw::HWND,
-    message: raw::UINT,
-    _wparam: raw::WPARAM,
-    _lparam: raw::LPARAM,
-) -> raw::INT_PTR {
-    if message == raw::WM_CREATE && Reaper::is_available() {
-        let text = CString::new("This page is hosted by REAPER Preferences.")
-            .expect("static text contains no NUL");
-        let _ = Reaper::get().swell().create_label(
-            hwnd,
-            1,
-            text.as_ptr(),
-            12,
-            12,
-            320,
-            24,
-        );
-    }
-    0
+struct PreferencesPage {
+    window: ReaperWindow,
 }
 
-unsafe fn create_preferences_page(parent: raw::HWND) -> raw::HWND {
-    Reaper::get()
-        .swell()
-        .create_child_window(parent, 360, 80, Some(preferences_page_proc), 0)
-        .unwrap_or(std::ptr::null_mut())
+impl WindowHandler for PreferencesPage {
+    fn window_id(&self) -> WindowId {
+        "rea-rs.widget-gallery.preferences".to_string()
+    }
+
+    fn window(&self) -> &ReaperWindow {
+        &self.window
+    }
+
+    fn handle_host_message(&self, message: u32) -> bool {
+        message == raw::WM_PAINT
+    }
 }
 
 #[derive(Default)]
@@ -1250,7 +1239,15 @@ pub fn register_actions(reaper: &mut Reaper) -> anyhow::Result<()> {
     reaper.register_preferences_page(
         PREFS_PAGE_ID,
         "rea-rs Widget Gallery",
-        |parent| unsafe { create_preferences_page(parent) },
+        |window| {
+            let ui = window.build_ui()?;
+            ui.label(
+                ControlId(1),
+                "This page is hosted by REAPER Preferences.",
+                WidgetSize::new(320, 24),
+            )?;
+            Ok(Box::new(PreferencesPage { window }))
+        },
     )?;
     let _queue = ExtState::<Vec<DemoEvent>, Reaper>::new(
         DEMO_SECTION,

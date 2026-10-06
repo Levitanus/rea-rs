@@ -339,7 +339,15 @@ pub(crate) unsafe extern "C" fn window_proc(
     wparam: raw::WPARAM,
     lparam: raw::LPARAM,
 ) -> raw::INT_PTR {
+    if matches!(msg, raw::WM_CREATE | raw::WM_DESTROY | raw::WM_NCDESTROY) {
+        log::trace!(
+            "window_proc lifecycle callback: hwnd={hwnd:p} message={msg:#x} wparam={wparam:#x} lparam={lparam:#x}"
+        );
+    }
     if !Reaper::is_available() {
+        log::trace!(
+            "window_proc ignored lifecycle callback because Reaper is unavailable: hwnd={hwnd:p} message={msg:#x}"
+        );
         return 0;
     }
     // Window creation synchronously dispatches messages before its HWND is
@@ -361,9 +369,19 @@ pub(crate) unsafe extern "C" fn window_proc(
             current = reaper.swell().GetParent(current);
         }
         let Some(key) = key else {
+            if matches!(msg, raw::WM_CREATE | raw::WM_DESTROY | raw::WM_NCDESTROY) {
+                log::trace!(
+                    "window_proc has no registered route for lifecycle callback: hwnd={hwnd:p} message={msg:#x} direct_host={direct_host:?}"
+                );
+            }
             return reaper.swell().DefWindowProc(hwnd, msg, wparam, lparam)
                 as raw::INT_PTR;
         };
+        if matches!(msg, raw::WM_CREATE | raw::WM_DESTROY | raw::WM_NCDESTROY) {
+            log::trace!(
+                "window_proc resolved lifecycle callback: id={key:?} hwnd={hwnd:p} message={msg:#x} direct_host={direct_host:?}"
+            );
+        }
         (direct_host, key)
     };
     // Process posted popup requests before taking mutable access to the

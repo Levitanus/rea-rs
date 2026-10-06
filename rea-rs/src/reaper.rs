@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, trace};
 use rea_rs_low::{
     create_cpp_to_rust_control_surface, delete_cpp_control_surface, raw,
     register_plugin_destroy_hook, IReaperControlSurface, PluginContext, Swell,
@@ -52,22 +52,73 @@ extern "C" fn custom_menu_hook(
 
 unsafe extern "C" fn create_preferences_page(parent: raw::HWND) -> raw::HWND {
     if !Reaper::is_available() {
+        trace!(
+            "Preferences page create callback ignored: Reaper is unavailable"
+        );
         return std::ptr::null_mut();
     }
-    let result =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Reaper::get_mut()
-                .preferences_page_builder
-                .as_mut()
-                .map_or(std::ptr::null_mut(), |builder| builder(parent))
-        }));
+    trace!("Preferences page create callback entered: parent={parent:p}");
+    // Move the factory out before invoking user code. The factory can call
+    // back into `Reaper`, so holding a mutable borrow of the global instance
+    // while it runs would alias that access.
+    let Some(mut builder) = Reaper::get_mut().preferences_page_builder.take()
+    else {
+        trace!("Preferences page create callback has no registered builder");
+        return std::ptr::null_mut();
+    };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || {
+            let window = Reaper::get()
+                .create_preferences_page_window(parent)
+                .map_err(anyhow::Error::from)?;
+            let hwnd = window.hwnd();
+            trace!("Preferences page child created: parent={parent:p} hwnd={hwnd:p}");
+            let mut guard = PreferencesPageWindowGuard {
+                hwnd,
+                retained: false,
+            };
+            let handler = builder(window)?;
+            let window_id = handler.window_id();
+            if handler.window().hwnd() != hwnd {
+                anyhow::bail!(
+                    "Preferences page handler must use the supplied window"
+                );
+            }
+            trace!("Preferences page handler built: id={window_id:?} hwnd={hwnd:p}");
+            Reaper::get_mut().register_window_handler(handler)?;
+            guard.retained = true;
+            trace!("Preferences page handler registered: id={window_id:?} hwnd={hwnd:p}");
+            Ok::<_, anyhow::Error>(hwnd)
+        },
+    ));
+    Reaper::get_mut().preferences_page_builder = Some(builder);
     match result {
-        Ok(hwnd) => hwnd,
+        Ok(Ok(hwnd)) => hwnd,
+        Ok(Err(error)) => {
+            trace!("Preferences page creation failed; returning null HWND");
+            log::error!("could not create REAPER Preferences page: {error}");
+            std::ptr::null_mut()
+        }
         Err(_) => {
+            trace!("Preferences page builder panicked; returning null HWND");
             log::error!("panic contained in REAPER Preferences page creation");
             std::ptr::null_mut()
         }
     }
+}
+
+unsafe extern "C" fn preferences_page_base_proc(
+    hwnd: raw::HWND,
+    message: raw::UINT,
+    wparam: raw::WPARAM,
+    lparam: raw::LPARAM,
+) -> raw::INT_PTR {
+    if !Reaper::is_available() {
+        return 0;
+    }
+    Reaper::get()
+        .swell()
+        .DefWindowProc(hwnd, message, wparam, lparam) as raw::INT_PTR
 }
 
 pub struct Action {
@@ -100,6 +151,28 @@ struct PreferencesPageRegistration {
     _id: CString,
     _display_name: CString,
     registration: raw::prefs_page_register_t,
+}
+
+struct PreferencesPageWindowGuard {
+    hwnd: raw::HWND,
+    retained: bool,
+}
+
+impl Drop for PreferencesPageWindowGuard {
+    fn drop(&mut self) {
+        if !self.retained && Reaper::is_available() {
+            if let Some(window_id) =
+                Reaper::get().window_id_for_hwnd(self.hwnd)
+            {
+                let _ =
+                    Reaper::get_mut().unregister_window_handler(&window_id);
+            }
+            let swell = Reaper::get().swell();
+            if unsafe { swell.IsWindow(self.hwnd) } {
+                unsafe { swell.DestroyWindow(self.hwnd) };
+            }
+        }
+    }
 }
 
 /// Selects the REAPER action sections in which a custom action is registered.
@@ -394,8 +467,10 @@ pub struct Reaper {
     default_key_bindings: Vec<DefaultKeyBindingRegistration>,
     custom_menu_hook: Option<Box<dyn FnMut(&swell_gui::CustomMenuContext)>>,
     custom_menu_hook_registered: bool,
-    preferences_page: Option<PreferencesPageRegistration>,
-    preferences_page_builder: Option<Box<dyn FnMut(raw::HWND) -> raw::HWND>>,
+    preferences_page: Option<Box<PreferencesPageRegistration>>,
+    preferences_page_builder: Option<
+        Box<dyn FnMut(ReaperWindow) -> anyhow::Result<Box<dyn WindowHandler>>>,
+    >,
     timers: HashMap<String, (Instant, Arc<RefCell<dyn Timer>>)>,
     pub(crate) windows: HashMap<WindowId, Box<dyn WindowHandler>>,
     pub(crate) window_routes: HashMap<usize, WindowId>,
@@ -491,16 +566,21 @@ impl Reaper {
         self.low.AddExtensionsMainMenu()
     }
 
-    /// Registers one REAPER Preferences page for this plugin. The host owns
-    /// `parent`; the builder must return a child HWND and must not destroy the
-    /// supplied parent. REAPER's ABI has no per-page userdata or destroy hook,
-    /// so this API intentionally permits one page per plugin instance.
+    /// Registers one REAPER Preferences page for this plugin. The page
+    /// builder receives a non-owning high-level wrapper for a child window
+    /// parented by REAPER and must return its boxed [`WindowHandler`].
+    /// REAPER's ABI has no per-page userdata or destroy hook, so this API
+    /// intentionally permits one page per plugin instance.
     pub fn register_preferences_page(
         &mut self,
         id: &str,
         display_name: &str,
-        mut builder: impl FnMut(raw::HWND) -> raw::HWND + 'static,
+        builder: impl FnMut(ReaperWindow) -> anyhow::Result<Box<dyn WindowHandler>>
+            + 'static,
     ) -> anyhow::Result<()> {
+        trace!(
+            "registering Preferences page: id={id:?} display_name={display_name:?}"
+        );
         if self.preferences_page.is_some() {
             anyhow::bail!(
                 "only one Preferences page can be registered per plugin"
@@ -508,21 +588,41 @@ impl Reaper {
         }
         let id = CString::new(id)?;
         let display_name = CString::new(display_name)?;
-        self.preferences_page_builder =
-            Some(Box::new(move |parent| builder(parent)));
+        self.preferences_page_builder = Some(Box::new(builder));
         let mut registration = raw::prefs_page_register_t::default();
         registration.idstr = id.as_ptr();
         registration.displayname = display_name.as_ptr();
         registration.create = Some(create_preferences_page);
-        let mut retained = PreferencesPageRegistration {
+        // REAPER retains this registration record and writes back fields such
+        // as `treeitem` and `hwndCache`. Keep the record at a stable address
+        // before handing its pointer to the host.
+        registration.par_id = 0;
+        registration.par_idstr = std::ptr::null();
+        registration.childrenFlag = 0;
+        registration.treeitem = std::ptr::null_mut();
+        registration.hwndCache = std::ptr::null_mut();
+        let mut retained = Box::new(PreferencesPageRegistration {
             _id: id,
             _display_name: display_name,
             registration,
-        };
+        });
         unsafe {
+            let registration_ptr =
+                &mut retained.registration as *mut _ as *mut std::ffi::c_void;
+            trace!(
+                "calling REAPER prefpage registration: registration={registration_ptr:p} create_callback={:p} children_flag={} parent_id={}",
+                create_preferences_page as *const (),
+                retained.registration.childrenFlag,
+                retained.registration.par_id,
+            );
             let result = self.low.plugin_register(
                 c_str!("prefpage").as_ptr(),
-                &mut retained.registration as *mut _ as _,
+                registration_ptr,
+            );
+            trace!(
+                "REAPER prefpage registration returned {result}: registration={registration_ptr:p} treeitem={:p} hwnd_cache={:p}",
+                retained.registration.treeitem,
+                retained.registration.hwndCache,
             );
             if result == 0 {
                 self.preferences_page_builder = None;
@@ -531,6 +631,42 @@ impl Reaper {
         }
         self.preferences_page = Some(retained);
         Ok(())
+    }
+
+    fn create_preferences_page_window(
+        &self,
+        parent: raw::HWND,
+    ) -> crate::ReaperResult<ReaperWindow> {
+        let parent_valid =
+            !parent.is_null() && unsafe { self.swell.IsWindow(parent) };
+        trace!(
+            "validating Preferences page parent: parent={parent:p} valid={parent_valid}"
+        );
+        if !parent_valid {
+            return Err(crate::ReaRsError::InvalidObject(
+                "Preferences page parent is not a valid window",
+            ));
+        }
+        // SWELL synchronously sends WM_CREATE to the supplied procedure when
+        // creating this child. Passing None leaves SWELL with a null WndProc
+        // and can crash before create_child_window returns.
+        // Give the child a distinct base procedure. Handler registration
+        // subclasses the HWND and must save a procedure that can safely be
+        // called as the fallback; saving `window_proc` itself would recurse
+        // once the host route is installed.
+        let procedure = Some(preferences_page_base_proc as _);
+        trace!(
+            "creating Preferences page child with base procedure: parent={parent:p} callback={:p}",
+            preferences_page_base_proc as *const (),
+        );
+        let hwnd = unsafe {
+            self.swell.create_child_window(parent, 1, 1, procedure, 0)
+        }
+        .ok_or(crate::ReaRsError::NullPtr("Preferences page window"))?;
+        trace!(
+            "created Preferences page child HWND: parent={parent:p} hwnd={hwnd:p}"
+        );
+        ReaperWindow::from_hwnd(hwnd)
     }
     pub fn swell(&self) -> &rea_rs_low::Swell {
         &self.swell
@@ -564,6 +700,11 @@ impl Reaper {
             )
         }
         .ok_or(ReaRsError::NullPtr("window"))?;
+        trace!(
+            "native REAPER window created with window_proc: title={:?} hwnd={hwnd:p} callback={:p}",
+            spec.title,
+            swell_gui::window_proc as *const (),
+        );
         let window = ReaperWindow::owned(
             hwnd,
             spec.allow_show,
@@ -629,6 +770,10 @@ impl Reaper {
         self.windows.insert(window_id.clone(), handler);
         self.window_routes.insert(hwnd_key, window_id.clone());
         if !owned {
+            trace!(
+                "installing window_proc on host-owned HWND: id={window_id:?} hwnd={hwnd:p} callback={:p}",
+                swell_gui::window_proc as *const (),
+            );
             let previous = unsafe {
                 self.swell.SetWindowLong(
                     hwnd,
@@ -636,6 +781,10 @@ impl Reaper {
                     swell_gui::window_proc as *const () as usize as isize,
                 )
             };
+            trace!(
+                "window_proc installed on host-owned HWND: id={window_id:?} hwnd={hwnd:p} previous_proc={previous:#x} current_proc={:#x}",
+                unsafe { self.swell.GetWindowLong(hwnd, raw::GWL_WNDPROC) },
+            );
             swell_gui::host_proc::remember_host_proc(hwnd, previous);
         }
         log::debug!(
@@ -987,6 +1136,15 @@ impl Reaper {
 }
 impl Drop for Reaper {
     fn drop(&mut self) {
+        let low = self.low().clone();
+        unsafe {
+            if let Some(page) = self.preferences_page.as_mut() {
+                low.plugin_register(
+                    c_str!("-prefpage").as_ptr(),
+                    &mut page.registration as *mut _ as _,
+                );
+            }
+        }
         let windows = std::mem::take(&mut self.windows);
         self.window_routes.clear();
         for (id, handler) in windows {
@@ -1002,14 +1160,7 @@ impl Drop for Reaper {
             drop(handler);
             let _ = id;
         }
-        let low = self.low().clone();
         unsafe {
-            if let Some(page) = self.preferences_page.as_mut() {
-                low.plugin_register(
-                    c_str!("-prefpage").as_ptr(),
-                    &mut page.registration as *mut _ as _,
-                );
-            }
             if self.custom_menu_hook_registered {
                 low.plugin_register(
                     c_str!("-hookcustommenu").as_ptr(),
