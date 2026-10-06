@@ -194,6 +194,8 @@ pub const CS_VREDRAW: u32 = 0x0001;
 
 /// `GetWindow` relation: retrieves the owner window.
 pub const GW_OWNER: i32 = 4;
+/// `GetWindow` relation: retrieves the next window in sibling z-order.
+pub const GW_HWNDNEXT: i32 = 2;
 
 // SWELL dialog creation: SWELL_CreateDialog accepts a magic resource ID of
 // 0x400000 | flags in order to create a top-level window without a dialog

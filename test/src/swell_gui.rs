@@ -7,9 +7,9 @@ use rea_rs::{
     },
     ActionHook, ActionKind, AutomationMode, CheckBox, Color, ComboBox,
     ControlEvent, ControlId, ControlSurface, EditField, ExtState, Font,
-    FontSpec, LiceFont, ListBox, ProgressBar, RadioButton, Reaper,
-    ReaperWindow, ScrollbarRenderer, SoloMode, Track, Trackbar, Volume,
-    WindowHandler, WindowId, WindowSpec, WithReaperPtr,
+    FontSpec, KnowsProject, LiceFont, ListBox, Measure, ProgressBar,
+    RadioButton, Reaper, ReaperWindow, ScrollbarRenderer, SoloMode, Track,
+    Trackbar, Volume, WindowHandler, WindowId, WindowSpec, WithReaperPtr,
 };
 use rea_rs_low::raw;
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,12 @@ const CSURF_TYPE: &str = "REARSPAINTover";
 const TIMER_ID: usize = 0x5241;
 const TIMER_INTERVAL_MS: u32 = 33;
 const LIST_RESET_CONTENT: raw::UINT = 0x0184;
+const MIDI_CANVAS_CHILD_INDEX: usize = 1;
+const MIDI_C3_PITCH: i32 = 48;
+// SWS uses MIDI_RULER_H = 64 px at 96 DPI; the piano-roll child includes
+// this ruler before the note rows. Keep it separate from the pitch transform
+// so callers can adjust it for a different DPI/layout.
+const MIDI_RULER_HEIGHT: f64 = 64.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum DemoEvent {
@@ -67,12 +73,6 @@ fn ensure_surface_registered() {
     let paint_over = read_paint_over();
     let active = is_window_registered || paint_over;
     let reaper = Reaper::get_mut();
-    log::debug!(
-        "gallery surface lifecycle: window_registered={} paint_over={} active={active} already_registered={}",
-        is_window_registered,
-        paint_over,
-        reaper.has_control_surface(&CSURF_TYPE.to_string()),
-    );
     if active {
         if !reaper.has_control_surface(&CSURF_TYPE.to_string()) {
             reaper.register_control_surface(Arc::new(RefCell::new(
@@ -137,16 +137,11 @@ impl DemoCSurf {
     }
 
     fn update_midi_editor_overlay(&self, editor_hwnd: Option<usize>) {
-        log::debug!(
-            "MIDI overlay update: editor_hwnd={editor_hwnd:?} paint_over={}",
-            read_paint_over(),
-        );
         self.remove_midi_editor_overlay();
         if !read_paint_over() {
             return;
         }
         let Some(hwnd) = editor_hwnd else {
-            log::debug!("MIDI overlay skipped: no active editor HWND");
             return;
         };
         let hwnd = hwnd as raw::HWND;
@@ -154,14 +149,59 @@ impl DemoCSurf {
             log::warn!("MIDI overlay skipped: invalid editor HWND={hwnd:p}");
             return;
         }
-        let parent = unsafe { Reaper::get().swell().GetParent(hwnd) };
-        log::debug!(
-            "MIDI editor host selected: hwnd={hwnd:p} parent={parent:p}"
-        );
-        let Ok(window) = ReaperWindow::from_hwnd(hwnd) else {
+        let Ok(editor) = ReaperWindow::from_hwnd(hwnd) else {
+            log::warn!(
+                "MIDI overlay skipped: could not wrap editor HWND={hwnd:p}"
+            );
             return;
         };
-        let font = match Font::new(FontSpec::new("Arial").set_size(18))
+        let window = select_midi_canvas(&editor).unwrap_or_else(|| {
+            warn!("MIDI canvas child not found; falling back to editor root");
+            ReaperWindow::from_hwnd(hwnd)
+                .expect("the validated MIDI editor HWND remains valid")
+        });
+        let Some(midi_editor) = Reaper::get().active_midi_editor() else {
+            warn!("MIDI overlay skipped: active editor wrapper unavailable");
+            return;
+        };
+        let take = match midi_editor.get_active_take() {
+            Ok(take) => take,
+            Err(error) => {
+                warn!(
+                    "MIDI overlay skipped: could not get active take: {error}"
+                );
+                return;
+            }
+        };
+        let measure_start_ppq = match Measure::from_index(2, &take.project())
+            .and_then(|measure| measure.start.as_ppq(&take))
+        {
+            Ok(ppq) => ppq as f64,
+            Err(error) => {
+                warn!("MIDI overlay skipped: could not locate measure 2: {error}");
+                return;
+            }
+        };
+        let initial_view = match midi_editor.view_transform() {
+            Ok(view) => view,
+            Err(error) => {
+                warn!("MIDI overlay skipped: could not read editor view: {error}");
+                return;
+            }
+        };
+        let client_rect = match window.client_rect() {
+            Ok(rect) => rect,
+            Err(error) => {
+                warn!("MIDI overlay skipped: could not read canvas size: {error}");
+                return;
+            }
+        };
+        let width =
+            client_rect.right.saturating_sub(client_rect.left).max(0) as u32;
+        let height =
+            client_rect.bottom.saturating_sub(client_rect.top).max(0) as u32;
+        let overlay_hwnd = window.hwnd();
+        let font = match Font::new(FontSpec::new("Arial").set_size(12))
             .and_then(LiceFont::from_font)
         {
             Ok(font) => font,
@@ -170,21 +210,30 @@ impl DemoCSurf {
                 return;
             }
         };
+        let initial_horizontal_zoom = initial_view.horizontal_pixels_per_unit;
+        let initial_pixels_per_pitch = initial_view.vertical_pixels_per_pitch;
         if let Err(error) = window.on_render(move |_info, surface| {
-            let overlay_rect =
-                rea_rs::swell_gui::layout::Rect::new(12, 12, 260, 42);
-            surface.fill_rect(
-                overlay_rect,
-                Color::new(30, 120, 220),
-                0.86,
-                LiceCombineMode::Copy,
-            );
-            let _ = surface.draw_text(
-                "SWELL Paint-over",
-                overlay_rect,
-                &font,
-                LiceTextOptions::default(),
-            );
+            // Re-read the transform on each paint so scroll/zoom changes move
+            // the musical anchor with the native MIDI content.
+            let view = midi_editor.view_transform()?;
+            let x = view.x_for_ppq(measure_start_ppq, &take).ok();
+            let y = view.y_for_pitch(MIDI_C3_PITCH, MIDI_RULER_HEIGHT).ok();
+            if let (Some(x), Some(y)) = (x, y) {
+                let width_scale =
+                    view.horizontal_pixels_per_unit / initial_horizontal_zoom;
+                let height_scale =
+                    view.vertical_pixels_per_pitch / initial_pixels_per_pitch;
+                draw_clipped_anchor_rect(
+                    surface,
+                    x,
+                    y,
+                    100.0 * width_scale,
+                    50.0 * height_scale,
+                    width,
+                    height,
+                    &font,
+                );
+            }
             Ok(())
         }) {
             warn!("could not install MIDI editor renderer: {error}");
@@ -196,10 +245,8 @@ impl DemoCSurf {
             warn!("could not register MIDI editor overlay: {error}");
             return;
         }
-        log::debug!(
-            "MIDI overlay host handler bound: id={HOST_WINDOW_ID:?} hwnd={hwnd:p} parent={parent:p}"
-        );
-        *self.previous_host.borrow_mut() = ReaperWindow::from_hwnd(hwnd).ok();
+        *self.previous_host.borrow_mut() =
+            ReaperWindow::from_hwnd(overlay_hwnd).ok();
         if let Some(host) = self.previous_host.borrow().as_ref() {
             if let Err(error) = host.invalidate(None) {
                 warn!("could not invalidate MIDI editor for overlay: {error}");
@@ -208,13 +255,6 @@ impl DemoCSurf {
     }
 
     fn remove_midi_editor_overlay(&self) {
-        log::debug!(
-            "MIDI overlay host handler unbind requested: id={HOST_WINDOW_ID:?} previous_hwnd={:?}",
-            self.previous_host
-                .borrow()
-                .as_ref()
-                .map(|window| window.hwnd() as usize),
-        );
         if let Err(error) = Reaper::get_mut()
             .unregister_window_handler(&HOST_WINDOW_ID.to_string())
         {
@@ -224,6 +264,79 @@ impl DemoCSurf {
             let _ = window.invalidate(None);
         }
     }
+}
+
+fn select_midi_canvas(editor: &ReaperWindow) -> Option<ReaperWindow> {
+    let mut children = match editor.children() {
+        Ok(children) => children,
+        Err(error) => {
+            warn!("could not enumerate MIDI editor children: {error}");
+            return None;
+        }
+    };
+    let container = match children.nth(MIDI_CANVAS_CHILD_INDEX)? {
+        Ok(container) => container,
+        Err(error) => {
+            warn!("MIDI editor canvas child became unavailable: {error}");
+            return None;
+        }
+    };
+    Some(container)
+}
+
+fn draw_clipped_anchor_rect(
+    surface: &mut rea_rs::swell_gui::LiceSurface<'_>,
+    anchor_x: f64,
+    anchor_y: f64,
+    width: f64,
+    height: f64,
+    client_width: u32,
+    client_height: u32,
+    font: &LiceFont,
+) {
+    use rea_rs::swell_gui::layout::Rect;
+
+    // The point marks the left edge at the measure start and the vertical
+    // center of C3's row. The box scales with horizontal/vertical zoom while
+    // remaining clipped to the overlay child's client area.
+    let left = anchor_x;
+    let top = anchor_y - height / 2.0;
+    let right = left + width;
+    let bottom = top + height;
+    let clipped_left = left.max(0.0);
+    let clipped_top = top.max(0.0);
+    let clipped_right = right.min(f64::from(client_width));
+    let clipped_bottom = bottom.min(f64::from(client_height));
+    if clipped_right <= clipped_left || clipped_bottom <= clipped_top {
+        return;
+    }
+
+    let rect = Rect::new(
+        clipped_left.floor() as u32,
+        clipped_top.floor() as u32,
+        (clipped_right.ceil() - clipped_left.floor()) as u32,
+        (clipped_bottom.ceil() - clipped_top.floor()) as u32,
+    );
+    surface.fill_rect(
+        rect,
+        Color::new(255, 40, 180),
+        0.16,
+        LiceCombineMode::Copy,
+    );
+    surface.draw_rect(
+        rect,
+        Color::new(255, 40, 180),
+        1.0,
+        LiceCombineMode::Copy,
+    );
+    let label_rect =
+        Rect::new(rect.x, rect.y, rect.width.min(96), 18.min(rect.height));
+    let _ = surface.draw_text(
+        "M2 C3 anchor",
+        label_rect,
+        font,
+        LiceTextOptions::default(),
+    );
 }
 
 impl ControlSurface for DemoCSurf {
@@ -239,11 +352,6 @@ impl ControlSurface for DemoCSurf {
             .active_midi_editor()
             .map(|editor| editor.get_pointer().as_ptr() as usize);
         let paint_over = read_paint_over();
-        log::trace!(
-            "DemoCSurf::run: current_editor={current:?} previous_editor={:?} paint_over={paint_over} previous_paint_over={:?}",
-            *self.editor_hwnd.borrow(),
-            *self.paint_over.borrow(),
-        );
         let changed = current != *self.editor_hwnd.borrow()
             || paint_over != *self.paint_over.borrow();
         *self.editor_hwnd.borrow_mut() = current;
@@ -310,11 +418,6 @@ impl ControlSurface for DemoCSurf {
 // surface drops this value and therefore detaches the MIDI host handler.
 impl Drop for DemoCSurf {
     fn drop(&mut self) {
-        log::debug!(
-            "DemoCSurf dropping: editor_hwnd={:?} paint_over={:?}",
-            self.editor_hwnd.get_mut(),
-            self.paint_over.get_mut(),
-        );
         self.remove_midi_editor_overlay();
     }
 }
@@ -972,31 +1075,15 @@ struct DemoHostWindow {
 }
 impl WindowHandler for DemoHostWindow {
     fn window_id(&self) -> WindowId {
-        log::trace!(
-            "DemoHostWindow::window_id queried: id={HOST_WINDOW_ID:?} hwnd={:p}",
-            self.window.hwnd(),
-        );
         HOST_WINDOW_ID.to_string()
     }
     fn window(&self) -> &ReaperWindow {
         &self.window
     }
     fn handle_host_message(&self, message: u32) -> bool {
-        let enabled = message == raw::WM_PAINT;
-        if message == raw::WM_PAINT {
-            log::trace!(
-                "DemoHostWindow accepts WM_PAINT: id={HOST_WINDOW_ID:?} hwnd={:p}",
-                self.window.hwnd(),
-            );
-        }
-        enabled
+        message == raw::WM_PAINT
     }
     fn on_destroy(&mut self) {
-        log::debug!(
-            "DemoHostWindow destroyed: id={HOST_WINDOW_ID:?} hwnd={:p} parent={:p}",
-            self.window.hwnd(),
-            unsafe { Reaper::get().swell().GetParent(self.window.hwnd()) },
-        );
         // The borrowed host HWND has its original WndProc restored before
         // this callback. Drop the custom renderer and request a clean paint
         // through that original procedure.

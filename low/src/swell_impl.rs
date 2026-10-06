@@ -722,6 +722,44 @@ impl Swell {
 /// SWELL ... just Windows was missing.
 #[cfg(target_family = "windows")]
 impl Swell {
+    /// Windows counterpart of SWELL's UTF-8 `GetClassName` API.
+    ///
+    /// SWELL class names are diagnostic hints and may be unavailable for
+    /// windows created outside SWELL.
+    pub unsafe fn GetClassName(
+        &self,
+        hwnd: root::HWND,
+        class_name: *mut ::std::os::raw::c_char,
+        max_count: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        if class_name.is_null() || max_count <= 0 {
+            return 0;
+        }
+        let mut utf16 = vec![0u16; max_count as usize];
+        let len = winapi::um::winuser::GetClassNameW(
+            hwnd as _,
+            utf16.as_mut_ptr(),
+            max_count,
+        );
+        if len <= 0 {
+            return 0;
+        }
+        let name = String::from_utf16_lossy(&utf16[..len as usize]);
+        let name = match std::ffi::CString::new(name) {
+            Ok(name) => name,
+            Err(_) => return 0,
+        };
+        let bytes = name.as_bytes();
+        let copy_len = bytes.len().min(max_count as usize - 1);
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            class_name as *mut u8,
+            copy_len,
+        );
+        *class_name.add(copy_len) = 0;
+        copy_len as ::std::os::raw::c_int
+    }
+
     /// # Safety
     ///
     /// REAPER can crash if you pass an invalid pointer.

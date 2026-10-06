@@ -1,9 +1,33 @@
 use super::windows::{DockPosition, ReaperWindow, WindowPlacement};
 use crate::{ExtState, ReaRsError, Reaper, ReaperResult};
 use rea_rs_low::{raw, Swell};
-use std::ffi::{CStr, CString};
+use std::{
+    collections::HashSet,
+    ffi::{CStr, CString},
+};
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
+
+struct ChildWindowCollection {
+    handles: Vec<raw::HWND>,
+    panic: Option<Box<dyn std::any::Any + Send>>,
+}
+
+unsafe extern "C" fn collect_child_window(
+    hwnd: raw::HWND,
+    context: raw::LPARAM,
+) -> raw::BOOL {
+    let collection = &mut *(context as *mut ChildWindowCollection);
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        collection.handles.push(hwnd);
+    })) {
+        Ok(()) => 1,
+        Err(payload) => {
+            collection.panic = Some(payload);
+            0
+        }
+    }
+}
 
 impl ReaperWindow {
     pub fn hwnd(&self) -> raw::HWND {
@@ -11,6 +35,164 @@ impl ReaperWindow {
     }
     pub fn is_owned(&self) -> bool {
         self.owned.get()
+    }
+
+    /// Returns the native parent reported by SWELL/Win32.
+    ///
+    /// Native APIs can report an owner instead of a parent for some
+    /// top-level windows. Use [`Self::owner`] when owner relationships are
+    /// what you need.
+    pub fn parent(&self) -> ReaperResult<Option<Self>> {
+        self.check_window()?;
+        let hwnd = unsafe { Self::swell()?.GetParent(self.hwnd()) };
+        Self::wrap_discovered_window(hwnd)
+    }
+
+    /// Returns the native owner reported by `GetWindow(GW_OWNER)`, if any.
+    pub fn owner(&self) -> ReaperResult<Option<Self>> {
+        self.check_window()?;
+        let hwnd =
+            unsafe { Self::swell()?.GetWindow(self.hwnd(), raw::GW_OWNER) };
+        Self::wrap_discovered_window(hwnd)
+    }
+
+    /// Returns an iterator over immediate child windows in native sibling
+    /// order.
+    ///
+    /// Returned wrappers are non-owning. The native hierarchy can change
+    /// between enumeration and later use, so each operation checks that its
+    /// HWND is still valid. Each item is fallible because an HWND can become
+    /// invalid between enumeration and being wrapped.
+    pub fn children(
+        &self,
+    ) -> ReaperResult<impl Iterator<Item = ReaperResult<Self>>> {
+        self.check_window()?;
+        let swell = Self::swell()?;
+        let mut handles = Vec::new();
+        let mut seen = HashSet::new();
+        let mut child =
+            unsafe { swell.GetWindow(self.hwnd(), raw::GW_CHILD as i32) };
+        while !child.is_null() && seen.insert(child as usize) {
+            handles.push(child);
+            child = unsafe { swell.GetWindow(child, raw::GW_HWNDNEXT) };
+        }
+        Ok(handles
+            .into_iter()
+            .filter(|hwnd| !hwnd.is_null())
+            .map(Self::from_hwnd))
+    }
+
+    /// Returns an iterator over all descendant windows in native enumeration
+    /// order.
+    ///
+    /// SWELL's `EnumChildWindows` recursively enumerates descendants. The
+    /// callback only collects raw handles; wrappers are created after native
+    /// enumeration has returned.
+    pub fn descendants(
+        &self,
+    ) -> ReaperResult<impl Iterator<Item = ReaperResult<Self>>> {
+        self.check_window()?;
+        let mut collection = ChildWindowCollection {
+            handles: Vec::new(),
+            panic: None,
+        };
+        unsafe {
+            Self::swell()?.EnumChildWindows(
+                self.hwnd(),
+                Some(collect_child_window),
+                &mut collection as *mut ChildWindowCollection as raw::LPARAM,
+            );
+        }
+        if let Some(payload) = collection.panic {
+            std::panic::resume_unwind(payload);
+        }
+        Ok(collection
+            .handles
+            .into_iter()
+            .filter(|hwnd| !hwnd.is_null())
+            .map(Self::from_hwnd))
+    }
+
+    /// Returns the native class name when SWELL can provide one.
+    ///
+    /// Class names are diagnostic hints, not stable cross-platform
+    /// identifiers. Some SWELL-created windows do not expose a class name.
+    pub fn class_name(&self) -> ReaperResult<Option<String>> {
+        self.check_window()?;
+        let mut buffer = vec![0i8; 512];
+        let len = unsafe {
+            Self::swell()?.GetClassName(
+                self.hwnd(),
+                buffer.as_mut_ptr(),
+                buffer.len() as i32,
+            )
+        };
+        if len <= 0 {
+            return Ok(None);
+        }
+        Ok(Some(
+            unsafe { CStr::from_ptr(buffer.as_ptr()) }
+                .to_string_lossy()
+                .into_owned(),
+        ))
+    }
+
+    /// Moves this window to the top of its sibling z-order without changing
+    /// its position, size, or activation state.
+    pub fn bring_to_front(&self) -> ReaperResult<()> {
+        self.check_window()?;
+        unsafe {
+            Self::swell()?.SetWindowPos(
+                self.hwnd(),
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                (raw::SWP_NOMOVE | raw::SWP_NOSIZE | raw::SWP_NOACTIVATE)
+                    as i32,
+            );
+        }
+        Ok(())
+    }
+
+    /// Reparents this window to `parent`, or makes it a top-level window when
+    /// `parent` is `None`.
+    ///
+    /// Reparenting REAPER-owned HWNDs can break host layout, input routing,
+    /// or docking. Prefer this only for windows whose lifecycle and native
+    /// behavior you control. SWELL's `SetParent` return value cannot
+    /// unambiguously distinguish failure from a successful change whose old
+    /// parent was null, so this method validates handles but cannot report
+    /// every native failure.
+    pub fn reparent_to(&self, parent: Option<&Self>) -> ReaperResult<()> {
+        self.check_window()?;
+        if let Some(parent) = parent {
+            parent.check_window()?;
+            let swell = Self::swell()?;
+            if self.hwnd() == parent.hwnd()
+                || unsafe { swell.IsChild(self.hwnd(), parent.hwnd()) != 0 }
+            {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "a window cannot be reparented beneath itself",
+                ));
+            }
+        }
+        unsafe {
+            Self::swell()?.SetParent(
+                self.hwnd(),
+                parent.map_or(std::ptr::null_mut(), Self::hwnd),
+            );
+        }
+        Ok(())
+    }
+
+    fn wrap_discovered_window(hwnd: raw::HWND) -> ReaperResult<Option<Self>> {
+        if hwnd.is_null() {
+            Ok(None)
+        } else {
+            Self::from_hwnd(hwnd).map(Some)
+        }
     }
 
     pub(crate) fn relinquish_native_ownership(&self) {
