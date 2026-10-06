@@ -20,36 +20,109 @@ use crate::{
 pub(super) static CONTAINER_WINDOW_PROCS: OnceLock<
     Mutex<HashMap<usize, isize>>,
 > = OnceLock::new();
-pub(super) static HOST_WINDOW_PROCS: OnceLock<Mutex<HashMap<usize, isize>>> =
-    OnceLock::new();
+#[derive(Clone, Copy, Debug)]
+pub(super) struct HostWindowProc {
+    previous: isize,
+    installed: isize,
+}
+
+pub(super) static HOST_WINDOW_PROCS: OnceLock<
+    Mutex<HashMap<usize, HostWindowProc>>,
+> = OnceLock::new();
 
 pub(crate) fn remember_host_proc(hwnd: raw::HWND, previous: isize) {
+    // SWELL's SetWindowLong is allowed to install its own dispatcher instead
+    // of leaving our callback as the literal HWND procedure. Preserve the
+    // procedure returned here for fallback/chaining, but don't assume this is
+    // necessarily what a later GetWindowLong will report.
+    let installed = if Reaper::is_available()
+        && unsafe { Reaper::get().swell().IsWindow(hwnd) }
+    {
+        Some(unsafe {
+            Reaper::get().swell().GetWindowLong(hwnd, raw::GWL_WNDPROC)
+        })
+    } else {
+        None
+    };
+    let installed =
+        installed.unwrap_or(window_proc as *const () as usize as isize);
     HOST_WINDOW_PROCS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .expect("host window procedure registry poisoned")
-        .insert(hwnd as usize, previous);
+        .insert(
+            hwnd as usize,
+            HostWindowProc {
+                previous,
+                installed,
+            },
+        );
+    log::debug!(
+        "host WndProc bound: hwnd={hwnd:p} parent={:p} saved_previous={previous:#x} installed_after_bind={installed:#x} wrapper={:#x}",
+        unsafe { Reaper::get().swell().GetParent(hwnd) },
+        window_proc as *const () as usize,
+    );
 }
 
 pub(crate) fn detach_host_proc(hwnd: raw::HWND) {
-    let previous = HOST_WINDOW_PROCS.get().and_then(|registry| {
-        registry.lock().ok()?.get(&(hwnd as usize)).copied()
-    });
-    let Some(previous) = previous else { return };
+    let procedures = HOST_WINDOW_PROCS
+        .get()
+        .and_then(|registry| registry.lock().ok()?.remove(&(hwnd as usize)));
+    let Some(HostWindowProc {
+        previous,
+        installed,
+    }) = procedures
+    else {
+        log::debug!(
+            "host WndProc detach skipped: hwnd={hwnd:p} no saved procedure"
+        );
+        return;
+    };
+    let mut current = None;
+    let mut restored = false;
+    let mut previous_after_set = None;
     if Reaper::is_available()
         && unsafe { Reaper::get().swell().IsWindow(hwnd) }
     {
         let swell = Reaper::get().swell();
-        let current = unsafe { swell.GetWindowLong(hwnd, raw::GWL_WNDPROC) };
-        if current == window_proc as *const () as usize as isize {
-            unsafe { swell.SetWindowLong(hwnd, raw::GWL_WNDPROC, previous) };
+        let proc = unsafe { swell.GetWindowLong(hwnd, raw::GWL_WNDPROC) };
+        current = Some(proc);
+        let wrapper = window_proc as *const () as usize as isize;
+        let owned_by_us = proc == wrapper;
+        // Under SWELL, SetWindowLong may install a platform dispatcher which
+        // calls our registered callback, while GetWindowLong reports that
+        // dispatcher rather than `window_proc`. Compare against the exact
+        // procedure observed immediately after installation, not the callback
+        // function pointer. Never clobber a later third-party subclass.
+        if proc == previous {
+            // The host already restored its original procedure.
+            restored = true;
+        } else if owned_by_us || proc == installed {
+            previous_after_set = Some(unsafe {
+                swell.SetWindowLong(hwnd, raw::GWL_WNDPROC, previous)
+            });
+            let restored_proc =
+                unsafe { swell.GetWindowLong(hwnd, raw::GWL_WNDPROC) };
+            restored = restored_proc == previous;
+            if !restored {
+                log::warn!(
+                    "host WndProc restore mismatch: hwnd={hwnd:p} expected={previous:#x} actual={restored_proc:#x} SetWindowLong_previous={previous_after_set:?}"
+                );
+            }
+        } else {
+            log::warn!(
+                "host WndProc changed by another owner; leaving current proc intact: hwnd={hwnd:p} saved={previous:#x} installed={installed:#x} current={proc:#x} wrapper={wrapper:#x}"
+            );
         }
     }
-    if let Some(registry) = HOST_WINDOW_PROCS.get() {
-        if let Ok(mut registry) = registry.lock() {
-            registry.remove(&(hwnd as usize));
-        }
-    }
+    log::debug!(
+        "host WndProc detached: hwnd={hwnd:p} parent={:p} saved={previous:#x} installed={installed:#x} current={current:?} SetWindowLong_previous={previous_after_set:?} restored={restored}",
+        if Reaper::is_available() {
+            unsafe { Reaper::get().swell().GetParent(hwnd) }
+        } else {
+            std::ptr::null_mut()
+        },
+    );
 }
 
 pub(super) unsafe fn call_saved_host_proc(
@@ -59,7 +132,11 @@ pub(super) unsafe fn call_saved_host_proc(
     lparam: raw::LPARAM,
 ) -> Option<raw::INT_PTR> {
     let previous = HOST_WINDOW_PROCS.get().and_then(|registry| {
-        registry.lock().ok()?.get(&(hwnd as usize)).copied()
+        registry
+            .lock()
+            .ok()?
+            .get(&(hwnd as usize))
+            .map(|entry| entry.previous)
     })?;
     Some(call_proc(previous, hwnd, msg, wparam, lparam))
 }
@@ -248,7 +325,11 @@ pub(crate) unsafe extern "C" fn window_proc(
         let host_id = key.clone();
         if msg == raw::WM_DESTROY || msg == raw::WM_NCDESTROY {
             let previous = HOST_WINDOW_PROCS.get().and_then(|registry| {
-                registry.lock().ok()?.get(&(hwnd as usize)).copied()
+                registry
+                    .lock()
+                    .ok()?
+                    .get(&(hwnd as usize))
+                    .map(|entry| entry.previous)
             });
             let handler = reaper.windows.remove(&key);
             reaper.window_routes.remove(&(hwnd as usize));

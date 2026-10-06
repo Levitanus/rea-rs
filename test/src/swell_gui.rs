@@ -37,14 +37,11 @@ enum DemoEvent {
     Mute { guid: String, value: bool },
     Solo { guid: String, value: bool },
     Title { guid: String, value: String },
-    MidiEditor { hwnd: Option<usize> },
 }
 
 #[derive(Default)]
 struct DemoLifecycle {
     paint_over: bool,
-    editor_hwnd: Option<usize>,
-    last_surface_window_state: bool,
 }
 
 fn window_registered() -> bool {
@@ -66,8 +63,16 @@ fn read_paint_over() -> bool {
 }
 
 fn ensure_surface_registered() {
-    let active = window_registered() || read_paint_over();
+    let is_window_registered = window_registered();
+    let paint_over = read_paint_over();
+    let active = is_window_registered || paint_over;
     let reaper = Reaper::get_mut();
+    log::debug!(
+        "gallery surface lifecycle: window_registered={} paint_over={} active={active} already_registered={}",
+        is_window_registered,
+        paint_over,
+        reaper.has_control_surface(&CSURF_TYPE.to_string()),
+    );
     if active {
         if !reaper.has_control_surface(&CSURF_TYPE.to_string()) {
             reaper.register_control_surface(Arc::new(RefCell::new(
@@ -101,10 +106,24 @@ fn append_events(events: Vec<DemoEvent>) {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 struct DemoCSurf {
     editor_hwnd: RefCell<Option<usize>>,
-    window_was_open: RefCell<bool>,
+    paint_over: RefCell<bool>,
+    previous_host: RefCell<Option<ReaperWindow>>,
+}
+
+impl std::fmt::Debug for DemoCSurf {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        formatter
+            .debug_struct("DemoCSurf")
+            .field("editor_hwnd", &self.editor_hwnd)
+            .field("paint_over", &self.paint_over)
+            .finish_non_exhaustive()
+    }
 }
 
 impl DemoCSurf {
@@ -115,6 +134,95 @@ impl DemoCSurf {
     ) -> anyhow::Result<()> {
         append_events(vec![build(track.guid()?.to_string())]);
         Ok(())
+    }
+
+    fn update_midi_editor_overlay(&self, editor_hwnd: Option<usize>) {
+        log::debug!(
+            "MIDI overlay update: editor_hwnd={editor_hwnd:?} paint_over={}",
+            read_paint_over(),
+        );
+        self.remove_midi_editor_overlay();
+        if !read_paint_over() {
+            return;
+        }
+        let Some(hwnd) = editor_hwnd else {
+            log::debug!("MIDI overlay skipped: no active editor HWND");
+            return;
+        };
+        let hwnd = hwnd as raw::HWND;
+        if !unsafe { Reaper::get().swell().IsWindow(hwnd) } {
+            log::warn!("MIDI overlay skipped: invalid editor HWND={hwnd:p}");
+            return;
+        }
+        let parent = unsafe { Reaper::get().swell().GetParent(hwnd) };
+        log::debug!(
+            "MIDI editor host selected: hwnd={hwnd:p} parent={parent:p}"
+        );
+        let Ok(window) = ReaperWindow::from_hwnd(hwnd) else {
+            return;
+        };
+        let font = match Font::new(FontSpec::new("Arial").set_size(18))
+            .and_then(LiceFont::from_font)
+        {
+            Ok(font) => font,
+            Err(error) => {
+                warn!("could not create overlay font: {error}");
+                return;
+            }
+        };
+        if let Err(error) = window.on_render(move |_info, surface| {
+            let overlay_rect =
+                rea_rs::swell_gui::layout::Rect::new(12, 12, 260, 42);
+            surface.fill_rect(
+                overlay_rect,
+                Color::new(30, 120, 220),
+                0.86,
+                LiceCombineMode::Copy,
+            );
+            let _ = surface.draw_text(
+                "SWELL Paint-over",
+                overlay_rect,
+                &font,
+                LiceTextOptions::default(),
+            );
+            Ok(())
+        }) {
+            warn!("could not install MIDI editor renderer: {error}");
+            return;
+        }
+        if let Err(error) = Reaper::get_mut()
+            .register_window_handler(Box::new(DemoHostWindow { window }))
+        {
+            warn!("could not register MIDI editor overlay: {error}");
+            return;
+        }
+        log::debug!(
+            "MIDI overlay host handler bound: id={HOST_WINDOW_ID:?} hwnd={hwnd:p} parent={parent:p}"
+        );
+        *self.previous_host.borrow_mut() = ReaperWindow::from_hwnd(hwnd).ok();
+        if let Some(host) = self.previous_host.borrow().as_ref() {
+            if let Err(error) = host.invalidate(None) {
+                warn!("could not invalidate MIDI editor for overlay: {error}");
+            }
+        }
+    }
+
+    fn remove_midi_editor_overlay(&self) {
+        log::debug!(
+            "MIDI overlay host handler unbind requested: id={HOST_WINDOW_ID:?} previous_hwnd={:?}",
+            self.previous_host
+                .borrow()
+                .as_ref()
+                .map(|window| window.hwnd() as usize),
+        );
+        if let Err(error) = Reaper::get_mut()
+            .unregister_window_handler(&HOST_WINDOW_ID.to_string())
+        {
+            warn!("could not unregister MIDI editor overlay handler: {error}");
+        }
+        if let Some(window) = self.previous_host.borrow_mut().take() {
+            let _ = window.invalidate(None);
+        }
     }
 }
 
@@ -127,16 +235,21 @@ impl ControlSurface for DemoCSurf {
     }
 
     fn run(&self) -> anyhow::Result<()> {
-        let is_open = window_registered();
-        let just_opened = is_open && !*self.window_was_open.borrow();
-        *self.window_was_open.borrow_mut() = is_open;
         let current = Reaper::get()
             .active_midi_editor()
             .map(|editor| editor.get_pointer().as_ptr() as usize);
-        let changed = current != *self.editor_hwnd.borrow();
+        let paint_over = read_paint_over();
+        log::trace!(
+            "DemoCSurf::run: current_editor={current:?} previous_editor={:?} paint_over={paint_over} previous_paint_over={:?}",
+            *self.editor_hwnd.borrow(),
+            *self.paint_over.borrow(),
+        );
+        let changed = current != *self.editor_hwnd.borrow()
+            || paint_over != *self.paint_over.borrow();
         *self.editor_hwnd.borrow_mut() = current;
-        if is_open && (changed || just_opened) {
-            append_events(vec![DemoEvent::MidiEditor { hwnd: current }]);
+        *self.paint_over.borrow_mut() = paint_over;
+        if changed {
+            self.update_midi_editor_overlay(current);
         }
         Ok(())
     }
@@ -192,6 +305,20 @@ impl ControlSurface for DemoCSurf {
     }
 }
 
+// Keep all owned MIDI overlay resources scoped to the control surface. When
+// paint-over is disabled and the gallery window is closed, unregistering the
+// surface drops this value and therefore detaches the MIDI host handler.
+impl Drop for DemoCSurf {
+    fn drop(&mut self) {
+        log::debug!(
+            "DemoCSurf dropping: editor_hwnd={:?} paint_over={:?}",
+            self.editor_hwnd.get_mut(),
+            self.paint_over.get_mut(),
+        );
+        self.remove_midi_editor_overlay();
+    }
+}
+
 struct DemoWindow {
     window: ReaperWindow,
     dock_state: CheckBox,
@@ -210,8 +337,6 @@ struct DemoWindow {
     selected_guid: Option<String>,
     programmatic_update: bool,
     paint_over: bool,
-    editor_hwnd: Option<usize>,
-    previous_host: Option<ReaperWindow>,
     timer: Option<usize>,
 }
 
@@ -366,8 +491,6 @@ impl DemoWindow {
             selected_guid: None,
             programmatic_update: false,
             paint_over,
-            editor_hwnd: None,
-            previous_host: None,
             timer: None,
         })
     }
@@ -624,12 +747,6 @@ impl DemoWindow {
                     }
                     self.rebuild_tracks();
                 }
-                DemoEvent::MidiEditor { hwnd } => {
-                    if self.editor_hwnd != hwnd {
-                        self.editor_hwnd = hwnd;
-                        self.update_overlay();
-                    }
-                }
             }
         }
         if let Err(error) = queue.set(Vec::<DemoEvent>::new()) {
@@ -646,73 +763,7 @@ impl DemoWindow {
             .ok();
     }
 
-    fn update_overlay(&mut self) {
-        self.remove_overlay();
-        if !self.paint_over {
-            return;
-        }
-        let Some(hwnd) = self.editor_hwnd else {
-            return;
-        };
-        let hwnd = hwnd as raw::HWND;
-        if !unsafe { Reaper::get().swell().IsWindow(hwnd) } {
-            return;
-        }
-        let Ok(window) = ReaperWindow::from_hwnd(hwnd) else {
-            return;
-        };
-        let font = match Font::new(FontSpec::new("Arial").set_size(18))
-            .and_then(LiceFont::from_font)
-        {
-            Ok(font) => font,
-            Err(error) => {
-                warn!("could not create overlay font: {error}");
-                return;
-            }
-        };
-        if let Err(error) = window.on_render(move |_info, surface| {
-            let overlay_rect =
-                rea_rs::swell_gui::layout::Rect::new(12, 12, 260, 42);
-            surface.fill_rect(
-                overlay_rect,
-                Color::new(30, 120, 220),
-                0.86,
-                LiceCombineMode::Copy,
-            );
-            let _ = surface.draw_text(
-                "SWELL Paint-over",
-                overlay_rect,
-                &font,
-                LiceTextOptions::default(),
-            );
-            Ok(())
-        }) {
-            warn!("could not install MIDI editor renderer: {error}");
-            return;
-        }
-        if let Err(error) = Reaper::get_mut()
-            .register_window_handler(Box::new(DemoHostWindow { window }))
-        {
-            warn!("could not register MIDI editor overlay: {error}");
-            return;
-        }
-        self.previous_host = ReaperWindow::from_hwnd(hwnd).ok();
-        if let Some(host) = &self.previous_host {
-            if let Err(error) = host.invalidate(None) {
-                warn!("could not invalidate MIDI editor for overlay: {error}");
-            }
-        }
-    }
-
-    fn remove_overlay(&mut self) {
-        let _ = Reaper::get_mut()
-            .unregister_window_handler(&HOST_WINDOW_ID.to_string());
-        if let Some(window) = self.previous_host.take() {
-            let _ = window.invalidate(None);
-        }
-    }
-
-    fn set_paint_over(&mut self, enabled: bool) {
+    fn set_paint_over(&mut self) {
         // A native close request unregisters the window handler before
         // destruction; don't interpret any late control notification as a
         // user click. Programmatic checkbox synchronization is filtered by
@@ -736,11 +787,6 @@ impl DemoWindow {
         }
         self.paint_over = read_paint_over();
         let _ = self.paint_checkbox.set_checked(self.paint_over);
-        if self.paint_over && enabled {
-            self.update_overlay();
-        } else {
-            self.remove_overlay();
-        }
         ensure_surface_registered();
     }
 }
@@ -768,11 +814,6 @@ impl WindowHandler for DemoWindow {
         if self.paint_over != paint_over {
             self.paint_over = paint_over;
             let _ = self.paint_checkbox.set_checked(paint_over);
-            if paint_over {
-                self.update_overlay();
-            } else {
-                self.remove_overlay();
-            }
             ensure_surface_registered();
         }
     }
@@ -780,7 +821,6 @@ impl WindowHandler for DemoWindow {
         if let Some(timer) = self.timer.take() {
             let _ = self.window.stop_timer(timer);
         }
-        self.remove_overlay();
         let mut queue = ExtState::<Vec<DemoEvent>, Reaper>::existing(
             DEMO_SECTION,
             EVENT_QUEUE_KEY,
@@ -816,9 +856,7 @@ impl WindowHandler for DemoWindow {
             ControlEvent::CheckBoxChanged { control }
                 if control == self.paint_checkbox.id() =>
             {
-                self.set_paint_over(
-                    self.paint_checkbox.checked().unwrap_or(false),
-                )
+                self.set_paint_over()
             }
             ControlEvent::ListSelectionChanged { control }
                 if control == self.tracklist.id() =>
@@ -934,13 +972,35 @@ struct DemoHostWindow {
 }
 impl WindowHandler for DemoHostWindow {
     fn window_id(&self) -> WindowId {
+        log::trace!(
+            "DemoHostWindow::window_id queried: id={HOST_WINDOW_ID:?} hwnd={:p}",
+            self.window.hwnd(),
+        );
         HOST_WINDOW_ID.to_string()
     }
     fn window(&self) -> &ReaperWindow {
         &self.window
     }
     fn handle_host_message(&self, message: u32) -> bool {
-        message == raw::WM_PAINT
+        let enabled = message == raw::WM_PAINT;
+        if message == raw::WM_PAINT {
+            log::trace!(
+                "DemoHostWindow accepts WM_PAINT: id={HOST_WINDOW_ID:?} hwnd={:p}",
+                self.window.hwnd(),
+            );
+        }
+        enabled
+    }
+    fn on_destroy(&mut self) {
+        log::debug!(
+            "DemoHostWindow destroyed: id={HOST_WINDOW_ID:?} hwnd={:p} parent={:p}",
+            self.window.hwnd(),
+            unsafe { Reaper::get().swell().GetParent(self.window.hwnd()) },
+        );
+        // The borrowed host HWND has its original WndProc restored before
+        // this callback. Drop the custom renderer and request a clean paint
+        // through that original procedure.
+        let _ = self.window.clear_render();
     }
 }
 
@@ -1032,11 +1092,6 @@ pub fn register_actions(reaper: &mut Reaper) -> anyhow::Result<()> {
             );
             state.set(next)?;
             ensure_surface_registered();
-            if !next && !window_registered() {
-                Reaper::get_mut()
-                    .unregister_control_surface(CSURF_TYPE.to_string())
-                    .ok();
-            }
             Ok(())
         },
         None,

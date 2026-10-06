@@ -1,7 +1,7 @@
 use log::debug;
 use rea_rs_low::{
-    create_cpp_to_rust_control_surface, raw, register_plugin_destroy_hook,
-    IReaperControlSurface, PluginContext, Swell,
+    create_cpp_to_rust_control_surface, delete_cpp_control_surface, raw,
+    register_plugin_destroy_hook, IReaperControlSurface, PluginContext, Swell,
 };
 
 use crate::{
@@ -481,9 +481,16 @@ impl Reaper {
         }
         let hwnd = window.hwnd();
         let hwnd_key = hwnd as usize;
+        let parent = unsafe { self.swell.GetParent(hwnd) };
+        let valid = !hwnd.is_null() && unsafe { self.swell.IsWindow(hwnd) };
+        log::debug!(
+            "register window handler: id={window_id:?} hwnd={hwnd:p} parent={parent:p} owned={} valid={valid} existing_route={:?}",
+            window.is_owned(),
+            self.window_routes.get(&hwnd_key),
+        );
         if hwnd.is_null()
             || self.window_routes.contains_key(&hwnd_key)
-            || !unsafe { self.swell.IsWindow(hwnd) }
+            || !valid
         {
             return Err(ReaRsError::InvalidObject(
                 "window is invalid or already attached to a handler",
@@ -506,6 +513,10 @@ impl Reaper {
             };
             swell_gui::host_proc::remember_host_proc(hwnd, previous);
         }
+        log::debug!(
+            "window handler registered: id={window_id:?} hwnd={hwnd:p} parent={parent:p} owned={owned} route={:?}",
+            self.window_routes.get(&hwnd_key),
+        );
         if let Some(handler) = self.windows.get_mut(&window_id) {
             handler.on_open();
         }
@@ -538,10 +549,20 @@ impl Reaper {
         window_id: &WindowId,
     ) -> ReaperResult<()> {
         let Some(mut handler) = self.windows.remove(window_id) else {
+            log::debug!(
+                "unregister window handler skipped: id={window_id:?} not registered"
+            );
             return Ok(());
         };
         let hwnd = handler.window().hwnd();
         let owned = handler.window().is_owned();
+        let parent = unsafe { self.swell.GetParent(hwnd) };
+        log::debug!(
+            "unregister window handler begin: requested_id={window_id:?} handler_id={:?} hwnd={hwnd:p} parent={parent:p} owned={} hwnd_valid={}",
+            handler.window_id(),
+            owned,
+            unsafe { self.swell.IsWindow(hwnd) },
+        );
         self.window_routes.remove(&(hwnd as usize));
         if !owned {
             swell_gui::host_proc::detach_host_proc(hwnd);
@@ -552,6 +573,10 @@ impl Reaper {
             handler.window().destroy_owned_native();
         }
         drop(handler);
+        log::debug!(
+            "unregister window handler complete: id={window_id:?} hwnd={hwnd:p} owned={owned} hwnd_valid_after={}",
+            unsafe { self.swell.IsWindow(hwnd) },
+        );
         Ok(())
     }
 
@@ -773,16 +798,25 @@ impl Reaper {
                 double_boxed_low_cs.as_ref().into(),
             )
         };
-        debug!("made cpp pointer");
+        debug!(
+            "control surface wrapper created: id={id_string:?} rust={:p} cpp={:p}",
+            low_cs_thin_ptr.as_ptr(),
+            cpp_cs.as_ptr(),
+        );
         let s = c_str!("csurf_inst");
         let ret = unsafe {
             self.low().plugin_register(s.as_ptr(), cpp_cs.as_ptr() as _)
         };
 
-        debug!("registered: {ret}");
-        self.csurfases
-            .insert(id_string, (double_boxed_low_cs, low_cs_thin_ptr, cpp_cs));
-        debug!("added to HashMap: {:#?}", self.csurfases);
+        debug!("control surface registered: id={id_string:?} result={ret} cpp={:p}", cpp_cs.as_ptr());
+        self.csurfases.insert(
+            id_string.clone(),
+            (double_boxed_low_cs, low_cs_thin_ptr, cpp_cs),
+        );
+        debug!(
+            "control surface retained: id={id_string:?} active={}",
+            self.csurfases.len()
+        );
     }
 
     pub fn has_control_surface(&self, id_string: &String) -> bool {
@@ -793,17 +827,36 @@ impl Reaper {
         &mut self,
         id_string: String,
     ) -> Result<(), ReaRsError> {
-        let (_, _, cpp_cs) =
-            self.csurfases.remove(&id_string).ok_or(ReaRsError::Key(
-                id_string,
-                format!("{:#?}", self.csurfases.keys()),
-            ))?;
+        // Keep the Rust callback target alive until REAPER has stopped using
+        // the C++ wrapper. Then destroy the wrapper before dropping its Rust
+        // backing object.
+        let cpp_cs = self
+            .csurfases
+            .get(&id_string)
+            .map(|(_, _, cpp_cs)| *cpp_cs)
+            .ok_or_else(|| {
+                ReaRsError::Key(
+                    id_string.clone(),
+                    format!("{:#?}", self.csurfases.keys()),
+                )
+            })?;
+        debug!(
+            "control surface unregister begin: id={id_string:?} cpp={:p}",
+            cpp_cs.as_ptr(),
+        );
         unsafe {
-            self.low().plugin_register(
+            let result = self.low().plugin_register(
                 c_str!("-csurf_inst").as_ptr(),
                 cpp_cs.as_ptr() as _,
             );
+            debug!(
+                "control surface detached from REAPER: id={id_string:?} result={result} cpp={:p}",
+                cpp_cs.as_ptr(),
+            );
+            delete_cpp_control_surface(cpp_cs);
         }
+        self.csurfases.remove(&id_string);
+        debug!("control surface dropped: id={id_string:?}");
         Ok(())
     }
 }
