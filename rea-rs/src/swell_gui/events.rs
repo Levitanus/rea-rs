@@ -6,14 +6,22 @@
 
 use super::layout::Point;
 use super::scroll::ScrollOffset;
-use super::widgets::{ControlId, ControlKind};
+use super::widgets::{ControlKind, SwellId};
 use super::windows::ReaperWindow;
 use crate::keys::{KeyStroke, VKeys};
 use rea_rs_low::raw;
 use std::collections::HashMap;
 
 /// A decoded `WM_COMMAND` notification code.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum CommandNotification {
     Clicked,
     SetFocus,
@@ -48,98 +56,124 @@ impl CommandNotification {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WindowCommand {
     Menu {
-        id: i32,
+        id: super::widgets::SwellId,
     },
     Control {
-        id: i32,
+        id: SwellId,
         notification: CommandNotification,
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum ControlEvent {
     ButtonClicked {
-        control: ControlId,
+        control: SwellId,
     },
     CheckBoxChanged {
-        control: ControlId,
+        control: SwellId,
     },
     RadioButtonChanged {
-        control: ControlId,
+        control: SwellId,
     },
     EditChanged {
-        control: ControlId,
+        control: SwellId,
     },
     ComboSelectionChanged {
-        control: ControlId,
+        control: SwellId,
     },
     ComboEditChanged {
-        control: ControlId,
+        control: SwellId,
     },
     ListSelectionChanged {
-        control: ControlId,
+        control: SwellId,
     },
     ListDoubleClick {
-        control: ControlId,
+        control: SwellId,
     },
     TrackbarChanged {
-        control: ControlId,
+        control: SwellId,
     },
     TabSelectionChanged {
-        control: ControlId,
+        control: SwellId,
     },
     ListViewItemChanged {
-        control: ControlId,
+        control: SwellId,
     },
     ListViewColumnClicked {
-        control: ControlId,
+        control: SwellId,
     },
     TreeSelectionChanged {
-        control: ControlId,
+        control: SwellId,
     },
     TreeItemExpanding {
-        control: ControlId,
+        control: SwellId,
     },
     TreeBeginDrag {
-        control: ControlId,
+        control: SwellId,
     },
+    /// Experimental virtual-control notification; virtual controls are not
+    /// fully debugged and these event shapes may change before stabilization.
     VirtualButtonClicked {
-        control: ControlId,
+        control: SwellId,
     },
+    /// Experimental virtual-control notification; virtual controls are not
+    /// fully debugged and these event shapes may change before stabilization.
     VirtualSliderChanged {
-        control: ControlId,
+        control: SwellId,
     },
+    /// Experimental virtual-control notification; virtual controls are not
+    /// fully debugged and these event shapes may change before stabilization.
     VirtualComboSelectionChanged {
-        control: ControlId,
+        control: SwellId,
     },
+    /// Experimental virtual-control notification; virtual controls are not
+    /// fully debugged and these event shapes may change before stabilization.
     VirtualListSelectionChanged {
-        control: ControlId,
+        control: SwellId,
     },
+    /// Experimental virtual-control notification; virtual controls are not
+    /// fully debugged and these event shapes may change before stabilization.
     VirtualListDoubleClick {
-        control: ControlId,
+        control: SwellId,
     },
     Scroll {
-        control: ControlId,
+        control: SwellId,
         code: i32,
     },
     Notified {
-        control: ControlId,
+        control: SwellId,
         code: u32,
     },
     FocusGained {
-        control: ControlId,
+        control: SwellId,
     },
     FocusLost {
-        control: ControlId,
+        control: SwellId,
     },
     OtherCommand {
-        control: ControlId,
+        control: SwellId,
         notification: CommandNotification,
     },
 }
 
 /// The semantic source of a ScrollView movement.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum ScrollViewEventSource {
     Wheel,
     Line,
@@ -159,21 +193,45 @@ impl ScrollViewEventSource {
 /// Unlike [`ControlEvent::Scroll`], this event does not expose a native
 /// notification code. The offset is already clamped and expressed in content
 /// coordinates, so consumers do not need to understand SWELL or Win32.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub struct ScrollViewEvent {
     pub offset: ScrollOffset,
     pub source: ScrollViewEventSource,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum ContainerEvent {
     Child {
-        container: super::widgets::ContainerId,
+        container: super::widgets::SwellId,
         event: ControlEvent,
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum EventResponse {
     Handled,
     Ignore,
@@ -181,7 +239,15 @@ pub enum EventResponse {
     ForwardToWindow,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum MouseButton {
     Left,
     Right,
@@ -191,7 +257,11 @@ pub enum MouseButton {
 }
 
 bitflags::bitflags! {
-    #[derive(Default)]
+    #[derive(
+        Default,
+        serde_derive::Serialize,
+        serde_derive::Deserialize
+    )]
     pub struct MouseButtons: u16 {
         const LEFT = 0x0001;
         const RIGHT = 0x0002;
@@ -209,7 +279,15 @@ impl MouseButtons {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum MouseMessage {
     Move,
     Down(MouseButton),
@@ -218,7 +296,15 @@ pub enum MouseMessage {
     Wheel { horizontal: bool },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum KeyMessage {
     Down,
     Up,
@@ -227,7 +313,11 @@ pub enum KeyMessage {
 }
 
 bitflags::bitflags! {
-    #[derive(Default)]
+    #[derive(
+        Default,
+        serde_derive::Serialize,
+        serde_derive::Deserialize
+    )]
     pub struct KeyModifiers: u8 {
         const SHIFT = 0x01;
         const CONTROL = 0x02;
@@ -242,7 +332,7 @@ bitflags::bitflags! {
 #[derive(Clone, Debug, PartialEq)]
 pub enum WindowEvent {
     Canvas {
-        control: ControlId,
+        control: SwellId,
         event: Box<WindowEvent>,
     },
     Mouse {
@@ -274,23 +364,56 @@ pub enum NativeKey {
 /// Callback for general window/Canvas input events.
 pub type WindowEventCallback = Box<dyn FnMut(WindowEvent) -> EventResponse>;
 
-pub type WidgetEventCallback = Box<dyn FnMut(ControlEvent) -> EventResponse>;
+pub type WidgetEventCallback =
+    Box<dyn FnMut(ControlEvent) -> anyhow::Result<EventResponse>>;
 pub type ScrollViewEventCallback =
-    Box<dyn FnMut(ScrollViewEvent) -> EventResponse>;
+    Box<dyn FnMut(ScrollViewEvent) -> anyhow::Result<EventResponse>>;
 pub type ContainerEventCallback =
-    Box<dyn FnMut(ContainerEvent) -> EventResponse>;
+    Box<dyn FnMut(ContainerEvent) -> anyhow::Result<EventResponse>>;
+
+fn report_callback_failure(context: &str, error: &anyhow::Error) {
+    log::error!("GUI callback failed ({context}): {error:#}");
+    if crate::Reaper::is_available() {
+        let message = format!("GUI callback failed ({context}): {error}\n");
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::Reaper::get().show_console_msg(message);
+        }));
+    }
+}
+
+pub(super) fn invoke_callback<T>(
+    context: &str,
+    callback: &mut impl FnMut() -> anyhow::Result<T>,
+) -> Result<T, anyhow::Error> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)) {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => {
+            report_callback_failure(context, &error);
+            Err(error)
+        }
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|message| (*message).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".to_owned());
+            let error = anyhow::anyhow!("callback panicked: {message}");
+            report_callback_failure(context, &error);
+            Err(error)
+        }
+    }
+}
 
 #[derive(Default)]
 pub(super) struct EventRegistry {
-    pub(super) widget_callbacks: HashMap<ControlId, WidgetEventCallback>,
+    pub(super) widget_callbacks: HashMap<SwellId, WidgetEventCallback>,
     pub(super) scroll_view_callbacks:
-        HashMap<ControlId, ScrollViewEventCallback>,
+        HashMap<SwellId, ScrollViewEventCallback>,
     pub(super) container_callbacks:
-        HashMap<super::widgets::ContainerId, ContainerEventCallback>,
-    pub(super) direct_container:
-        HashMap<ControlId, super::widgets::ContainerId>,
+        HashMap<super::widgets::SwellId, ContainerEventCallback>,
+    pub(super) direct_container: HashMap<SwellId, super::widgets::SwellId>,
     pub(super) container_parent:
-        HashMap<super::widgets::ContainerId, super::widgets::ContainerId>,
+        HashMap<super::widgets::SwellId, super::widgets::SwellId>,
 }
 
 /// Result of routing a native control event through the explicit callback
@@ -304,15 +427,30 @@ pub(super) enum DispatchResult {
 impl EventRegistry {
     pub(super) fn register_widget_callback(
         &mut self,
-        id: ControlId,
+        id: SwellId,
         callback: WidgetEventCallback,
     ) {
         self.widget_callbacks.insert(id, callback);
     }
 
+    pub(super) fn take_widget_callback(
+        &mut self,
+        id: SwellId,
+    ) -> Option<WidgetEventCallback> {
+        self.widget_callbacks.remove(&id)
+    }
+
+    pub(super) fn restore_widget_callback(
+        &mut self,
+        id: SwellId,
+        callback: WidgetEventCallback,
+    ) {
+        self.widget_callbacks.entry(id).or_insert(callback);
+    }
+
     pub(super) fn register_container_callback(
         &mut self,
-        id: super::widgets::ContainerId,
+        id: super::widgets::SwellId,
         callback: ContainerEventCallback,
     ) {
         self.container_callbacks.insert(id, callback);
@@ -320,16 +458,16 @@ impl EventRegistry {
 
     pub(super) fn set_direct_container(
         &mut self,
-        child: ControlId,
-        container: super::widgets::ContainerId,
+        child: SwellId,
+        container: super::widgets::SwellId,
     ) {
         self.direct_container.insert(child, container);
     }
 
     pub(super) fn set_container_parent(
         &mut self,
-        container: super::widgets::ContainerId,
-        parent: super::widgets::ContainerId,
+        container: super::widgets::SwellId,
+        parent: super::widgets::SwellId,
     ) {
         self.container_parent.insert(container, parent);
     }
@@ -342,31 +480,51 @@ impl EventRegistry {
         self.container_parent.clear();
     }
 
+    pub(super) fn restore_missing_into(&mut self, destination: &mut Self) {
+        for (id, callback) in self.widget_callbacks.drain() {
+            destination.widget_callbacks.entry(id).or_insert(callback);
+        }
+        for (id, callback) in self.scroll_view_callbacks.drain() {
+            destination
+                .scroll_view_callbacks
+                .entry(id)
+                .or_insert(callback);
+        }
+        for (id, callback) in self.container_callbacks.drain() {
+            destination
+                .container_callbacks
+                .entry(id)
+                .or_insert(callback);
+        }
+        for (id, parent) in self.direct_container.drain() {
+            destination.direct_container.entry(id).or_insert(parent);
+        }
+        for (id, parent) in self.container_parent.drain() {
+            destination.container_parent.entry(id).or_insert(parent);
+        }
+    }
+
     pub(super) fn register_scroll_view_callback(
         &mut self,
-        id: ControlId,
+        id: SwellId,
         callback: ScrollViewEventCallback,
     ) {
         self.scroll_view_callbacks.insert(id, callback);
     }
 
-    pub(super) fn dispatch_scroll_view(
+    pub(super) fn take_scroll_view_callback(
         &mut self,
-        id: ControlId,
-        event: ScrollViewEvent,
-    ) -> DispatchResult {
-        let Some(mut callback) = self.scroll_view_callbacks.remove(&id) else {
-            return DispatchResult::ForwardToWindow;
-        };
-        let response = callback(event);
-        self.scroll_view_callbacks.insert(id, callback);
-        match response {
-            EventResponse::Handled => DispatchResult::Handled,
-            EventResponse::ForwardToWindow => DispatchResult::ForwardToWindow,
-            EventResponse::Ignore | EventResponse::ForwardToParent => {
-                DispatchResult::Handled
-            }
-        }
+        id: SwellId,
+    ) -> Option<ScrollViewEventCallback> {
+        self.scroll_view_callbacks.remove(&id)
+    }
+
+    pub(super) fn restore_scroll_view_callback(
+        &mut self,
+        id: SwellId,
+        callback: ScrollViewEventCallback,
+    ) {
+        self.scroll_view_callbacks.entry(id).or_insert(callback);
     }
 
     /// Routes an event through the widget, its direct container, and any
@@ -376,7 +534,11 @@ impl EventRegistry {
     pub(super) fn dispatch(&mut self, event: ControlEvent) -> DispatchResult {
         let control = event.control();
         if let Some(mut callback) = self.widget_callbacks.remove(&control) {
-            let response = callback(event);
+            let response =
+                invoke_callback("widget event", &mut || callback(event));
+            let Ok(response) = response else {
+                return DispatchResult::Handled;
+            };
             self.widget_callbacks.insert(control, callback);
             match response {
                 EventResponse::Handled => return DispatchResult::Handled,
@@ -400,7 +562,12 @@ impl EventRegistry {
                 current = self.container_parent.get(&container).copied();
                 continue;
             };
-            let response = callback(container_event);
+            let response = invoke_callback("container event", &mut || {
+                callback(container_event)
+            });
+            let Ok(response) = response else {
+                return DispatchResult::Handled;
+            };
             self.container_callbacks.insert(container, callback);
             match response {
                 EventResponse::Handled => return DispatchResult::Handled,
@@ -418,7 +585,7 @@ impl EventRegistry {
 }
 
 impl ControlEvent {
-    pub(super) const fn control(self) -> ControlId {
+    pub(super) const fn control(self) -> SwellId {
         match self {
             Self::ButtonClicked { control }
             | Self::CheckBoxChanged { control }
@@ -451,7 +618,7 @@ impl ControlEvent {
 
 pub(super) fn decode_notify_event(
     kind: ControlKind,
-    id: ControlId,
+    id: SwellId,
     code: u32,
 ) -> ControlEvent {
     match (kind, code) {
@@ -479,7 +646,7 @@ pub(super) fn decode_notify_event(
 
 impl ContainerEvent {
     pub const fn child(
-        container: super::widgets::ContainerId,
+        container: super::widgets::SwellId,
         event: ControlEvent,
     ) -> Self {
         Self::Child { container, event }
@@ -495,7 +662,7 @@ pub(super) struct NotifyHeader {
 
 pub(super) fn decode_virtual_event(
     kind: rea_rs_low::VirtualControlKind,
-    id: ControlId,
+    id: SwellId,
     command: i32,
 ) -> Option<ControlEvent> {
     match kind {
@@ -536,7 +703,7 @@ pub(super) fn decode_virtual_event(
 
 pub(super) fn decode_control_event(
     kind: ControlKind,
-    id: ControlId,
+    id: SwellId,
     notification: CommandNotification,
 ) -> Option<ControlEvent> {
     match (kind, notification) {
@@ -584,24 +751,28 @@ pub(super) fn decode_control_event(
 impl ReaperWindow {
     pub fn on_widget_event(
         &self,
-        id: ControlId,
-        callback: impl FnMut(ControlEvent) -> EventResponse + 'static,
+        id: SwellId,
+        mut callback: impl FnMut(ControlEvent) -> anyhow::Result<EventResponse>
+            + 'static,
     ) {
-        self.events
-            .borrow_mut()
-            .register_widget_callback(id, Box::new(callback));
+        self.events.borrow_mut().register_widget_callback(
+            id,
+            Box::new(move |event| callback(event)),
+        );
     }
 
     /// Registers a semantic callback for a ScrollView. The callback receives
     /// a clamped content offset and a platform-neutral movement source.
     pub fn on_scroll_view_event(
         &self,
-        id: ControlId,
-        callback: impl FnMut(ScrollViewEvent) -> EventResponse + 'static,
+        id: SwellId,
+        mut callback: impl FnMut(ScrollViewEvent) -> anyhow::Result<EventResponse>
+            + 'static,
     ) {
-        self.events
-            .borrow_mut()
-            .register_scroll_view_callback(id, Box::new(callback));
+        self.events.borrow_mut().register_scroll_view_callback(
+            id,
+            Box::new(move |event| callback(event)),
+        );
     }
 
     /// Delivers a semantic ScrollView event to the registered callback.
@@ -612,10 +783,23 @@ impl ReaperWindow {
     /// the public event contract.
     pub(crate) fn emit_scroll_view_event(
         &self,
-        id: ControlId,
+        id: SwellId,
         event: ScrollViewEvent,
     ) -> EventResponse {
-        match self.events.borrow_mut().dispatch_scroll_view(id, event) {
+        let callback = self.events.borrow_mut().take_scroll_view_callback(id);
+        let Some(mut callback) = callback else {
+            return EventResponse::ForwardToWindow;
+        };
+        let response =
+            invoke_callback("ScrollView event", &mut || callback(event));
+        if let Ok(response) = response {
+            self.events
+                .borrow_mut()
+                .restore_scroll_view_callback(id, callback);
+            return response;
+        }
+        let result = DispatchResult::Handled;
+        match result {
             DispatchResult::Handled => EventResponse::Handled,
             DispatchResult::ForwardToWindow => EventResponse::ForwardToWindow,
         }
@@ -623,18 +807,55 @@ impl ReaperWindow {
 
     pub fn on_container_event(
         &self,
-        id: super::widgets::ContainerId,
-        callback: impl FnMut(ContainerEvent) -> EventResponse + 'static,
+        id: super::widgets::SwellId,
+        mut callback: impl FnMut(ContainerEvent) -> anyhow::Result<EventResponse>
+            + 'static,
     ) {
-        self.events
-            .borrow_mut()
-            .register_container_callback(id, Box::new(callback));
+        self.events.borrow_mut().register_container_callback(
+            id,
+            Box::new(move |event| callback(event)),
+        );
+    }
+
+    pub(super) fn dispatch_control_event(
+        &self,
+        event: ControlEvent,
+    ) -> DispatchResult {
+        let control = event.control();
+        let (widget_callback, mut registry) = {
+            let mut events = self.events.borrow_mut();
+            let callback = events.take_widget_callback(control);
+            let detached = std::mem::take(&mut *events);
+            (callback, detached)
+        };
+        let result = if let Some(mut callback) = widget_callback {
+            match invoke_callback("widget event", &mut || callback(event)) {
+                Ok(response) => {
+                    registry.restore_widget_callback(control, callback);
+                    match response {
+                        EventResponse::Handled => DispatchResult::Handled,
+                        EventResponse::ForwardToWindow => {
+                            DispatchResult::ForwardToWindow
+                        }
+                        EventResponse::Ignore
+                        | EventResponse::ForwardToParent => {
+                            registry.dispatch(event)
+                        }
+                    }
+                }
+                Err(_) => DispatchResult::Handled,
+            }
+        } else {
+            registry.dispatch(event)
+        };
+        registry.restore_missing_into(&mut self.events.borrow_mut());
+        result
     }
 
     pub fn set_control_container(
         &self,
-        child: ControlId,
-        container: super::widgets::ContainerId,
+        child: SwellId,
+        container: super::widgets::SwellId,
     ) {
         self.events
             .borrow_mut()
@@ -643,8 +864,8 @@ impl ReaperWindow {
 
     pub fn set_container_parent(
         &self,
-        container: super::widgets::ContainerId,
-        parent: super::widgets::ContainerId,
+        container: super::widgets::SwellId,
+        parent: super::widgets::SwellId,
     ) {
         self.events
             .borrow_mut()

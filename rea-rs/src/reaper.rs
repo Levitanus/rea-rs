@@ -709,6 +709,7 @@ impl Reaper {
             hwnd,
             spec.allow_show,
             spec.dock_ident.clone(),
+            spec.min_size,
         )?;
         let mut client = raw::RECT {
             left: 0,

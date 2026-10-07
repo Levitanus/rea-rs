@@ -446,7 +446,10 @@ impl MIDIEditor {
         &self,
     ) -> ReaperResult<impl Iterator<Item = ReaperResult<crate::ReaperWindow>>>
     {
-        crate::ReaperWindow::from_hwnd(self.get()?.as_ptr())?.children()
+        crate::ReaperWindow::from_hwnd_token(crate::ReaperHwnd::from_raw(
+            self.get()?.as_ptr(),
+        ))?
+        .children()
     }
 
     /// Enumerates all descendant windows in native enumeration order.
@@ -454,7 +457,10 @@ impl MIDIEditor {
         &self,
     ) -> ReaperResult<impl Iterator<Item = ReaperResult<crate::ReaperWindow>>>
     {
-        crate::ReaperWindow::from_hwnd(self.get()?.as_ptr())?.descendants()
+        crate::ReaperWindow::from_hwnd_token(crate::ReaperHwnd::from_raw(
+            self.get()?.as_ptr(),
+        ))?
+        .descendants()
     }
 
     /// Sends a MIDI-editor action command to this editor.

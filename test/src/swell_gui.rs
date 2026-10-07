@@ -2,13 +2,13 @@ use log::{info, trace, warn};
 use rea_rs::{
     db_to_linear, linear_to_db,
     swell_gui::{
-        layout::{WidgetFills, WidgetSize},
+        layout::{PanelLayout, PanelSizes, WidgetSize},
         LiceCombineMode, LiceTextOptions, Menu, MenuItem, MouseButton,
         MouseMessage, WindowEvent,
     },
     ActionHook, ActionKind, AutomationMode, CheckBox, Color, ComboBox,
-    ControlEvent, ControlId, ControlSurface, EditField, ExtState, Font,
-    FontSpec, KnowsProject, LiceFont, ListBox, Measure, ProgressBar,
+    ControlEvent, ControlSurface, EditField, EventResponse, ExtState, Font,
+    FontSpec, KnowsProject, LiceFont, ListBox, Measure, Panel, ProgressBar,
     RadioButton, Reaper, ReaperWindow, ScrollbarRenderer, SoloMode, Track,
     Trackbar, Volume, WindowHandler, WindowId, WindowSpec, WithReaperPtr,
 };
@@ -29,7 +29,7 @@ const HOST_WINDOW_ID: &str = "rea-rs.track-gallery.host";
 const PAINT_OVER_ACTION: &str = "TestSwellPaintOver";
 const PAINT_OVER_DESCRIPTION: &str = "test swell paint-over";
 const CSURF_TYPE: &str = "REARSPAINTover";
-const TIMER_ID: usize = 0x5241;
+const TIMER_ID: rea_rs::SwellId = rea_rs::SwellId(0x5241);
 const TIMER_INTERVAL: Duration = Duration::from_millis(33);
 const LIST_RESET_CONTENT: raw::UINT = 0x0184;
 const MIDI_CANVAS_CHILD_INDEX: usize = 1;
@@ -460,7 +460,7 @@ struct DemoWindow {
     selected_guid: Option<String>,
     programmatic_update: bool,
     paint_over: bool,
-    timer: Option<usize>,
+    timer: Option<rea_rs::SwellId>,
 }
 
 /// Keeps the gallery's attached menu synchronized with host dock state.
@@ -496,6 +496,7 @@ impl DemoWindow {
         let window = Reaper::get().create_window(
             &WindowSpec::new("rea-rs track gallery")
                 .size(width, height)
+                .min_size(320, 240)
                 .dock_ident("rea_rs_widget_gallery"),
         )?;
         let ui = window.build_ui()?;
@@ -504,10 +505,18 @@ impl DemoWindow {
             MenuItem::command(MENU_FLOAT, "Float gallery"),
         ])?;
         window.set_menu_bar(Some(menu))?;
-        let content = ui
+        let panels = ui.panel_layout(
+            PanelLayout::new().with_sizes(PanelSizes {
+                right: 120,
+                ..PanelSizes::default()
+            }),
+        )?;
+        let switches = panels.panel(Panel::Right);
+        let content = panels
+            .panel(Panel::Central)
             .scroll_view(
-                ControlId::new(),
-                WidgetSize::new_fill_both(width, height),
+                rea_rs::SwellId::new_control(),
+                WidgetSize::new_fill_both(1, 1),
                 ScrollbarRenderer::Auto,
             )?
             .with_insets(rea_rs::swell_gui::layout::Insets {
@@ -516,67 +525,71 @@ impl DemoWindow {
                 right: 10,
                 bottom: 10,
             });
-        let switches = content.row(
-            ControlId::new(),
-            WidgetSize::new_fill_x(width, 32)
-                .set_min_y(32)
-                .set_max_x(width),
-        )?;
         let paint_checkbox = switches.checkbox(
-            ControlId(100),
-            "Paint over MIDI editor",
-            WidgetSize::new_fill_x(220, 24)
-                .set_fill_x(WidgetFills::FillPortion(2)),
+            rea_rs::SwellId(100),
+            "Paint MIDI overlay",
+            WidgetSize::new_fill_x(120, 28),
         )?;
+        let button = switches.button(
+            rea_rs::SwellId::new_control(),
+            "Hello World",
+            WidgetSize::new_fill_x(120, 28),
+        )?;
+        window.on_widget_event(button.id(), |event| {
+            if let ControlEvent::ButtonClicked { control: _ } = event {
+                info!("Hello World");
+            }
+            Ok(EventResponse::Handled)
+        });
         let cursor_position = content.progress_bar(
-            ControlId(101),
+            rea_rs::SwellId(101),
             WidgetSize::new_fill_x(width, 20).set_max_x(width),
-            0,
+            rea_rs::swell_gui::ProgressBarOptions::default(),
         )?;
         cursor_position.set_range(0, 1000)?;
         let tracklist = content.list_box(
-            ControlId(102),
+            rea_rs::SwellId(102),
             WidgetSize::new_fill_both(width, 100)
                 .set_min_y(90)
                 .set_max_x(width),
-            0,
+            rea_rs::swell_gui::ListBoxOptions::default(),
         )?;
         let inspector = content.group_box(
-            ControlId(103),
+            rea_rs::SwellId(103),
             "Track inspector",
             WidgetSize::new_fill_both(width, 100).set_max_x(width),
         )?;
         let name = inspector.edit_field(
-            ControlId(104),
+            rea_rs::SwellId(104),
             WidgetSize::new_fill_x(380, 26).set_max_x(width),
-            0,
+            rea_rs::swell_gui::widgets::EditFieldOptions::default(),
         )?;
         let states = inspector.row(
-            ControlId::new(),
+            rea_rs::SwellId::new_control(),
             WidgetSize::new_fill_x(380, 28).set_max_x(width),
         )?;
         let normal = states.radio_button(
-            ControlId(105),
+            rea_rs::SwellId(105),
             "Normal",
             WidgetSize::new(95, 24),
-            0,
+            rea_rs::swell_gui::RadioButtonOptions::default(),
         )?;
         let mute = states.radio_button(
-            ControlId(106),
+            rea_rs::SwellId(106),
             "Mute",
             WidgetSize::new(85, 24),
-            0,
+            rea_rs::swell_gui::RadioButtonOptions::default(),
         )?;
         let solo = states.radio_button(
-            ControlId(107),
+            rea_rs::SwellId(107),
             "Solo",
             WidgetSize::new(85, 24),
-            0,
+            rea_rs::swell_gui::RadioButtonOptions::default(),
         )?;
         let automation = inspector.combo_box(
-            ControlId(108),
+            rea_rs::SwellId(108),
             WidgetSize::new_fill_x(380, 28).set_max_x(width),
-            0,
+            rea_rs::swell_gui::ComboBoxOptions::default(),
         )?;
         for mode in [
             AutomationMode::None,
@@ -590,13 +603,13 @@ impl DemoWindow {
             automation.add_item(automation_name(mode))?;
         }
         let volume_row = inspector.row(
-            ControlId::new(),
+            rea_rs::SwellId::new_control(),
             WidgetSize::new_fill_x(380, 32).set_max_x(width),
         )?;
         let volume = volume_row.trackbar(
-            ControlId(109),
+            rea_rs::SwellId(109),
             WidgetSize::new_fill_x(220, 28).set_max_x(width),
-            0,
+            rea_rs::swell_gui::TrackbarOptions::default(),
         )?;
         volume.set_range(0, 1000)?;
         volume.set_position(
@@ -605,11 +618,15 @@ impl DemoWindow {
                 .clamp(0.0, 1000.0) as i32,
         )?;
         let volume_value = volume_row.edit_field(
-            ControlId(110),
+            rea_rs::SwellId(110),
             WidgetSize::new(90, 28),
-            0,
+            rea_rs::swell_gui::widgets::EditFieldOptions::default(),
         )?;
-        volume_row.label(ControlId(111), "dB", WidgetSize::new(25, 28))?;
+        volume_row.label(
+            rea_rs::SwellId(111),
+            "dB",
+            WidgetSize::new(25, 28),
+        )?;
         let docked = ExtState::<bool, Reaper>::load_value(
             WINDOW_STATE_SECTION,
             DOCK_STATE_KEY,
@@ -826,7 +843,10 @@ impl DemoWindow {
 
     fn volume_is_being_dragged(&self) -> bool {
         self.volume_dragging
-            || Reaper::get().swell().GetCapture() == self.volume.hwnd()
+            || rea_rs::capture_window()
+                .ok()
+                .flatten()
+                .is_some_and(|hwnd| hwnd.as_raw() == self.volume.hwnd())
     }
 
     fn sync_volume(&mut self, linear: f64, update_slider: bool) {
@@ -979,7 +999,7 @@ impl WindowHandler for DemoWindow {
         let rea_rs::swell_gui::WindowCommand::Menu { id } = command else {
             return;
         };
-        match id as u32 {
+        match id.0 {
             MENU_DOCK => {
                 self.set_docked(true);
             }
@@ -998,15 +1018,15 @@ impl WindowHandler for DemoWindow {
         else {
             return false;
         };
-        let mut screen_position = raw::POINT {
-            x: position.x as i32,
-            y: position.y as i32,
+        let Ok(screen_position) = rea_rs::client_to_screen(
+            self.window.hwnd().into(),
+            rea_rs::SignedPoint {
+                x: position.x as i32,
+                y: position.y as i32,
+            },
+        ) else {
+            return false;
         };
-        unsafe {
-            Reaper::get()
-                .swell()
-                .ClientToScreen(self.window.hwnd(), &mut screen_position);
-        }
         if let Err(error) = self
             .window
             .post_popup_menu_bar_at(screen_position.x, screen_position.y)
@@ -1015,7 +1035,7 @@ impl WindowHandler for DemoWindow {
         }
         true
     }
-    fn on_timer(&mut self, id: usize) {
+    fn on_timer(&mut self, id: rea_rs::SwellId) {
         if id != TIMER_ID {
             return;
         }
@@ -1139,7 +1159,7 @@ impl WindowHandler for DemoWindow {
 
     fn on_widget_event(
         &mut self,
-        id: ControlId,
+        id: rea_rs::SwellId,
         event: rea_rs::WindowEvent,
     ) -> bool {
         if id == self.volume.id() {
@@ -1232,7 +1252,7 @@ pub fn register_actions(reaper: &mut Reaper) -> anyhow::Result<()> {
         |window| {
             let ui = window.build_ui()?;
             ui.label(
-                ControlId(1),
+                rea_rs::SwellId(1),
                 "This page is hosted by REAPER Preferences.",
                 WidgetSize::new(320, 24),
             )?;

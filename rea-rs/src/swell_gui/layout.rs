@@ -7,27 +7,115 @@
 //! origins to zero. Use signed native rectangles directly when negative
 //! screen-space coordinates (such as monitors left of the primary display)
 //! must be preserved.
+//!
+//! [`layout_flow`] arranges fixed and flexible items in one or more lanes.
+//! [`PanelLayout`] divides a bounding rectangle into edge panels and a center
+//! region, and [`layout_row`] provides a one-line alignment helper.
 
 use log::trace;
 use rea_rs_low::raw;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Non-negative width and height in logical pixels.
 pub struct Size {
+    /// Horizontal extent.
     pub x: u32,
+    /// Vertical extent.
     pub y: u32,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Non-negative point in layout/client coordinates, in pixels.
+///
+/// Converting a native point with a negative coordinate clamps that
+/// coordinate to zero. Use [`SignedPoint`] when negative positions matter.
 pub struct Point {
+    /// Horizontal coordinate.
     pub x: u32,
+    /// Vertical coordinate.
     pub y: u32,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Signed point for native screen or client coordinates.
+///
+/// Unlike [`Point`], negative positions are preserved. This is required for
+/// desktops with monitors left of or above the primary display.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+pub struct SignedPoint {
+    /// Horizontal coordinate in native pixels.
+    pub x: i32,
+    /// Vertical coordinate in native pixels.
+    pub y: i32,
+}
+
+impl From<SignedPoint> for raw::POINT {
+    fn from(point: SignedPoint) -> Self {
+        Self {
+            x: point.x,
+            y: point.y,
+        }
+    }
+}
+
+impl From<raw::POINT> for SignedPoint {
+    fn from(point: raw::POINT) -> Self {
+        Self {
+            x: point.x,
+            y: point.y,
+        }
+    }
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Non-negative rectangle in layout/client coordinates, in pixels.
+///
+/// The origin is the top-left corner; `width` and `height` are extents rather
+/// than right/bottom endpoints.
 pub struct Rect {
+    /// Horizontal coordinate of the top-left corner.
     pub x: u32,
+    /// Vertical coordinate of the top-left corner.
     pub y: u32,
+    /// Rectangle width.
     pub width: u32,
+    /// Rectangle height.
     pub height: u32,
 }
 
@@ -82,6 +170,7 @@ impl From<Rect> for raw::RECT {
 }
 
 impl Rect {
+    /// Creates a rectangle from its origin and extents, in pixels.
     pub const fn new(x: u32, y: u32, width: u32, height: u32) -> Self {
         Self {
             x,
@@ -91,6 +180,7 @@ impl Rect {
         }
     }
 
+    /// Returns the rectangle's width and height.
     pub const fn size(self) -> Size {
         Size {
             x: self.width,
@@ -99,22 +189,40 @@ impl Rect {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Insets from the corresponding edges of a rectangle, in pixels.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub struct Insets {
+    /// Distance from the left edge.
     pub left: u32,
+    /// Distance from the top edge.
     pub top: u32,
+    /// Distance from the right edge.
     pub right: u32,
+    /// Distance from the bottom edge.
     pub bottom: u32,
 }
 
 impl Insets {
+    /// Returns the combined left and right insets, saturating on overflow.
     pub const fn horizontal(self) -> u32 {
         self.left.saturating_add(self.right)
     }
+    /// Returns the combined top and bottom insets, saturating on overflow.
     pub const fn vertical(self) -> u32 {
         self.top.saturating_add(self.bottom)
     }
 
+    /// Shrinks `rect` by these insets. Oversized insets reduce the resulting
+    /// width or height to zero; origin arithmetic saturates.
     pub fn apply(self, rect: Rect) -> Rect {
         Rect {
             x: rect.x.saturating_add(self.left),
@@ -125,11 +233,23 @@ impl Insets {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// How a flexible widget uses surplus space along one axis.
 pub enum WidgetFills {
     /// Keep the preferred size on this axis; do not distribute fill space.
     Fixed,
+    /// Share available free space equally among participating items.
     Fill,
+    /// Share available free space in proportion to this weight.
     FillPortion(u32),
 }
 
@@ -139,32 +259,59 @@ impl WidgetFills {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Preferred dimensions, bounds, and fill behavior for one layout item.
+///
+/// Dimensions use pixels. A fixed size becomes flexible when a bound or fill
+/// builder is applied.
 pub enum WidgetSize {
+    /// A fixed width and height in pixels.
     Fixed {
+        /// Width.
         x: u32,
+        /// Height.
         y: u32,
     },
+    /// Preferred dimensions with optional limits and per-axis fill behavior.
     Flex {
+        /// Preferred width and height.
         preferred: (u32, u32),
+        /// Optional minimum width.
         min_x: Option<u32>,
+        /// Optional minimum height.
         min_y: Option<u32>,
+        /// Optional maximum width.
         max_x: Option<u32>,
+        /// Optional maximum height.
         max_y: Option<u32>,
+        /// Width fill behavior.
         fill_x: WidgetFills,
+        /// Height fill behavior.
         fill_y: WidgetFills,
     },
 }
 
 impl WidgetSize {
+    /// Creates a fixed size in pixels.
     pub const fn fixed(x: u32, y: u32) -> Self {
         Self::Fixed { x, y }
     }
 
+    /// Alias for [`Self::fixed`].
     pub const fn new(x: u32, y: u32) -> Self {
         Self::fixed(x, y)
     }
 
+    /// Creates a flexible size with preferred dimensions and fill behavior.
     pub const fn new_flex(
         preferred_x: u32,
         preferred_y: u32,
@@ -182,30 +329,39 @@ impl WidgetSize {
         }
     }
 
+    /// Creates an item that fills available space on both axes.
     pub const fn new_fill_both(x: u32, y: u32) -> Self {
         Self::new_flex(x, y, WidgetFills::Fill, WidgetFills::Fill)
     }
 
+    /// Creates an item that fills horizontally and keeps its preferred height.
     pub const fn new_fill_x(x: u32, y: u32) -> Self {
         Self::new_flex(x, y, WidgetFills::Fill, WidgetFills::Fixed)
     }
 
+    /// Creates an item that fills vertically and keeps its preferred width.
     pub const fn new_fill_y(x: u32, y: u32) -> Self {
         Self::new_flex(x, y, WidgetFills::Fixed, WidgetFills::Fill)
     }
 
+    /// Sets the minimum width. This converts a fixed size into a flexible one.
     pub const fn set_min_x(self, value: u32) -> Self {
         self.with_bounds(Some(value), None, None, None)
     }
 
+    /// Sets the minimum height. This converts a fixed size into a flexible
+    /// one.
     pub const fn set_min_y(self, value: u32) -> Self {
         self.with_bounds(None, Some(value), None, None)
     }
 
+    /// Sets the maximum width. This converts a fixed size into a flexible one.
     pub const fn set_max_x(self, value: u32) -> Self {
         self.with_bounds(None, None, Some(value), None)
     }
 
+    /// Sets the maximum height. This converts a fixed size into a flexible
+    /// one.
     pub const fn set_max_y(self, value: u32) -> Self {
         self.with_bounds(None, None, None, Some(value))
     }
@@ -259,6 +415,7 @@ impl WidgetSize {
         }
     }
 
+    /// Sets how this item fills the horizontal axis.
     pub const fn set_fill_x(self, fill: WidgetFills) -> Self {
         match self {
             Self::Fixed { x, y } => {
@@ -284,6 +441,7 @@ impl WidgetSize {
         }
     }
 
+    /// Sets how this item fills the vertical axis.
     pub const fn set_fill_y(self, fill: WidgetFills) -> Self {
         match self {
             Self::Fixed { x, y } => {
@@ -309,6 +467,7 @@ impl WidgetSize {
         }
     }
 
+    /// Returns the preferred width and height.
     pub const fn preferred(self) -> Size {
         match self {
             Self::Fixed { x, y } => Size { x, y },
@@ -318,6 +477,7 @@ impl WidgetSize {
         }
     }
 
+    /// Returns minimum dimensions; unspecified flexible minima are zero.
     pub const fn minimum(self) -> Size {
         match self {
             Self::Fixed { x, y } => Size { x, y },
@@ -339,6 +499,7 @@ impl WidgetSize {
         }
     }
 
+    /// Returns maximum dimensions; unspecified flexible maxima are unbounded.
     pub const fn maximum(self) -> Size {
         match self {
             Self::Fixed { x, y } => Size { x, y },
@@ -360,6 +521,7 @@ impl WidgetSize {
         }
     }
 
+    /// Returns horizontal fill behavior, or `None` for a fixed size.
     pub const fn fill_x(self) -> Option<WidgetFills> {
         match self {
             Self::Fixed { .. } => None,
@@ -367,6 +529,7 @@ impl WidgetSize {
         }
     }
 
+    /// Returns vertical fill behavior, or `None` for a fixed size.
     pub const fn fill_y(self) -> Option<WidgetFills> {
         match self {
             Self::Fixed { .. } => None,
@@ -375,22 +538,50 @@ impl WidgetSize {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Policy for items that exceed the primary or cross-axis bounds.
 pub enum OverflowPolicy {
+    /// Wrap overflowing items; content may extend beyond the bounds.
     Wrap,
+    /// Wrap overflowing items and allow a scrollable content extent.
     WrapScroll,
+    /// Wrap overflowing items and clip lanes outside the bounds.
     WrapClip,
+    /// Keep one lane and allow content to extend beyond the bounds.
     Scroll,
+    /// Keep one lane and clip items that do not fit.
     Clip,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Primary direction in which a flow lays out items.
 pub enum Axis {
+    /// Horizontal primary axis, progressing left to right.
     X,
+    /// Vertical primary axis, progressing top to bottom.
     Y,
 }
 
 impl Axis {
+    /// Returns the perpendicular axis.
     pub const fn cross(self) -> Self {
         match self {
             Self::X => Self::Y,
@@ -399,16 +590,43 @@ impl Axis {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// One region of a [`PanelLayout`].
 pub enum Panel {
+    /// The central region remaining after edge panels are allocated.
     Central,
+    /// Top edge region; children flow horizontally.
     Top,
+    /// Bottom edge region; children flow horizontally.
     Bottom,
+    /// Left edge region; children flow vertically.
     Left,
+    /// Right edge region; children flow vertically.
     Right,
 }
 
 impl Panel {
+    /// All panels in allocation and layout order.
+    pub const ALL: [Self; 5] = [
+        Self::Top,
+        Self::Bottom,
+        Self::Left,
+        Self::Right,
+        Self::Central,
+    ];
+}
+
+impl Panel {
+    /// Returns the primary flow axis for items in this panel.
     pub const fn axis(self) -> Axis {
         match self {
             Self::Top | Self::Bottom => Axis::X,
@@ -417,11 +635,25 @@ impl Panel {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Fixed edge-panel extents in pixels. A size is used only when that panel
+/// has at least one item; remaining space belongs to the central region.
 pub struct PanelSizes {
+    /// Height reserved for the top panel.
     pub top: u32,
+    /// Height reserved for the bottom panel.
     pub bottom: u32,
+    /// Width reserved for the left panel.
     pub left: u32,
+    /// Width reserved for the right panel.
     pub right: u32,
 }
 
@@ -436,16 +668,32 @@ impl Default for PanelSizes {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Result of allocating a window rectangle into panels.
 pub struct PanelRects {
+    /// Always-present center remainder.
     pub central: Rect,
+    /// Top panel, absent when it has no items.
     pub top: Option<Rect>,
+    /// Bottom panel, absent when it has no items.
     pub bottom: Option<Rect>,
+    /// Left panel, absent when it has no items.
     pub left: Option<Rect>,
+    /// Right panel, absent when it has no items.
     pub right: Option<Rect>,
 }
 
 impl PanelRects {
+    /// Returns the allocated rectangle for `panel`, if present.
     pub const fn get(self, panel: Panel) -> Option<Rect> {
         match panel {
             Panel::Central => Some(self.central),
@@ -457,30 +705,69 @@ impl PanelRects {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Declarative panel sizes, insets, and ordered child size specifications.
+///
+/// A panel is considered present when its item list is non-empty. Edge sizes
+/// are clamped to the available bounds, with the center receiving the
+/// remainder.
 pub struct PanelLayout {
+    /// Child size specifications for the center panel.
     pub central: Vec<LayoutItem>,
+    /// Child size specifications for the top panel.
     pub top: Vec<LayoutItem>,
+    /// Child size specifications for the bottom panel.
     pub bottom: Vec<LayoutItem>,
+    /// Child size specifications for the left panel.
     pub left: Vec<LayoutItem>,
+    /// Child size specifications for the right panel.
     pub right: Vec<LayoutItem>,
+    /// Fixed edge-panel extents.
     pub sizes: PanelSizes,
+    /// Insets applied within each region before its children flow.
+    pub insets: Insets,
 }
 
 impl PanelLayout {
+    /// Creates an empty panel layout with zero edge sizes and insets.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Appends one child size specification to `panel`.
     pub fn push(&mut self, panel: Panel, item: LayoutItem) {
-        self.items_mut(panel).push(item);
+        self.items_mut_for_creation(panel).push(item);
     }
 
+    /// Returns this layout with one child size specification appended.
     pub fn with_widget(mut self, panel: Panel, item: LayoutItem) -> Self {
         self.push(panel, item);
         self
     }
 
+    /// Sets the fixed edge-panel extents used when allocating the layout.
+    /// Returns this layout with fixed edge-panel extents.
+    pub fn with_sizes(mut self, sizes: PanelSizes) -> Self {
+        self.sizes = sizes;
+        self
+    }
+
+    /// Sets the inner margins applied to each allocated panel.
+    /// Returns this layout with uniform inner margins for every panel.
+    pub fn with_insets(mut self, insets: Insets) -> Self {
+        self.insets = insets;
+        self
+    }
+
+    /// Returns the ordered child size specifications for `panel`.
     pub fn items(&self, panel: Panel) -> &[LayoutItem] {
         match panel {
             Panel::Central => &self.central,
@@ -491,7 +778,10 @@ impl PanelLayout {
         }
     }
 
-    fn items_mut(&mut self, panel: Panel) -> &mut Vec<LayoutItem> {
+    pub(super) fn items_mut_for_creation(
+        &mut self,
+        panel: Panel,
+    ) -> &mut Vec<LayoutItem> {
         match panel {
             Panel::Central => &mut self.central,
             Panel::Top => &mut self.top,
@@ -501,6 +791,7 @@ impl PanelLayout {
         }
     }
 
+    /// Allocates this layout within `bounds`.
     pub fn allocate(&self, bounds: Rect) -> PanelRects {
         allocate_panels_for(self, bounds)
     }
@@ -517,11 +808,12 @@ impl PanelLayout {
         spacing: u32,
         policy: OverflowPolicy,
     ) -> LayoutOutput {
-        let Some(panel_bounds) = self.allocate(bounds).get(panel) else {
+        let allocation = self.allocate(bounds);
+        let Some(panel_bounds) = allocation.get(panel) else {
             return LayoutOutput::empty();
         };
         layout_flow(
-            insets.apply(panel_bounds),
+            insets.apply(self.insets.apply(panel_bounds)),
             panel.axis(),
             self.items(panel),
             spacing,
@@ -530,6 +822,11 @@ impl PanelLayout {
     }
 }
 
+/// Allocates edge panels described by `sizes` within `bounds`.
+///
+/// All four edge panels are treated as present for this helper, even when
+/// their requested size is zero. Use [`PanelLayout::allocate`] when empty
+/// panels should be omitted based on their item lists.
 pub fn allocate_panels(bounds: Rect, sizes: PanelSizes) -> PanelRects {
     let mut layout = PanelLayout::new();
     layout.sizes = sizes;
@@ -551,6 +848,11 @@ pub fn allocate_panels(bounds: Rect, sizes: PanelSizes) -> PanelRects {
     allocate_panels_for(&layout, bounds)
 }
 
+/// Allocates `layout` within `bounds`.
+///
+/// Edge panels are allocated only when they contain items. Top and bottom
+/// consume height first; left and right then consume width from the remaining
+/// middle region. Requested sizes are clamped to available space.
 pub fn allocate_panels_for(layout: &PanelLayout, bounds: Rect) -> PanelRects {
     let top_height = if layout.top.is_empty() {
         0
@@ -622,32 +924,80 @@ pub fn allocate_panels_for(layout: &PanelLayout, bounds: Rect) -> PanelRects {
     result
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Alignment used by [`layout_row`] for free horizontal and vertical space.
 pub enum Align {
+    /// Distribute remaining horizontal space between items.
     Spread,
+    /// Align items to the leading edge.
     Start,
+    /// Center items within the available space.
     Center,
+    /// Align items to the trailing edge.
     End,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// One item supplied to a layout algorithm.
 pub struct LayoutItem {
+    /// Preferred, bounded, and fill behavior for this item.
     pub size: WidgetSize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Layout result for one input item.
 pub struct Placement {
+    /// Zero-based index into the input item slice.
     pub index: usize,
+    /// Allocated rectangle in the layout's coordinate space.
     pub rect: Rect,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Placements and diagnostics produced by a layout operation.
 pub struct LayoutOutput {
+    /// Items placed within or beyond the bounds, in input order.
     pub placements: Vec<Placement>,
+    /// Total content extent, which may exceed the requested bounds.
     pub content_extent: Size,
+    /// Whether content extends beyond the bounds horizontally.
     pub overflow_x: bool,
+    /// Whether content extends beyond the bounds vertically.
     pub overflow_y: bool,
+    /// Number of additional lanes created by wrapping.
     pub wrapped_lanes: u32,
+    /// Input item indices omitted because the policy clipped them.
     pub clipped_items: Vec<usize>,
 }
 
@@ -812,6 +1162,12 @@ fn assign_lanes(
     lanes
 }
 
+/// Places items in an ordered horizontal or vertical flow.
+///
+/// `spacing` is the minimum pixel gap between successive items or lanes.
+/// Fill items share free primary-axis space according to their fill weights;
+/// wrapping and clipping follow `policy`. `content_extent` reports the size
+/// needed for the resulting placed content.
 pub fn layout_flow(
     bounds: Rect,
     axis: Axis,
@@ -1017,6 +1373,11 @@ pub fn layout_flow(
     output
 }
 
+/// Places a single horizontal row and aligns it within `bounds`.
+///
+/// `align_x` controls horizontal distribution/position and `align_y` controls
+/// each item's vertical position. Items that do not fit are clipped rather
+/// than wrapped.
 pub fn layout_row(
     bounds: Rect,
     items: &[LayoutItem],

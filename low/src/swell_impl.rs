@@ -342,7 +342,7 @@ impl Swell {
                 id,
                 std::ptr::null(),
                 "COMBOBOX",
-                winapi::um::winuser::CBS_DROPDOWNLIST | flags as u32,
+                flags as u32,
                 x,
                 y,
                 width,

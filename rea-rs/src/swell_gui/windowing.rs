@@ -1,4 +1,6 @@
+use super::widgets::SwellId;
 use super::windows::{DockPosition, ReaperWindow, WindowPlacement};
+use crate::ptr_wrappers::ReaperHwnd;
 use crate::{ExtState, ReaRsError, Reaper, ReaperResult};
 use rea_rs_low::{raw, Swell};
 use std::{
@@ -507,29 +509,43 @@ impl ReaperWindow {
     /// timer.
     pub fn start_timer(
         &self,
-        id: usize,
+        id: SwellId,
         interval: Duration,
-    ) -> ReaperResult<usize> {
+    ) -> ReaperResult<SwellId> {
         self.check_window()?;
-        if id == 0 {
+        if id.0 == 0 {
             return Err(ReaRsError::UnsuccessfulOperation("invalid timer"));
         }
         let interval_ms = timer_interval_ms(interval)?;
         let actual = unsafe {
-            Self::swell()?.SetTimer(self.hwnd(), id, interval_ms, None)
+            Self::swell()?.SetTimer(
+                self.hwnd(),
+                id.0 as usize,
+                interval_ms,
+                None,
+            )
         };
         if actual == 0 {
             Err(ReaRsError::UnsuccessfulOperation("SetTimer"))
         } else {
-            Ok(actual)
+            match u32::try_from(actual) {
+                Ok(actual) => Ok(SwellId(actual)),
+                Err(_) => {
+                    unsafe { Self::swell()?.KillTimer(self.hwnd(), actual) };
+                    Err(ReaRsError::UnsuccessfulOperation(
+                        "native timer ID exceeds SwellId range",
+                    ))
+                }
+            }
         }
     }
 
     /// Stops the timer identified by the ID returned from
     /// [`Self::start_timer`].
-    pub fn stop_timer(&self, id: usize) -> ReaperResult<()> {
+    pub fn stop_timer(&self, id: SwellId) -> ReaperResult<()> {
         self.check_window()?;
-        let ok = unsafe { Self::swell()?.KillTimer(self.hwnd(), id) };
+        let ok =
+            unsafe { Self::swell()?.KillTimer(self.hwnd(), id.0 as usize) };
         if ok == 0 {
             Err(ReaRsError::UnsuccessfulOperation("KillTimer"))
         } else {
@@ -846,6 +862,38 @@ impl ReaperWindow {
     }
 }
 
+/// Returns the current native mouse-capture window, if any.
+pub fn capture_window() -> ReaperResult<Option<ReaperHwnd>> {
+    let hwnd = ReaperWindow::swell()?.GetCapture();
+    Ok((!hwnd.is_null()).then(|| ReaperHwnd::from_raw(hwnd)))
+}
+
+/// Converts a signed client-coordinate point to screen coordinates.
+pub fn client_to_screen(
+    window: ReaperHwnd,
+    point: super::layout::SignedPoint,
+) -> ReaperResult<super::layout::SignedPoint> {
+    window.validate()?;
+    let mut point = rea_rs_low::raw::POINT::from(point);
+    unsafe {
+        ReaperWindow::swell()?.ClientToScreen(window.as_raw(), &mut point)
+    };
+    Ok(point.into())
+}
+
+/// Converts a signed screen-coordinate point to client coordinates.
+pub fn screen_to_client(
+    window: ReaperHwnd,
+    point: super::layout::SignedPoint,
+) -> ReaperResult<super::layout::SignedPoint> {
+    window.validate()?;
+    let mut point = rea_rs_low::raw::POINT::from(point);
+    unsafe {
+        ReaperWindow::swell()?.ScreenToClient(window.as_raw(), &mut point)
+    };
+    Ok(point.into())
+}
+
 impl Drop for ReaperWindow {
     fn drop(&mut self) {
         if self.owned.get() {
@@ -857,6 +905,7 @@ impl Drop for ReaperWindow {
 #[cfg(test)]
 mod tests {
     use super::timer_interval_ms;
+    use crate::swell_gui::SwellId;
     use std::time::Duration;
 
     #[test]
@@ -873,5 +922,18 @@ mod tests {
             timer_interval_ms(Duration::from_millis(u32::MAX as u64 + 1))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn timer_id_is_positive_and_round_trips_native_u32() {
+        let requested = SwellId::new_timer();
+        assert_ne!(requested.0, 0);
+        assert_eq!(SwellId::from(u32::from(requested)), requested);
+    }
+
+    #[test]
+    fn timer_id_constructor_is_available_in_constants() {
+        const TIMER: SwellId = SwellId(42);
+        assert_eq!(TIMER.0, 42);
     }
 }

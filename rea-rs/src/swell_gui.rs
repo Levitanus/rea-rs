@@ -33,7 +33,7 @@ pub use drawing::{
     FontCharset, FontSpec, Icon, ImageList, ImageSize, LiceBitmap,
     LiceBitmapKind, LiceBlitOptions, LiceCombineMode, LiceFont, LicePoint,
     LiceRect, LiceSurface, LiceTextOptions, ListViewImageListKind, PaintInfo,
-    Pen, PenStyle,
+    Pen, PenStyle, TextMetrics,
 };
 pub use events::{
     CommandNotification, ContainerEvent, ControlEvent, EventResponse,
@@ -41,21 +41,24 @@ pub use events::{
     NativeKey, ScrollViewEvent, ScrollViewEventSource, WidgetEventCallback,
     WindowCommand, WindowEvent, WindowEventCallback,
 };
-pub use menu::{
-    CustomMenuContext, CustomMenuPhase, Menu, MenuCommandId, MenuItem,
-};
+pub use layout::SignedPoint;
+pub use layout::{Panel, PanelLayout, PanelRects, PanelSizes};
+pub use menu::{CustomMenuContext, CustomMenuPhase, Menu, MenuItem};
 pub use scroll::{
     decode_scroll_command, ScrollCommand, ScrollMetrics, ScrollOffset,
     ScrollState, ScrollbarRenderer, ScrollbarVisibility,
 };
-pub use widgets::CreationContext;
 pub use widgets::{
-    Button, Canvas, CheckBox, ComboBox, ContainerId, ControlHandle, ControlId,
-    ControlKind, ControlRect, EditField, GroupBox, ListBox, ListView,
-    NativeContainer, ProgressBar, RadioButton, ReaperControl, StaticLabel,
-    TabControl, Trackbar, TreeView, VirtualComboBox, VirtualIconButton,
-    VirtualListBox, VirtualSlider, VirtualStaticText,
+    Button, Canvas, CheckBox, ComboBox, ComboBoxOptions, ControlHandle,
+    ControlKind, ControlRect, EditField, EditFieldOptions, GroupBox, ListBox,
+    ListBoxOptions, ListView, ListViewOptions, NativeContainer, ProgressBar,
+    ProgressBarOptions, RadioButton, RadioButtonOptions, ReaperControl,
+    StaticLabel, SwellId, TabControl, TabControlOptions, Trackbar,
+    TrackbarOptions, TreeView, TreeViewOptions, VirtualComboBox,
+    VirtualIconButton, VirtualListBox, VirtualSlider, VirtualStaticText,
 };
+pub use widgets::{CreationContext, PanelContext};
+pub use windowing::{capture_window, client_to_screen, screen_to_client};
 pub use windows::{
     DockPosition, ReaperWindow, ScrollView, WindowHandler, WindowId,
     WindowSpec,
@@ -66,9 +69,9 @@ mod tests {
 
     #[test]
     fn container_event_preserves_child_event_and_identity() {
-        let container = ContainerId(ControlId(42));
+        let container = SwellId(42);
         let child = ControlEvent::ButtonClicked {
-            control: ControlId(7),
+            control: SwellId(7),
         };
 
         assert_eq!(
@@ -83,31 +86,28 @@ mod tests {
     #[test]
     fn native_container_keeps_stable_control_identity() {
         let handle = ControlHandle {
-            id: ControlId(42),
+            id: SwellId(42),
             kind: ControlKind::Static,
             hwnd: std::ptr::null_mut(),
         };
         let container = NativeContainer::new(handle);
 
-        assert_eq!(container.id(), ContainerId(ControlId(42)));
-        assert_eq!(container.control_id(), ControlId(42));
+        assert_eq!(container.id(), SwellId(42));
+        assert_eq!(container.control_id(), SwellId(42));
         assert!(container.hwnd().is_null());
     }
 
     #[test]
     fn event_registry_tracks_direct_native_parentage() {
         let mut registry = events::EventRegistry::default();
-        let child = ControlId(7);
-        let group = ContainerId(ControlId(42));
+        let child = SwellId(7);
+        let group = SwellId(42);
 
         registry.set_direct_container(child, group);
-        registry.set_container_parent(group, ContainerId(ControlId(99)));
+        registry.set_container_parent(group, SwellId(99));
 
         assert_eq!(registry.direct_container.get(&child), Some(&group));
-        assert_eq!(
-            registry.container_parent.get(&group),
-            Some(&ContainerId(ControlId(99)))
-        );
+        assert_eq!(registry.container_parent.get(&group), Some(&SwellId(99)));
     }
 
     #[test]
@@ -145,11 +145,107 @@ mod tests {
             .contains(DrawTextFlags::LEFT | DrawTextFlags::TOP));
         assert_eq!(LiceBlitOptions::default().mode, LiceCombineMode::Copy);
         assert_eq!(ImageSize::new(32, 16).width, 32);
+        assert!(DrawTextFlags::WORD_BREAK.bits() != 0);
+        assert!(DrawTextFlags::NO_PREFIX.bits() != 0);
+    }
+
+    #[test]
+    fn swell_ids_use_shared_numeric_serde_representation() {
+        let id = SwellId::new_menu();
+        let encoded = serde_json::to_string(&id).unwrap();
+        let decoded: SwellId = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, id);
+        assert_eq!(u32::from(id), id.0);
+        assert_ne!(SwellId::new_control(), SwellId::new_menu());
+    }
+
+    #[test]
+    fn allocated_swell_ids_are_nonzero_and_preserve_u32_values() {
+        let control = SwellId::new_control();
+        let menu = SwellId::new_menu();
+        let timer = SwellId::new_timer();
+        assert_ne!(control.0, 0);
+        assert_ne!(menu.0, 0);
+        assert_ne!(timer.0, 0);
+        assert_eq!(SwellId::from(u32::MAX).0, u32::MAX);
+        assert_eq!(u32::from(SwellId(u32::MAX)), u32::MAX);
+    }
+
+    #[test]
+    fn serializable_gui_value_types_round_trip() {
+        let size = layout::WidgetSize::new_fill_x(180, 24)
+            .set_min_x(80)
+            .set_max_x(400);
+        let encoded = serde_json::to_string(&size).unwrap();
+        let decoded: layout::WidgetSize =
+            serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, size);
+
+        let event = ControlEvent::ButtonClicked {
+            control: SwellId(7),
+        };
+        let encoded = serde_json::to_string(&event).unwrap();
+        let decoded: ControlEvent = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn hwnd_tokens_and_control_handles_round_trip_without_validation() {
+        let token = crate::ReaperHwnd::from_raw(0x1234usize as raw::HWND);
+        let encoded = serde_json::to_string(&token).unwrap();
+        let decoded: crate::ReaperHwnd =
+            serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, token);
+        assert_eq!(decoded.as_raw(), token.as_raw());
+
+        let handle = ControlHandle {
+            id: SwellId(7),
+            kind: ControlKind::Button,
+            hwnd: token.as_raw(),
+        };
+        let encoded = serde_json::to_string(&handle).unwrap();
+        let decoded: ControlHandle = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, handle);
+    }
+
+    #[test]
+    fn panel_context_tracks_created_items_and_updates_allocation_config() {
+        let mut layout = PanelLayout::new().with_sizes(PanelSizes {
+            top: 24,
+            bottom: 16,
+            left: 40,
+            right: 32,
+        });
+        layout.push(
+            Panel::Top,
+            layout::LayoutItem {
+                size: layout::WidgetSize::new(100, 24),
+            },
+        );
+        for panel in [Panel::Bottom, Panel::Left, Panel::Right] {
+            layout.push(
+                panel,
+                layout::LayoutItem {
+                    size: layout::WidgetSize::new(20, 16),
+                },
+            );
+        }
+        let output = layout.allocate(layout::Rect::new(0, 0, 320, 200));
+        assert_eq!(output.top, Some(layout::Rect::new(0, 0, 320, 24)));
+        assert_eq!(output.central, layout::Rect::new(40, 24, 248, 160));
+    }
+
+    #[test]
+    fn menu_control_and_timer_apis_share_the_same_id_type() {
+        fn accepts_swell_id(_: SwellId) {}
+        accepts_swell_id(SwellId::new_menu());
+        accepts_swell_id(SwellId::new_control());
+        accepts_swell_id(SwellId::new_timer());
     }
 
     #[test]
     fn added_native_notifications_decode_to_semantic_events() {
-        let id = ControlId(77);
+        let id = SwellId(77);
         assert_eq!(
             events::decode_notify_event(
                 ControlKind::Tab,
@@ -185,7 +281,7 @@ mod tests {
 
     #[test]
     fn trackbar_scroll_commands_decode_as_value_changes() {
-        let id = ControlId(88);
+        let id = SwellId(88);
         assert_eq!(
             events::decode_control_event(
                 ControlKind::Trackbar,
@@ -198,7 +294,7 @@ mod tests {
 
     #[test]
     fn virtual_widget_commands_ignore_nonsemantic_messages() {
-        let id = ControlId(91);
+        let id = SwellId(91);
         assert_eq!(
             events::decode_virtual_event(
                 rea_rs_low::VirtualControlKind::Slider,

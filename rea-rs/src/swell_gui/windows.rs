@@ -5,17 +5,17 @@ use super::{
     events::{EventRegistry, ScrollViewEvent, ScrollViewEventSource},
     layout::{
         self, Align, Axis, Insets, LayoutItem, LayoutOutput, OverflowPolicy,
-        Rect, WidgetSize,
+        Panel, PanelLayout, Rect, WidgetSize,
     },
     menu::Menu,
     scroll::{ScrollOffset, ScrollState, ScrollbarRenderer},
     widgets::{
-        ControlHandle, ControlId, ControlKind, ControlRect, ControlRegistry,
-        ReaperControl,
+        ControlHandle, ControlKind, ControlRect, ControlRegistry,
+        ReaperControl, SwellId,
     },
 };
 use crate::{
-    ptr_wrappers::Hwnd,
+    ptr_wrappers::{Hwnd, ReaperHwnd},
     swell_gui::{
         host_proc::{container_event_proc, CONTAINER_WINDOW_PROCS},
         widgets::CreationContext,
@@ -44,7 +44,7 @@ type RenderCallback = Box<
 >;
 type WidgetRenderCallback = Box<
     dyn for<'surface> FnMut(
-        ControlId,
+        SwellId,
         &PaintInfo,
         &mut LiceSurface<'surface>,
     ) -> anyhow::Result<()>,
@@ -122,6 +122,9 @@ pub struct WindowSpec {
     pub width: i32,
     /// Requested initial outer height in pixels.
     pub height: i32,
+    /// Optional minimum outer width and height in pixels while resizing.
+    /// `None` leaves the native default minimum unchanged.
+    pub min_size: Option<(i32, i32)>,
     /// Whether the user can resize the window.
     pub resizable: bool,
     /// Whether the window omits its minimize button.
@@ -144,6 +147,7 @@ impl WindowSpec {
             title,
             width: 300,
             height: 200,
+            min_size: None,
             resizable: true,
             no_minimize: false,
             no_close: false,
@@ -154,8 +158,22 @@ impl WindowSpec {
 
     /// Sets the requested initial outer size in pixels; zero is raised to one.
     pub fn size(mut self, width: u32, height: u32) -> Self {
-        self.width = width.max(1) as i32;
-        self.height = height.max(1) as i32;
+        self.width = width.max(1).min(i32::MAX as u32) as i32;
+        self.height = height.max(1).min(i32::MAX as u32) as i32;
+        self
+    }
+
+    /// Sets the minimum outer size while the user resizes the window.
+    ///
+    /// Width and height are in pixels and are clamped to the representable
+    /// positive native range. The constraint is delivered through
+    /// `WM_GETMINMAXINFO`; it affects user-driven resizing, not explicit
+    /// programmatic positioning or docking geometry.
+    pub fn min_size(mut self, width: u32, height: u32) -> Self {
+        self.min_size = Some((
+            width.max(1).min(i32::MAX as u32) as i32,
+            height.max(1).min(i32::MAX as u32) as i32,
+        ));
         self
     }
 
@@ -196,6 +214,18 @@ impl Default for WindowSpec {
     }
 }
 
+#[cfg(test)]
+mod window_spec_tests {
+    use super::WindowSpec;
+
+    #[test]
+    fn minimum_size_is_optional_and_clamped_to_positive_dimensions() {
+        assert_eq!(WindowSpec::new("test").min_size, None);
+        let spec = WindowSpec::new("test").min_size(0, u32::MAX);
+        assert_eq!(spec.min_size, Some((1, i32::MAX)));
+    }
+}
+
 /// Callback interface for an owned REAPER window.
 ///
 /// Callbacks are invoked by native window dispatch, normally on REAPER's UI
@@ -226,7 +256,7 @@ pub trait WindowHandler: 'static {
     /// Called when native activation changes; `active` is the new state.
     fn on_activate(&mut self, _active: bool) {}
     /// Called for a `WM_TIMER` notification. `id` is the native timer ID.
-    fn on_timer(&mut self, _id: usize) {}
+    fn on_timer(&mut self, _id: SwellId) {}
     /// Called for general window input. Return `true` to mark it handled.
     fn on_event(&mut self, _event: super::events::WindowEvent) -> bool {
         false
@@ -234,7 +264,7 @@ pub trait WindowHandler: 'static {
     /// Called for input routed to a child widget. Return `true` if handled.
     fn on_widget_event(
         &mut self,
-        _id: ControlId,
+        _id: SwellId,
         _event: super::events::WindowEvent,
     ) -> bool {
         false
@@ -251,6 +281,7 @@ pub struct ReaperWindow {
     pub(super) hwnd: Hwnd,
     pub(super) owned: Cell<bool>,
     pub(crate) show_on_register: bool,
+    pub(super) min_size: Option<(i32, i32)>,
     pub(super) floating_rect: Cell<Option<raw::RECT>>,
     pub(super) docked: Cell<bool>,
     pub(super) dock_ident: Option<String>,
@@ -265,15 +296,21 @@ pub struct ReaperWindow {
     pub(super) render_callback: RefCell<Option<RenderCallback>>,
     pub(super) widget_render_callback: RefCell<Option<WidgetRenderCallback>>,
     pub(super) virtual_hosts:
-        RefCell<HashMap<ControlId, rea_rs_low::VirtualControlHost>>,
+        RefCell<HashMap<SwellId, rea_rs_low::VirtualControlHost>>,
     pub(super) virtual_command_queue:
         Rc<RefCell<Vec<(i32, isize, isize, i32)>>>,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct LayoutEntry {
-    pub(super) id: ControlId,
+    pub(super) id: SwellId,
     pub(super) size: WidgetSize,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct PanelLayoutEntry {
+    pub(super) layout_index: usize,
+    pub(super) entry: LayoutEntry,
 }
 
 pub(super) struct LayoutNode {
@@ -286,11 +323,12 @@ pub(super) struct LayoutNode {
 
 pub(super) struct WindowLayout {
     pub(super) root: LayoutNode,
-    pub(super) groups: HashMap<ControlId, LayoutNode>,
-    pub(super) structural: HashMap<ControlId, raw::HWND>,
-    pub(super) virtual_controls:
-        HashMap<ControlId, rea_rs_low::VirtualControl>,
-    pub(super) virtual_parents: HashMap<ControlId, ControlId>,
+    pub(super) groups: HashMap<SwellId, LayoutNode>,
+    pub(super) structural: HashMap<SwellId, raw::HWND>,
+    pub(super) virtual_controls: HashMap<SwellId, rea_rs_low::VirtualControl>,
+    pub(super) virtual_parents: HashMap<SwellId, SwellId>,
+    pub(super) panel_layout: Option<PanelLayout>,
+    pub(super) panel_entries: HashMap<Panel, Vec<PanelLayoutEntry>>,
 }
 
 impl Default for WindowLayout {
@@ -307,6 +345,8 @@ impl Default for WindowLayout {
             structural: HashMap::new(),
             virtual_controls: HashMap::new(),
             virtual_parents: HashMap::new(),
+            panel_layout: None,
+            panel_entries: HashMap::new(),
         }
     }
 }
@@ -316,7 +356,7 @@ impl Default for WindowLayout {
 /// child that contains the widgets.
 pub struct ScrollView<'a> {
     window: &'a ReaperWindow,
-    id: ControlId,
+    id: SwellId,
     view: raw::HWND,
     clip: raw::HWND,
     scrollbar_hwnd: raw::HWND,
@@ -327,7 +367,7 @@ pub struct ScrollView<'a> {
 }
 
 pub(super) struct ScrollViewRuntime {
-    pub(super) id: ControlId,
+    pub(super) id: SwellId,
     pub(super) scrollbar_hwnd: raw::HWND,
     pub(super) view: raw::HWND,
     pub(super) clip: raw::HWND,
@@ -396,7 +436,7 @@ pub(super) fn render_with_lice(
     window: &ReaperWindow,
     info: &PaintInfo,
     hdc: &mut HdcSurface<'_>,
-    widget: Option<ControlId>,
+    widget: Option<SwellId>,
 ) {
     let width = info.client_rect.width;
     let height = info.client_rect.height;
@@ -508,7 +548,7 @@ pub(super) fn render_with_lice(
 
 impl<'a> ScrollView<'a> {
     /// Returns the logical control ID assigned to this viewport.
-    pub fn id(&self) -> ControlId {
+    pub fn id(&self) -> SwellId {
         self.id
     }
 
@@ -835,7 +875,7 @@ impl ReaperWindow {
         menu: &Menu,
         x: i32,
         y: i32,
-    ) -> ReaperResult<Option<super::menu::MenuCommandId>> {
+    ) -> ReaperResult<Option<super::widgets::SwellId>> {
         self.check_window()?;
         Ok(menu.popup_at(self.hwnd(), x, y))
     }
@@ -847,7 +887,7 @@ impl ReaperWindow {
         &self,
         x: i32,
         y: i32,
-    ) -> ReaperResult<Option<super::menu::MenuCommandId>> {
+    ) -> ReaperResult<Option<super::widgets::SwellId>> {
         self.check_window()?;
         let menu = self.menu.borrow();
         let Some(menu) = menu.as_ref() else {
@@ -892,7 +932,7 @@ impl ReaperWindow {
         commands
             .into_iter()
             .filter_map(|(command, _p1, p2, source_id)| {
-                let id = ControlId(source_id);
+                let id = SwellId(source_id as u32);
                 let control =
                     self.layout.borrow().virtual_controls.get(&id).copied()?;
                 if control.control_kind()
@@ -913,11 +953,6 @@ impl ReaperWindow {
             .collect()
     }
 
-    /// Registers or replaces the custom LICE renderer for this window.
-    ///
-    /// The LICE render bitmap is allocated lazily on the next paint.
-    /// The callback's error is logged and the partially rendered bitmap is
-    /// not presented.
     /// Registers or replaces the custom LICE renderer for this window.
     ///
     /// The retained bitmap is allocated lazily. Rendering occurs during native
@@ -942,7 +977,7 @@ impl ReaperWindow {
     pub fn on_render_widget<F>(&self, callback: F) -> anyhow::Result<()>
     where
         F: for<'surface> FnMut(
-                ControlId,
+                SwellId,
                 &PaintInfo,
                 &mut LiceSurface<'surface>,
             ) -> anyhow::Result<()>
@@ -1061,21 +1096,46 @@ impl ReaperWindow {
 
     fn register_widget_container(
         &self,
-        container: Option<ControlId>,
-        id: ControlId,
+        container: Option<SwellId>,
+        id: SwellId,
     ) {
         if let Some(container) = container {
-            self.events.borrow_mut().set_direct_container(
-                id,
-                super::widgets::ContainerId(container),
-            );
+            self.events.borrow_mut().set_direct_container(id, container);
         }
+    }
+
+    pub(super) fn install_panel_layout(
+        &self,
+        panel_layout: PanelLayout,
+    ) -> ReaperResult<()> {
+        let mut layout = self.layout.borrow_mut();
+        if layout.panel_layout.is_some() {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "a panel layout is already installed",
+            ));
+        }
+        layout.panel_layout = Some(panel_layout);
+        Ok(())
+    }
+
+    pub(super) fn update_panel_layout(
+        &self,
+        update: impl FnOnce(&mut PanelLayout),
+    ) -> ReaperResult<()> {
+        let mut layout = self.layout.borrow_mut();
+        let panel_layout = layout.panel_layout.as_mut().ok_or(
+            ReaRsError::UnsuccessfulOperation(
+                "this window has no managed panel layout",
+            ),
+        )?;
+        update(panel_layout);
+        Ok(())
     }
 
     pub(super) fn register_layout_entry(
         &self,
-        container: Option<ControlId>,
-        id: ControlId,
+        container: Option<SwellId>,
+        id: SwellId,
         size: WidgetSize,
     ) {
         let mut layout = self.layout.borrow_mut();
@@ -1087,6 +1147,49 @@ impl ReaperWindow {
             node.entries.push(LayoutEntry { id, size });
         }
         self.register_widget_container(container, id);
+    }
+
+    pub(super) fn register_panel_layout_entry(
+        &self,
+        panel: Panel,
+        id: SwellId,
+        size: WidgetSize,
+    ) {
+        let mut layout = self.layout.borrow_mut();
+        let layout_index =
+            layout.panel_entries.get(&panel).map_or(0, Vec::len);
+        let panel_layout =
+            layout.panel_layout.get_or_insert_with(PanelLayout::new);
+        let panel_items = panel_layout.items_mut_for_creation(panel);
+        if layout_index < panel_items.len() {
+            panel_items[layout_index].size = size;
+        } else {
+            panel_items.push(LayoutItem { size });
+        }
+        layout.panel_entries.entry(panel).or_default().push(
+            PanelLayoutEntry {
+                layout_index,
+                entry: LayoutEntry { id, size },
+            },
+        );
+    }
+
+    #[cfg(test)]
+    pub(super) fn panel_layout_entry_count(&self, panel: Panel) -> usize {
+        self.layout
+            .borrow()
+            .panel_entries
+            .get(&panel)
+            .map_or(0, Vec::len)
+    }
+
+    #[cfg(test)]
+    pub(super) fn container_layout_entry_count(&self, id: SwellId) -> usize {
+        self.layout
+            .borrow()
+            .groups
+            .get(&id)
+            .map_or(0, |node| node.entries.len())
     }
 
     fn apply_layout_node(
@@ -1151,7 +1254,7 @@ impl ReaperWindow {
 
     fn apply_container_layout(
         &self,
-        id: ControlId,
+        id: SwellId,
         rect: Rect,
         layout: &WindowLayout,
         parent_wraps: bool,
@@ -1421,6 +1524,89 @@ impl ReaperWindow {
                 )?;
             }
         }
+        let panel_layout = layout.panel_layout.clone();
+        let panel_entries = layout.panel_entries.clone();
+        drop(layout);
+        if let Some(panel_layout) = panel_layout {
+            let panel_rects = panel_layout.allocate(Rect::new(
+                0,
+                0,
+                client.width,
+                client.height,
+            ));
+            for panel in Panel::ALL {
+                let Some(panel_bounds) = panel_rects.get(panel) else {
+                    continue;
+                };
+                let registered =
+                    panel_entries.get(&panel).cloned().unwrap_or_default();
+                let output = layout::layout_flow(
+                    panel_layout.insets.apply(panel_bounds),
+                    panel.axis(),
+                    panel_layout.items(panel),
+                    8,
+                    OverflowPolicy::WrapScroll,
+                );
+                let layout = self.layout.borrow();
+                for placement in output.placements {
+                    let Some(panel_entry) = registered
+                        .iter()
+                        .find(|entry| entry.layout_index == placement.index)
+                    else {
+                        continue;
+                    };
+                    let entry = panel_entry.entry;
+                    let rect = placement.rect;
+                    if let Some(control) = self.control(entry.id) {
+                        ReaperControl::new(control).set_rect(
+                            ControlRect::new(
+                                rect.x as i32,
+                                rect.y as i32,
+                                rect.width.max(1) as i32,
+                                rect.height.max(1) as i32,
+                            ),
+                        )?;
+                    } else if let Some(hwnd) =
+                        layout.structural.get(&entry.id).copied()
+                    {
+                        unsafe {
+                            Self::swell()?.SetWindowPos(
+                                hwnd,
+                                std::ptr::null_mut(),
+                                rect.x as i32,
+                                rect.y as i32,
+                                rect.width.max(1) as i32,
+                                rect.height.max(1) as i32,
+                                raw::SWP_NOZORDER as i32,
+                            );
+                        }
+                    } else if let Some(control) =
+                        layout.virtual_controls.get(&entry.id).copied()
+                    {
+                        control.set_rect(
+                            rect.x as i32,
+                            rect.y as i32,
+                            rect.width.max(1) as i32,
+                            rect.height.max(1) as i32,
+                        );
+                    }
+                    self.apply_container_layout(
+                        entry.id, rect, &layout, false,
+                    )?;
+                }
+                for item_index in 0..panel_layout.items(panel).len() {
+                    if registered
+                        .iter()
+                        .any(|entry| entry.layout_index == item_index)
+                    {
+                        continue;
+                    }
+                    log::warn!(
+                        "panel layout contains an item without a CreationContext widget: panel={panel:?} index={item_index}; use panel(panel).button/control factories to create a native child"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1428,12 +1614,14 @@ impl ReaperWindow {
         hwnd: raw::HWND,
         show_on_register: bool,
         dock_ident: String,
+        min_size: Option<(i32, i32)>,
     ) -> ReaperResult<Self> {
         let hwnd = NonNull::new(hwnd).ok_or(ReaRsError::NullPtr("window"))?;
         Ok(Self {
             hwnd,
             owned: Cell::new(true),
             show_on_register,
+            min_size,
             floating_rect: Cell::new(None),
             docked: Cell::new(false),
             dock_ident: Some(dock_ident),
@@ -1457,6 +1645,14 @@ impl ReaperWindow {
     /// The wrapper validates the handle at construction, but the native window
     /// can later be destroyed or recreated. Operations re-check validity.
     pub fn from_hwnd(hwnd: raw::HWND) -> ReaperResult<Self> {
+        Self::from_hwnd_with_dock_ident(ReaperHwnd::from_raw(hwnd), None)
+    }
+
+    /// Wraps a deserialized or otherwise retained non-owning HWND token.
+    ///
+    /// Validation confirms only that the token names a current window at this
+    /// instant; it does not transfer ownership or guarantee future validity.
+    pub fn from_hwnd_token(hwnd: ReaperHwnd) -> ReaperResult<Self> {
         Self::from_hwnd_with_dock_ident(hwnd, None)
     }
 
@@ -1466,23 +1662,17 @@ impl ReaperWindow {
     /// the native HWND may have been recreated or reparented, while the
     /// persisted floating placement is keyed by the logical docker ID.
     pub fn from_hwnd_with_dock_ident(
-        hwnd: raw::HWND,
+        hwnd: ReaperHwnd,
         dock_ident: impl Into<Option<String>>,
     ) -> ReaperResult<Self> {
-        let hwnd = NonNull::new(hwnd).ok_or(ReaRsError::NullPtr("window"))?;
-        if !Reaper::is_available() {
-            return Err(ReaRsError::InvalidObject(
-                "Reaper is not initialized",
-            ));
-        }
-        let valid = unsafe { Reaper::get().swell().IsWindow(hwnd.as_ptr()) };
-        if !valid {
-            return Err(ReaRsError::InvalidObject("window is not valid"));
-        }
+        hwnd.validate()?;
+        let hwnd = NonNull::new(hwnd.as_raw())
+            .ok_or(ReaRsError::NullPtr("window"))?;
         Ok(Self {
             hwnd,
             owned: Cell::new(false),
             show_on_register: false,
+            min_size: None,
             floating_rect: Cell::new(None),
             docked: Cell::new(false),
             dock_ident: dock_ident.into(),
@@ -1504,7 +1694,7 @@ impl ReaperWindow {
     /// Registers a child control using its native SWELL/Win32 integer ID.
     pub(crate) fn register_control(
         &self,
-        id: ControlId,
+        id: SwellId,
         kind: ControlKind,
         hwnd: raw::HWND,
     ) -> ReaperResult<ControlHandle> {
@@ -1519,7 +1709,7 @@ impl ReaperWindow {
     /// Updates a registered control after native HWND recreation/reparenting.
     pub(crate) fn rebind_control(
         &self,
-        id: ControlId,
+        id: SwellId,
         hwnd: raw::HWND,
     ) -> ReaperResult<()> {
         if hwnd.is_null() {
@@ -1530,7 +1720,7 @@ impl ReaperWindow {
 
     pub(crate) fn unregister_control(
         &self,
-        id: ControlId,
+        id: SwellId,
     ) -> Option<ControlHandle> {
         self.controls.borrow_mut().unregister(id)
     }
@@ -1543,6 +1733,8 @@ impl ReaperWindow {
         layout.root.entries.clear();
         layout.groups.clear();
         layout.structural.clear();
+        layout.panel_layout = None;
+        layout.panel_entries.clear();
     }
 
     /// Reconnects registered logical controls with their current child HWNDs.
@@ -1554,7 +1746,8 @@ impl ReaperWindow {
         self.check_window()?;
         let ids: Vec<_> = self.controls.borrow().ids().collect();
         for id in ids {
-            let hwnd = unsafe { Self::swell()?.GetDlgItem(self.hwnd(), id.0) };
+            let hwnd =
+                unsafe { Self::swell()?.GetDlgItem(self.hwnd(), id.0 as i32) };
             if !hwnd.is_null() {
                 self.rebind_control(id, hwnd)?;
             }
@@ -1562,18 +1755,18 @@ impl ReaperWindow {
         Ok(())
     }
 
-    pub fn control(&self, id: ControlId) -> Option<ControlHandle> {
+    pub fn control(&self, id: SwellId) -> Option<ControlHandle> {
         self.controls.borrow().get(id)
     }
 
     /// Applies a pure flow layout to registered controls while preserving
-    /// their stable `ControlId`s. The returned metadata can be used by a
+    /// their stable `SwellId`s. The returned metadata can be used by a
     /// viewport or diagnostics overlay to inspect clipping and overflow.
     pub fn layout_controls(
         &self,
         bounds: Rect,
         axis: Axis,
-        items: &[(ControlId, WidgetSize)],
+        items: &[(SwellId, WidgetSize)],
         spacing: u32,
         policy: OverflowPolicy,
     ) -> ReaperResult<LayoutOutput> {
@@ -1603,7 +1796,7 @@ impl ReaperWindow {
     pub fn layout_row_controls(
         &self,
         bounds: Rect,
-        items: &[(ControlId, WidgetSize)],
+        items: &[(SwellId, WidgetSize)],
         spacing: u32,
         align_x: Align,
         align_y: Align,
@@ -1638,7 +1831,7 @@ impl ReaperWindow {
     /// Creates a child control through SWELL's dialog-control factory.
     pub(super) fn create_control_handle(
         &self,
-        id: ControlId,
+        id: SwellId,
         kind: ControlKind,
         hwnd: raw::HWND,
     ) -> ReaperResult<ControlHandle> {

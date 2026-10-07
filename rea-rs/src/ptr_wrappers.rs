@@ -15,6 +15,86 @@ use std::fmt::Debug;
 use std::os::raw::c_void;
 use std::ptr::NonNull;
 
+/// Copyable, process-local token for a native window handle.
+///
+/// The token stores the pointer-width integer representation of the HWND so it
+/// can be serialized. Deserialization and [`Self::from_raw`] only reconstruct
+/// the bit pattern: neither proves that the window exists, belongs to the
+/// current REAPER process, nor transfers ownership. HWNDs can become stale or
+/// be reused; validation is only a snapshot and native GUI operations still
+/// require the UI thread. Tokens should not be persisted across processes or
+/// architectures.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+#[serde(transparent)]
+pub struct ReaperHwnd(isize);
+
+impl ReaperHwnd {
+    /// The null HWND token.
+    pub const NULL: Self = Self(0);
+
+    /// Reconstructs a token from a raw HWND without validating it.
+    pub fn from_raw(hwnd: raw::HWND) -> Self {
+        Self(hwnd as isize)
+    }
+
+    /// Returns the raw HWND for an explicit native-API boundary.
+    pub fn as_raw(self) -> raw::HWND {
+        self.0 as raw::HWND
+    }
+
+    /// Returns whether this token represents a null HWND.
+    pub const fn is_null(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Returns the pointer-width integer representation used for storage.
+    pub const fn as_isize(self) -> isize {
+        self.0
+    }
+
+    /// Checks that REAPER is initialized and this HWND is currently valid.
+    ///
+    /// This does not reserve the native handle or guarantee validity after the
+    /// call. The caller must still account for destruction and handle reuse.
+    pub fn validate(self) -> crate::ReaperResult<()> {
+        if self.is_null() {
+            return Err(crate::ReaRsError::NullPtr("window"));
+        }
+        if !crate::Reaper::is_available() {
+            return Err(crate::ReaRsError::InvalidObject(
+                "Reaper is not initialized",
+            ));
+        }
+        if unsafe { crate::Reaper::get().swell().IsWindow(self.as_raw()) } {
+            Ok(())
+        } else {
+            Err(crate::ReaRsError::InvalidObject("window is not valid"))
+        }
+    }
+}
+
+impl From<raw::HWND> for ReaperHwnd {
+    fn from(value: raw::HWND) -> Self {
+        Self::from_raw(value)
+    }
+}
+
+impl From<ReaperHwnd> for raw::HWND {
+    fn from(value: ReaperHwnd) -> Self {
+        value.as_raw()
+    }
+}
+
 /// Handle which is returned from some session functions that register
 /// something.
 ///

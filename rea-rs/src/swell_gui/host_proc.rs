@@ -46,7 +46,7 @@ fn dispatch_owned_command_detached(
     );
     handler.on_command(command);
     if let Some(event) = control_event {
-        let result = handler.window().events.borrow_mut().dispatch(event);
+        let result = handler.window().dispatch_control_event(event);
         log::debug!(
             "detached control event dispatch: event={event:?} result={result:?}"
         );
@@ -84,6 +84,12 @@ fn dispatch_owned_command_detached(
 pub(super) static HOST_WINDOW_PROCS: OnceLock<
     Mutex<HashMap<usize, HostWindowProc>>,
 > = OnceLock::new();
+
+fn enforce_min_track_size(points: &mut [raw::POINT; 5], minimum: (i32, i32)) {
+    let min_track_size = &mut points[3];
+    min_track_size.x = min_track_size.x.max(minimum.0);
+    min_track_size.y = min_track_size.y.max(minimum.1);
+}
 
 pub(crate) fn remember_host_proc(hwnd: raw::HWND, previous: isize) {
     // SWELL's SetWindowLong is allowed to install its own dispatcher instead
@@ -369,7 +375,10 @@ pub(crate) unsafe extern "C" fn window_proc(
             current = reaper.swell().GetParent(current);
         }
         let Some(key) = key else {
-            if matches!(msg, raw::WM_CREATE | raw::WM_DESTROY | raw::WM_NCDESTROY) {
+            if matches!(
+                msg,
+                raw::WM_CREATE | raw::WM_DESTROY | raw::WM_NCDESTROY
+            ) {
                 log::trace!(
                     "window_proc has no registered route for lifecycle callback: hwnd={hwnd:p} message={msg:#x} direct_host={direct_host:?}"
                 );
@@ -377,7 +386,8 @@ pub(crate) unsafe extern "C" fn window_proc(
             return reaper.swell().DefWindowProc(hwnd, msg, wparam, lparam)
                 as raw::INT_PTR;
         };
-        if matches!(msg, raw::WM_CREATE | raw::WM_DESTROY | raw::WM_NCDESTROY) {
+        if matches!(msg, raw::WM_CREATE | raw::WM_DESTROY | raw::WM_NCDESTROY)
+        {
             log::trace!(
                 "window_proc resolved lifecycle callback: id={key:?} hwnd={hwnd:p} message={msg:#x} direct_host={direct_host:?}"
             );
@@ -442,7 +452,7 @@ pub(crate) unsafe extern "C" fn window_proc(
                 log::debug!(
                     "tracking popup menu: window_id={key:?} hwnd={hwnd:?} owner={popup_owner:?} position=({x}, {y}) generation={generation}",
                 );
-                if let Some(super::menu::MenuCommandId(id)) =
+                if let Some(super::widgets::SwellId(id)) =
                     popup.popup_at(popup_owner, x, y)
                 {
                     let still_current = Reaper::get()
@@ -464,7 +474,7 @@ pub(crate) unsafe extern "C" fn window_proc(
                             &key,
                             hwnd,
                             super::events::WindowCommand::Menu {
-                                id: id as i32,
+                                id: super::widgets::SwellId(id),
                             },
                             None,
                         );
@@ -505,10 +515,12 @@ pub(crate) unsafe extern "C" fn window_proc(
         let id = (wparam as usize & 0xffff) as i32;
         let code = ((wparam as usize >> 16) & 0xffff) as i32;
         let command = if lparam == 0 {
-            super::events::WindowCommand::Menu { id }
+            super::events::WindowCommand::Menu {
+                id: super::widgets::SwellId(id as u32),
+            }
         } else {
             super::events::WindowCommand::Control {
-                id,
+                id: super::widgets::SwellId(id as u32),
                 notification: super::events::CommandNotification::from_raw(
                     code,
                 ),
@@ -516,7 +528,7 @@ pub(crate) unsafe extern "C" fn window_proc(
         };
         let control_event = if lparam != 0 {
             Reaper::get().windows.get(&key).and_then(|handler| {
-                let control_id = super::widgets::ControlId(id);
+                let control_id = super::widgets::SwellId(id as u32);
                 handler.window().control(control_id).and_then(|control| {
                     super::events::decode_control_event(
                         control.kind,
@@ -1001,10 +1013,12 @@ pub(crate) unsafe extern "C" fn window_proc(
                 return 1;
             }
             let command = if lparam == 0 {
-                super::events::WindowCommand::Menu { id }
+                super::events::WindowCommand::Menu {
+                    id: super::widgets::SwellId(id as u32),
+                }
             } else {
                 super::events::WindowCommand::Control {
-                    id,
+                    id: super::widgets::SwellId(id as u32),
                     notification: super::events::CommandNotification::from_raw(
                         code,
                     ),
@@ -1013,7 +1027,7 @@ pub(crate) unsafe extern "C" fn window_proc(
             log::debug!("WM_COMMAND: hwnd={hwnd:?} id={id} code={code} command={command:?}");
             handler.on_command(command);
             if lparam != 0 {
-                let control_id = super::widgets::ControlId(id);
+                let control_id = super::widgets::SwellId(id as u32);
                 let event =
                     handler.window().control(control_id).and_then(|control| {
                         super::events::decode_control_event(
@@ -1024,7 +1038,7 @@ pub(crate) unsafe extern "C" fn window_proc(
                     });
                 if let Some(event) = event {
                     let result =
-                        handler.window().events.borrow_mut().dispatch(event);
+                        handler.window().dispatch_control_event(event);
                     log::debug!("control event dispatch: event={event:?} result={result:?}");
                     if matches!(
                         result,
@@ -1199,8 +1213,7 @@ pub(crate) unsafe extern "C" fn window_proc(
                             code: (wparam as usize & 0xffff) as i32,
                         }
                     };
-                let result =
-                    handler.window().events.borrow_mut().dispatch(event);
+                let result = handler.window().dispatch_control_event(event);
                 log::debug!("control scroll dispatch: event={event:?} result={result:?}");
                 if matches!(
                     result,
@@ -1286,15 +1299,14 @@ pub(crate) unsafe extern "C" fn window_proc(
                 return 0;
             }
             let header = &*(lparam as *const super::events::NotifyHeader);
-            let control_id = super::widgets::ControlId(header.id_from as i32);
+            let control_id = super::widgets::SwellId(header.id_from as u32);
             if let Some(control) = handler.window().control(control_id) {
                 let event = super::events::decode_notify_event(
                     control.kind,
                     control_id,
                     header.code,
                 );
-                let result =
-                    handler.window().events.borrow_mut().dispatch(event);
+                let result = handler.window().dispatch_control_event(event);
                 log::debug!("control notification dispatch: event={event:?} result={result:?}");
                 if matches!(
                     result,
@@ -1381,9 +1393,38 @@ pub(crate) unsafe extern "C" fn window_proc(
             handler.on_resize(rect.right - rect.left, rect.bottom - rect.top);
             0
         }
+        raw::WM_GETMINMAXINFO => {
+            let Some(handler) = reaper.windows.get(&key) else {
+                return reaper.swell().DefWindowProc(hwnd, msg, wparam, lparam)
+                    as raw::INT_PTR;
+            };
+            if handler.window().hwnd() != hwnd {
+                return reaper.swell().DefWindowProc(hwnd, msg, wparam, lparam)
+                    as raw::INT_PTR;
+            }
+            let Some((min_width, min_height)) = handler.window().min_size
+            else {
+                return reaper.swell().DefWindowProc(hwnd, msg, wparam, lparam)
+                    as raw::INT_PTR;
+            };
+            if lparam == 0 {
+                return reaper.swell().DefWindowProc(hwnd, msg, wparam, lparam)
+                    as raw::INT_PTR;
+            }
+            let result =
+                reaper.swell().DefWindowProc(hwnd, msg, wparam, lparam)
+                    as raw::INT_PTR;
+            // Win32/SWELL's MINMAXINFO is five POINTs. Only ptMinTrackSize is
+            // changed, preserving any native maximum-size or position values.
+            enforce_min_track_size(
+                &mut *(lparam as *mut [raw::POINT; 5]),
+                (min_width, min_height),
+            );
+            result
+        }
         raw::WM_TIMER => {
             if let Some(handler) = reaper.windows.get_mut(&key) {
-                handler.on_timer(wparam as usize);
+                handler.on_timer(super::widgets::SwellId(wparam as u32));
             }
             0
         }
@@ -1441,4 +1482,24 @@ pub(super) unsafe extern "C" fn container_event_proc(
     Reaper::get()
         .swell()
         .DefWindowProc(hwnd, msg, wparam, lparam) as raw::INT_PTR
+}
+
+#[cfg(test)]
+mod sizing_tests {
+    use super::enforce_min_track_size;
+    use rea_rs_low::raw;
+
+    #[test]
+    fn minimum_window_size_only_raises_minimum_tracking_dimensions() {
+        let mut info = [raw::POINT { x: 1, y: 2 }; 5];
+        info[3] = raw::POINT { x: 320, y: 180 };
+        info[4] = raw::POINT { x: 1600, y: 900 };
+
+        enforce_min_track_size(&mut info, (400, 120));
+
+        assert_eq!(info[3].x, 400);
+        assert_eq!(info[3].y, 180);
+        assert_eq!(info[4].x, 1600);
+        assert_eq!(info[4].y, 900);
+    }
 }

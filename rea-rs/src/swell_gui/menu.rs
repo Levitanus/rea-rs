@@ -4,11 +4,20 @@
 //! [`CustomMenuContext`] borrows a REAPER-owned handle only for the duration
 //! of the customization callback.
 
+use super::widgets::SwellId;
 use rea_rs_low::raw;
 use std::{ffi::CString, ptr};
 
 /// Phase in which REAPER invokes a customizable-menu hook.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum CustomMenuPhase {
     InitializeDefaults,
     BeforeDisplay,
@@ -48,11 +57,7 @@ impl<'a> CustomMenuContext<'a> {
 
     /// Adds a command to this borrowed menu. Use only for flag 0 defaults;
     /// dynamic checked/enabled state must be updated during flag 1.
-    pub fn add_command(
-        &self,
-        id: MenuCommandId,
-        label: &str,
-    ) -> anyhow::Result<()> {
+    pub fn add_command(&self, id: SwellId, label: &str) -> anyhow::Result<()> {
         let label = CString::new(label)?;
         let mut info = raw::MENUITEMINFO::default();
         info.cbSize = std::mem::size_of::<raw::MENUITEMINFO>() as u32;
@@ -72,15 +77,18 @@ impl<'a> CustomMenuContext<'a> {
     }
 }
 
-/// Command identifier returned by popup menus and delivered by window menus.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct MenuCommandId(pub u32);
-
 /// One entry in a native menu tree.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum MenuItem {
     Command {
-        id: MenuCommandId,
+        id: SwellId,
         label: String,
         enabled: bool,
         checked: bool,
@@ -93,10 +101,7 @@ pub enum MenuItem {
 }
 
 impl MenuItem {
-    pub fn command(
-        id: impl Into<MenuCommandId>,
-        label: impl Into<String>,
-    ) -> Self {
+    pub fn command(id: impl Into<SwellId>, label: impl Into<String>) -> Self {
         Self::Command {
             id: id.into(),
             label: label.into(),
@@ -134,12 +139,6 @@ impl MenuItem {
             *current = checked;
         }
         self
-    }
-}
-
-impl From<u32> for MenuCommandId {
-    fn from(value: u32) -> Self {
-        Self(value)
     }
 }
 
@@ -189,7 +188,7 @@ impl Menu {
         owner: raw::HWND,
         x: i32,
         y: i32,
-    ) -> Option<MenuCommandId> {
+    ) -> Option<SwellId> {
         if owner.is_null() || self.handle.is_null() {
             return None;
         }
@@ -207,7 +206,7 @@ impl Menu {
                 ptr::null(),
             )
         };
-        (selected > 0).then_some(MenuCommandId(selected as u32))
+        (selected > 0).then_some(SwellId(selected as u32))
     }
 
     fn append_items(

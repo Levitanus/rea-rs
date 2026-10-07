@@ -7,10 +7,21 @@
 //! corner. A state value is pure data and does not itself move a native
 //! window.
 
+use serde::{Deserialize, Serialize};
+
 use super::layout::{Axis, Size};
 
 /// The current position of scrollable content in content coordinates.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub struct ScrollOffset {
     pub x: u32,
     pub y: u32,
@@ -37,7 +48,16 @@ impl ScrollOffset {
 }
 
 /// The range and page information exposed to a native scrollbar.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub struct ScrollMetrics {
     pub content: Size,
     pub viewport: Size,
@@ -53,7 +73,15 @@ pub(crate) const fn scrollbar_range_max(content_extent: u32) -> u32 {
 }
 
 /// The scrollbar backend requested by a native ScrollView.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum ScrollbarRenderer {
     /// Use the platform's standard scrollbar implementation. This is only
     /// supported on Windows and returns an error on other SWELL backends.
@@ -73,7 +101,16 @@ impl Default for ScrollbarRenderer {
 }
 
 /// Visibility of the two viewport-owned scrollbars.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub struct ScrollbarVisibility {
     pub horizontal: bool,
     pub vertical: bool,
@@ -167,7 +204,15 @@ impl ScrollMetrics {
 }
 
 /// A native scrollbar command after decoding its low-word notification code.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum ScrollCommand {
     LineBackward,
     LineForward,
@@ -200,7 +245,15 @@ pub const fn decode_scroll_command(
 }
 
 /// A small, platform-independent scroll model used by a viewport HWND.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub struct ScrollState {
     content: Size,
     viewport: Size,

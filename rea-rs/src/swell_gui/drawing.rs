@@ -11,7 +11,15 @@ use int_enum::IntEnum;
 use rea_rs_low::raw::{self, LICE_IBitmap, LICE_IFont, LICE_pixel};
 use std::{ffi::CString, marker::PhantomData, ptr::NonNull};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 /// Text alignment and layout flags accepted by SWELL drawing operations.
 ///
 /// These are native `DT_*` flags. Not every backend honors every combination.
@@ -20,8 +28,37 @@ pub struct DrawTextOptions {
     pub alignment: DrawTextFlags,
 }
 
+impl DrawTextFlags {
+    /// Returns the native flag bitset for advanced interop.
+    pub const fn bits_raw(self) -> i32 {
+        self.bits()
+    }
+}
+
+/// Pixel bounds occupied by text after native font layout.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+pub struct TextMetrics {
+    /// Laid-out width in pixels.
+    pub width: i32,
+    /// Laid-out height in pixels.
+    pub height: i32,
+}
+
 bitflags::bitflags! {
-    #[derive(Default)]
+    #[derive(
+        Default,
+        serde_derive::Serialize,
+        serde_derive::Deserialize
+    )]
     pub struct DrawTextFlags: i32 {
         const LEFT = raw::DT_LEFT as i32;
         const CENTER = raw::DT_CENTER as i32;
@@ -52,7 +89,16 @@ impl Default for DrawTextOptions {
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, IntEnum)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    IntEnum,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum LiceCombineMode {
     /// Replace destination pixels with source pixels.
     Copy = 0,
@@ -69,7 +115,16 @@ pub enum LiceCombineMode {
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, IntEnum)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    IntEnum,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum LiceBitmapKind {
     /// CPU-memory-backed bitmap.
     Memory = 0,
@@ -85,7 +140,16 @@ impl LiceBitmapKind {
 
 /// The ListView image-list slot receiving an attached image list.
 #[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, IntEnum)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    IntEnum,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum ListViewImageListKind {
     Normal = 0,
     Small = 1,
@@ -100,7 +164,15 @@ pub struct Bitmap {
     swell: rea_rs_low::Swell,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub struct ImageSize {
     /// Width in pixels.
     pub width: u32,
@@ -117,7 +189,15 @@ impl ImageSize {
 
 /// A floating-point coordinate for LICE primitives that support subpixel
 /// positions (including arcs and cubic Bezier curves).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub struct LicePoint {
     pub x: f64,
     pub y: f64,
@@ -131,7 +211,15 @@ impl LicePoint {
 }
 
 /// A floating-point rectangle for LICE source regions and transformed blits.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub struct LiceRect {
     pub x: f32,
     pub y: f32,
@@ -228,7 +316,15 @@ impl Drop for Icon {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub struct LiceBlitOptions {
     /// Pixel-combination mode.
     pub mode: LiceCombineMode,
@@ -256,7 +352,14 @@ impl LiceBlitOptions {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub struct LiceTextOptions {
     /// Text alignment and layout flags.
     pub flags: DrawTextFlags,
@@ -269,7 +372,9 @@ pub struct LiceTextOptions {
 impl Default for LiceTextOptions {
     fn default() -> Self {
         Self {
-            flags: DrawTextFlags::LEFT | DrawTextFlags::TOP,
+            flags: DrawTextFlags::LEFT
+                | DrawTextFlags::TOP
+                | DrawTextFlags::WORD_BREAK,
             combine: LiceBlitOptions::default(),
             alpha: 1.0,
         }
@@ -293,7 +398,16 @@ fn swell_color(color: Color) -> i32 {
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, IntEnum)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    IntEnum,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum PenStyle {
     Solid = 0,
     Dash = 1,
@@ -304,7 +418,16 @@ pub enum PenStyle {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, IntEnum)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    IntEnum,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub enum FontCharset {
     Ansi = 0,
     Default = 1,
@@ -324,7 +447,14 @@ pub enum FontCharset {
     Oem = 255,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub struct FontSpec {
     /// Requested face name. Non-ASCII bytes are replaced when converted to
     /// the native fixed-width LOGFONT face-name field.
@@ -408,7 +538,15 @@ impl FontSpec {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
 pub struct PaintInfo {
     /// Damaged region that triggered painting, in client coordinates.
     pub damage_rect: Rect,
@@ -807,6 +945,57 @@ pub struct ImageList {
     handle: NonNull<raw::HIMAGELIST__>,
     swell: rea_rs_low::Swell,
     attached: Vec<(raw::HWND, i32)>,
+}
+
+#[cfg(test)]
+mod serde_tests {
+    use super::*;
+    use serde::{de::DeserializeOwned, Serialize};
+
+    fn assert_round_trip<T>(value: T)
+    where
+        T: DeserializeOwned + PartialEq + std::fmt::Debug + Serialize,
+    {
+        let json = serde_json::to_string(&value).unwrap();
+        let decoded: T = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, value);
+    }
+
+    #[test]
+    fn drawing_configuration_and_metadata_round_trip() {
+        assert_round_trip(DrawTextOptions::default());
+        assert_round_trip(DrawTextFlags::LEFT | DrawTextFlags::WORD_BREAK);
+        assert_round_trip(TextMetrics {
+            width: 123,
+            height: 45,
+        });
+        assert_round_trip(LiceCombineMode::Overlay);
+        assert_round_trip(LiceBitmapKind::System);
+        assert_round_trip(ListViewImageListKind::Small);
+        assert_round_trip(ImageSize::new(64, 32));
+        assert_round_trip(LicePoint::new(1.25, -8.5));
+        assert_round_trip(LiceRect::new(0.5, 1.5, 10.0, 12.0));
+        assert_round_trip(LiceBlitOptions {
+            mode: LiceCombineMode::Multiply,
+            bilinear: true,
+            use_source_alpha: true,
+        });
+        assert_round_trip(LiceTextOptions::default());
+        assert_round_trip(PenStyle::DashDot);
+        assert_round_trip(FontCharset::ShiftJis);
+        assert_round_trip(
+            FontSpec::new("Noto Sans")
+                .set_size(18)
+                .set_weight(600)
+                .set_italic(true)
+                .set_underline(true)
+                .set_charset(FontCharset::Default),
+        );
+        assert_round_trip(PaintInfo {
+            damage_rect: Rect::new(2, 4, 16, 8),
+            client_rect: Rect::new(0, 0, 320, 200),
+        });
+    }
 }
 
 impl ImageList {
@@ -1631,6 +1820,11 @@ impl LiceSurface<'_> {
         }
     }
 
+    /// Draws text within the supplied bitmap-pixel rectangle using `font`.
+    ///
+    /// Text is word-wrapped by default. The surface clips to its bitmap
+    /// bounds; text outside `rect` is handled by LICE's font
+    /// implementation.
     pub fn draw_text(
         &mut self,
         text: &str,
@@ -1663,6 +1857,73 @@ impl LiceSurface<'_> {
             );
         }
         Ok(())
+    }
+
+    /// Measures text using `font` and the native `DT_CALCRECT` behavior.
+    ///
+    /// `max_width` supplies the right edge of the initial measurement rect;
+    /// pass `None` for an effectively unbounded line. The returned dimensions
+    /// are pixels and are determined by the active LICE font/backend.
+    pub fn measure_text(
+        &self,
+        text: &str,
+        font: &LiceFont,
+        max_width: Option<u32>,
+    ) -> ReaperResult<TextMetrics> {
+        self.measure_text_with_flags(text, font, max_width, 0)
+    }
+
+    /// Measures word-wrapped text within `max_width` pixels using the selected
+    /// LICE font. Returns the resulting pixel width and height.
+    pub fn measure_wrapped_text(
+        &self,
+        text: &str,
+        font: &LiceFont,
+        max_width: u32,
+    ) -> ReaperResult<TextMetrics> {
+        if max_width == 0 {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "wrapped text width must be positive",
+            ));
+        }
+        self.measure_text_with_flags(
+            text,
+            font,
+            Some(max_width),
+            raw::DT_WORDBREAK as u32,
+        )
+    }
+
+    fn measure_text_with_flags(
+        &self,
+        text: &str,
+        font: &LiceFont,
+        max_width: Option<u32>,
+        flags: u32,
+    ) -> ReaperResult<TextMetrics> {
+        let text = CString::new(text)?;
+        let mut rect = raw::RECT {
+            left: 0,
+            top: 0,
+            right: max_width
+                .map(|width| native_coord(width))
+                .unwrap_or(i32::MAX),
+            bottom: i32::MAX,
+        };
+        unsafe {
+            self.low.LICE__DrawText(
+                font.handle.as_ptr(),
+                std::ptr::null_mut(),
+                text.as_ptr(),
+                -1,
+                &mut rect,
+                flags | raw::DT_CALCRECT as u32,
+            );
+        }
+        Ok(TextMetrics {
+            width: rect.right.saturating_sub(rect.left).max(0),
+            height: rect.bottom.saturating_sub(rect.top).max(0),
+        })
     }
 
     pub fn blit_from(
