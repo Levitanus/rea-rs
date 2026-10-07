@@ -1,3 +1,16 @@
+//! High-level integration with REAPER's plugin API.
+//!
+//! [`Reaper`] owns the registrations made by a plugin and provides access to
+//! REAPER services such as custom actions, timers, windows, Preferences pages,
+//! customizable menus, and control surfaces. The global helpers are intended
+//! for plugins that expose one process-wide [`Reaper`] instance; applications
+//! that need explicit ownership can use [`Reaper::load`] instead.
+//!
+//! Callbacks are invoked by REAPER and must not outlive the [`Reaper`]
+//! instance that registered them. Registration methods retain the callbacks
+//! and native registration data until they are explicitly removed or the
+//! instance is dropped.
+
 use log::{debug, trace};
 use rea_rs_low::{
     create_cpp_to_rust_control_surface, delete_cpp_control_surface, raw,
@@ -170,6 +183,11 @@ unsafe extern "C" fn preferences_page_base_proc(
         .DefWindowProc(hwnd, message, wparam, lparam) as raw::INT_PTR
 }
 
+/// A custom REAPER action and its section-specific command bindings.
+///
+/// Actions are created by [`Reaper::register_action`]. The callback receives
+/// an [`ActionHook`] containing the invocation context and can inspect or
+/// update toggle state through [`Action::kind_mut`].
 pub struct Action {
     bindings: Vec<ActionBinding>,
     operation: Box<ActionCallback>,
@@ -297,6 +315,12 @@ impl From<Vec<Section>> for ActionSections {
 }
 
 /// Options controlling custom action registration.
+///
+/// By default, an action is registered in all supported REAPER sections and
+/// has no default keyboard shortcut. Use [`ActionRegistrationOptions::new`]
+/// to choose sections and
+/// [`ActionRegistrationOptions::with_default_key_binding`] to add a default
+/// binding for the Main section.
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct ActionRegistrationOptions {
     pub sections: ActionSections,
@@ -304,6 +328,7 @@ pub struct ActionRegistrationOptions {
 }
 
 impl ActionRegistrationOptions {
+    /// Creates registration options for the supplied action sections.
     pub fn new(sections: impl Into<ActionSections>) -> Self {
         Self {
             sections: sections.into(),
@@ -311,6 +336,7 @@ impl ActionRegistrationOptions {
         }
     }
 
+    /// Adds a default keyboard shortcut to the action's Main-section binding.
     pub fn with_default_key_binding(
         mut self,
         key_binding: KeyBinding,
@@ -326,6 +352,8 @@ impl From<ActionSections> for ActionRegistrationOptions {
     }
 }
 impl Action {
+    /// Invokes the action callback with the supplied REAPER invocation
+    /// context.
     pub fn call(&self, hook: &mut ActionHook) -> Result<(), anyhow::Error> {
         (self.operation)(hook)
     }
@@ -353,6 +381,10 @@ impl Action {
     }
 }
 
+/// Context passed to a custom action callback.
+///
+/// The values mirror the arguments supplied by REAPER's `hookcommand2`
+/// callback. The hook also exposes the action's mutable toggle state.
 pub struct ActionHook<'a> {
     section: KbdSectionInfo,
     command_id: CommandId,
@@ -387,43 +419,75 @@ impl<'a> ActionHook<'a> {
         }
     }
 
+    /// Returns the keyboard/action section in which the action was invoked.
+    ///
+    /// The section identifies the action context, such as the main, MIDI
+    /// editor, or media explorer section. Its numeric ID is available through
+    /// [`KbdSectionInfo::unique_id`].
     pub fn section(&self) -> &KbdSectionInfo {
         &self.section
     }
 
+    /// Returns the command ID of the invoked action.
     pub fn command_id(&self) -> CommandId {
         self.command_id
     }
 
+    /// Returns the primary event value supplied by REAPER.
+    ///
+    /// For MIDI CC events this is in the range `0..=127`. For MIDI pitch,
+    /// OSC, and mouse-wheel events, interpret it together with [`Self::val2`]
+    /// according to the event source.
     pub fn val(&self) -> i32 {
         self.val
     }
 
+    /// Returns the secondary event value supplied by REAPER.
+    ///
+    /// For MIDI CC events this is `-1`. For MIDI pitch and OSC events, a
+    /// non-negative value combines with [`Self::val`] as
+    /// `(val2 | (val << 7)) / 16383.0` to produce the normalized value.
     pub fn val2(&self) -> i32 {
         self.val2
     }
 
+    /// Returns the relative-mode value for the event.
+    ///
+    /// `0` means absolute mode; `1`, `2`, and `3` identify REAPER's relative
+    /// adjustment modes.
     pub fn relmode(&self) -> i32 {
         self.relmode
     }
 
+    /// Returns the source window, when REAPER supplied one.
+    ///
+    /// The value is `None` when the native `HWND` is null, which is common for
+    /// MIDI and other non-window input.
     pub fn hwnd(&self) -> Option<Hwnd> {
         self.hwnd
     }
 
+    /// Returns the event flag passed through the action hook.
     pub fn flag(&self) -> i32 {
         self.flag
     }
 
+    /// Returns the current toggle state, if this action is toggleable.
     pub fn toggle_state(&self) -> Option<bool> {
         self.kind.toggle_state()
     }
 
+    /// Sets the action's toggle state and reports whether it is toggleable.
     pub fn set_toggle_state(&mut self, state: bool) -> bool {
         self.kind.set_toggle_state(state)
     }
 }
 
+/// A callback scheduled by REAPER's timer facility.
+///
+/// Register an implementation with [`Reaper::register_timer`]. Returning an
+/// error reports the failure through the library's callback error handling;
+/// call [`Timer::stop`] to remove the timer from inside `run`.
 pub trait Timer {
     fn run(&mut self) -> Result<(), anyhow::Error>;
     fn id_string(&self) -> String;
@@ -703,6 +767,12 @@ mod action_registration_tests {
     }
 }
 
+/// Owns high-level REAPER registrations and host integrations for a plugin.
+///
+/// Construct an instance with [`Reaper::load`] or install the process-wide
+/// instance with [`Reaper::init_global`]. Dropping the instance unregisters
+/// callbacks, actions, timers, windows, Preferences pages, and control
+/// surfaces retained by it.
 pub struct Reaper {
     low: rea_rs_low::Reaper,
     swell: Swell,
@@ -749,6 +819,7 @@ pub struct Reaper {
     retired_csurfases: Vec<RetiredControlSurface>,
 }
 impl Reaper {
+    /// Loads the REAPER and SWELL APIs for a plugin context.
     pub fn load(context: PluginContext) -> Reaper {
         let low = rea_rs_low::Reaper::load(context);
         let actions = Vec::new();
@@ -803,12 +874,14 @@ impl Reaper {
         }
     }
 
+    /// Loads and installs the process-wide [`Reaper`] instance.
     pub fn init_global(context: PluginContext) -> &'static mut Reaper {
         let instance = Self::load(context);
         Self::make_available_globally(instance);
         Self::get_mut()
     }
 
+    /// Returns the low-level REAPER API wrapper owned by this instance.
     pub fn low(&self) -> &rea_rs_low::Reaper {
         &self.low
     }
@@ -941,6 +1014,7 @@ impl Reaper {
         );
         ReaperWindow::from_hwnd(hwnd)
     }
+    /// Returns the low-level SWELL API wrapper owned by this instance.
     pub fn swell(&self) -> &rea_rs_low::Swell {
         &self.swell
     }
@@ -1250,10 +1324,12 @@ impl Reaper {
         self.unregister_window_handler(&id)
     }
 
+    /// Returns a clone of the plugin context used to load this instance.
     pub fn plugin_context(&self) -> PluginContext {
         self.low.plugin_context().clone()
     }
 
+    /// Returns whether a process-wide [`Reaper`] instance is available.
     pub fn is_available() -> bool {
         #[allow(static_mut_refs)]
         unsafe {
@@ -1276,6 +1352,11 @@ impl Reaper {
                 .expect("call `load(context)` before using `get()`")
         }
     }
+    /// Returns mutable access to the process-wide instance.
+    ///
+    /// # Panics
+    ///
+    /// Panics when no global instance has been initialized.
     pub fn get_mut() -> &'static mut Reaper {
         #[allow(static_mut_refs)]
         unsafe {
@@ -1285,6 +1366,7 @@ impl Reaper {
         }
     }
 
+    /// Registers a timer callback, replacing any timer with the same ID.
     pub fn register_timer(&mut self, timer: Arc<RefCell<dyn Timer>>) {
         let string = timer.borrow().id_string();
         self.timers.insert(string, (Instant::now(), timer));
@@ -1297,6 +1379,7 @@ impl Reaper {
             };
         }
     }
+    /// Unregisters a timer by its stable string ID.
     pub fn unregister_timer(&mut self, id_string: String) -> ReaperResult<()> {
         // A timer snapshot owns an Arc until its callback returns, so self-
         // unregistration drops registry membership but not the active target.
@@ -1638,6 +1721,7 @@ impl Drop for Reaper {
     }
 }
 
+/// Numeric command identifier assigned by REAPER.
 #[derive(
     Debug,
     Clone,
@@ -1654,9 +1738,11 @@ pub struct CommandId {
     id: u32,
 }
 impl CommandId {
+    /// Creates an identifier from REAPER's numeric command ID.
     pub fn new(id: u32) -> Self {
         Self { id }
     }
+    /// Returns the underlying numeric command ID.
     pub fn get(&self) -> u32 {
         self.id
     }
@@ -1672,6 +1758,7 @@ impl Into<u32> for CommandId {
     }
 }
 
+/// Numeric identifier of a REAPER action section.
 #[derive(
     Debug,
     Clone,
@@ -1688,9 +1775,11 @@ pub struct SectionId {
     id: u32,
 }
 impl SectionId {
+    /// Creates a section identifier from its numeric value.
     pub fn new(id: u32) -> Self {
         Self { id }
     }
+    /// Returns the underlying numeric section ID.
     pub fn get(&self) -> u32 {
         self.id
     }
@@ -1707,11 +1796,15 @@ impl Into<u32> for SectionId {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
+/// Result of registering a custom action.
+///
+/// The command ID identifies the binding in the first registered section.
 pub struct RegisteredAction {
     // For identifying the registered command (= the functions to be executed)
     pub command_id: CommandId,
 }
 
+/// Describes whether an action exposes a toggle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionKind {
     NotToggleable,
@@ -1719,10 +1812,13 @@ pub enum ActionKind {
 }
 
 impl ActionKind {
+    /// Returns whether the action supports a toggle state.
     pub fn is_toggleable(self) -> bool {
         matches!(self, Self::Toggleable(_))
     }
 
+    /// Returns the current toggle state, or `None` for a non-toggleable
+    /// action.
     pub fn toggle_state(self) -> Option<bool> {
         match self {
             Self::Toggleable(state) => Some(state),
@@ -1730,6 +1826,7 @@ impl ActionKind {
         }
     }
 
+    /// Sets the toggle state and reports whether the action is toggleable.
     pub fn set_toggle_state(&mut self, state: bool) -> bool {
         match self {
             Self::Toggleable(current) => {
@@ -1740,6 +1837,7 @@ impl ActionKind {
         }
     }
 
+    /// Flips the toggle state and returns it, or `None` if unsupported.
     pub fn toggle(&mut self) -> Option<bool> {
         match self {
             Self::Toggleable(current) => {
@@ -1751,6 +1849,7 @@ impl ActionKind {
     }
 }
 
+/// Result of registering a default keyboard accelerator.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RegisteredAccel {
     pub command_id: CommandId,

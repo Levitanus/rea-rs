@@ -1,3 +1,76 @@
+//! A complete `swell-gui` example for a REAPER extension.
+//!
+//! The module registers a small **Widget Gallery** action that opens a
+//! dockable window. The window is intentionally more than a static widget
+//! showcase: it demonstrates how a SWELL UI can stay synchronized with REAPER
+//! state and how controls can update tracks through the high-level `rea-rs`
+//! API.
+//!
+//! ## What the example demonstrates
+//!
+//! - Creating a [`ReaperWindow`] with [`WindowSpec`] and restoring its docked
+//!   state with [`ExtState`].
+//! - Building a layout with panels, a scroll view, a list box, a group box,
+//!   radio buttons, a combo box, a trackbar, an edit field, and a progress
+//!   bar.
+//! - Registering widget callbacks and handling [`ControlEvent`] values in a
+//!   [`WindowHandler`].
+//! - Keeping programmatic control updates from being interpreted as user input
+//!   by using the `programmatic_update` guard.
+//! - Synchronizing a track list and inspector with the current REAPER project,
+//!   including track name, mute/solo state, automation mode, and volume.
+//! - Sending changes made by a [`ControlSurface`] to the UI through serialized
+//!   [`ExtState`] events. This avoids directly sharing UI objects with
+//!   REAPER's control-surface callback thread.
+//! - Installing and removing a custom renderer on the active MIDI editor. The
+//!   optional paint-over action draws a zoom-aware, clipped marker at measure
+//!   2 and pitch C3.
+//!
+//! ## How to use it
+//!
+//! Call [`register_actions`] while initializing the extension:
+//!
+//! ```rust,no_run
+//! # use anyhow::Result;
+//! # use rea_rs::Reaper;
+//! # use crate::swell_gui::register_actions;
+//! # fn initialize() -> Result<()> {
+//! register_actions(Reaper::get_mut())?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! The example registers two actions:
+//!
+//! - `TestSwellGuiWidgetGallery` toggles the gallery window.
+//! - `TestSwellPaintOver` toggles the MIDI-editor overlay.
+//!
+//! Trigger the first action from REAPER's action list to open the gallery.
+//! The gallery can be docked or floated from its menu, and its dock preference
+//! is persisted under `rea-rs.window/rea_rs_widget_gallery.dock`.
+//!
+//! ## Event flow
+//!
+//! ```text
+//! REAPER action -> DemoWindow -> widget events -> Track API
+//!       ^                  |                    |
+//!       |                  +-- timer ----------+
+//!       |                       (drain ExtState queue)
+//!       +-- DemoCSurf <- ExtState event queue <- control-surface callbacks
+//! ```
+//!
+//! `DemoWindow` owns all UI controls and performs UI-thread synchronization.
+//! `DemoCSurf` only observes REAPER/control-surface state and appends
+//! [`DemoEvent`] values to the queue. When the window timer fires, it drains
+//! the queue, rebuilds the list when necessary, and refreshes the inspector.
+//!
+//! ## Adapting this example
+//!
+//! For a smaller application, keep the same separation of responsibilities:
+//! construct controls in `new`, handle user input in `on_control_event`,
+//! update controls from REAPER in timer/event callbacks, and unregister timers
+//! and renderers in `on_destroy` or `Drop`. Replace the gallery-specific track
+//! and MIDI code with the state owned by the extension.
 use log::{info, trace, warn};
 use rea_rs::{
     db_to_linear, linear_to_db,

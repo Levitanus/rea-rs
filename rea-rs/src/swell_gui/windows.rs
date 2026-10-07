@@ -1365,24 +1365,6 @@ impl ReaperWindow {
         );
     }
 
-    #[cfg(test)]
-    pub(super) fn panel_layout_entry_count(&self, panel: Panel) -> usize {
-        self.layout
-            .borrow()
-            .panel_entries
-            .get(&panel)
-            .map_or(0, Vec::len)
-    }
-
-    #[cfg(test)]
-    pub(super) fn container_layout_entry_count(&self, id: SwellId) -> usize {
-        self.layout
-            .borrow()
-            .groups
-            .get(&id)
-            .map_or(0, |node| node.entries.len())
-    }
-
     fn apply_layout_node(
         &self,
         bounds: Rect,

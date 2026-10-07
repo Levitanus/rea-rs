@@ -7,8 +7,6 @@
 //! corner. A state value is pure data and does not itself move a native
 //! window.
 
-use serde::{Deserialize, Serialize};
-
 use super::layout::{Axis, Size};
 
 /// The current position of scrollable content in content coordinates.

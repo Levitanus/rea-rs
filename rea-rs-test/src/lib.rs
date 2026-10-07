@@ -91,8 +91,8 @@
 //! turns env logger on by itself.
 
 use rea_rs::{
-    ActionHook, ActionKind, ActionRegistrationOptions, ActionSections,
-    PluginContext, Reaper, Timer,
+    ActionHook, ActionKind, ActionRegistrationOptions, PluginContext, Reaper,
+    Timer,
 };
 use rea_rs_low::register_plugin_destroy_hook;
 use std::{
@@ -204,6 +204,7 @@ impl ReaperTest {
     /// before.
     ///
     /// [`make_available_globally()`]: fn.make_available_globally.html
+    #[allow(static_mut_refs)]
     pub fn get() -> &'static ReaperTest {
         unsafe {
             INSTANCE
@@ -211,6 +212,7 @@ impl ReaperTest {
                 .expect("call `load(context)` before using `get()`")
         }
     }
+    #[allow(static_mut_refs)]
     pub fn get_mut() -> &'static mut ReaperTest {
         unsafe {
             INSTANCE

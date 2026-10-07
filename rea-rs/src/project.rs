@@ -42,6 +42,13 @@ pub struct FullRenderSettings {
     pub file: Option<String>,
     pub primary_format: Option<RenderFormat>,
     pub secondary_format: Option<RenderFormat>,
+    /// Complete REAPER sink configuration for the primary render format.
+    /// Unlike `primary_format`, this preserves codec-specific settings.
+    #[serde(default)]
+    pub primary_format_config: Option<RenderFormatSettings>,
+    /// Complete REAPER sink configuration for the secondary render format.
+    #[serde(default)]
+    pub secondary_format_config: Option<RenderFormatSettings>,
     pub srate: Option<Option<u32>>,
     pub tail: Option<RenderTail>,
 }
@@ -72,6 +79,12 @@ impl FullRenderSettings {
             file: Some(project.get_render_file()?),
             primary_format: Some(project.get_render_format(false, true)?),
             secondary_format: Some(project.get_render_format(true, true)?),
+            primary_format_config: Some(
+                project.get_render_format_settings(false)?,
+            ),
+            secondary_format_config: Some(
+                project.get_render_format_settings(true)?,
+            ),
             srate: Some(project.get_render_srate()?),
             tail: Some(project.get_render_tail()?),
         })
@@ -162,14 +175,20 @@ impl FullRenderSettings {
             debug!("set_render_file");
             project.set_render_file(file.clone())?;
         }
-        if let Some(primary_format) = &self.primary_format {
+        if let Some(primary_format_config) = &self.primary_format_config {
+            debug!("set_render_format_config");
+            project.set_render_format_settings(primary_format_config, false)?;
+        } else if let Some(primary_format) = &self.primary_format {
             debug!("set_render_format");
             project.set_render_format(primary_format.clone(), false)?;
         }
-        // if let Some(secondary_format) = &self.secondary_format {
-        //     debug!("set_render_format2");
-        //     project.set_render_format(secondary_format.clone(), true)?;
-        // }
+        if let Some(secondary_format_config) = &self.secondary_format_config {
+            debug!("set_render_format_config2");
+            project.set_render_format_settings(secondary_format_config, true)?;
+        } else if let Some(secondary_format) = &self.secondary_format {
+            debug!("set_render_format2");
+            project.set_render_format(secondary_format.clone(), true)?;
+        }
         if let Some(srate) = self.srate {
             debug!("set_render_srate");
             project.set_render_srate(srate)?;
@@ -1316,6 +1335,33 @@ impl<'a> Project {
         }
     }
 
+    /// Get the format together with its complete, opaque REAPER sink
+    /// configuration. Store this value to preserve codec options exactly.
+    pub fn get_render_format_settings(
+        &self,
+        secondary_format: bool,
+    ) -> ReaperResult<RenderFormatSettings> {
+        let param = match secondary_format {
+            false => "RENDER_FORMAT",
+            true => "RENDER_FORMAT2",
+        };
+        Ok(RenderFormatSettings::from_raw(self.get_info_string(param)?))
+    }
+
+    /// Set a complete REAPER sink configuration, including codec-specific
+    /// options previously obtained with `get_render_format_settings`.
+    pub fn set_render_format_settings(
+        &mut self,
+        settings: &RenderFormatSettings,
+        secondary_format: bool,
+    ) -> ReaperResult<()> {
+        let param = match secondary_format {
+            false => "RENDER_FORMAT",
+            true => "RENDER_FORMAT2",
+        };
+        self.set_info_string(param, settings.raw.clone())
+    }
+
     /// base64-encoded secondary sink configuration.
     ///
     /// Set secondary_format to true, if you want the secondary render section
@@ -2299,6 +2345,11 @@ pub enum RenderFormat {
     Other(String),
 }
 impl RenderFormat {
+    /// Construct the default REAPER sink configuration for this format.
+    pub fn default_settings(&self) -> RenderFormatSettings {
+        RenderFormatSettings::new(self.clone())
+    }
+
     /// Returns a hint/description for the audio format
     pub fn hint(&self) -> &'static str {
         match self {
@@ -2364,25 +2415,75 @@ impl ToString for RenderFormat {
         str.to_string()
     }
 }
+
+/// A recognized render format and its complete opaque REAPER sink
+/// configuration. The raw value is preserved verbatim so configurations can
+/// be dumped and restored without understanding REAPER's undocumented payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderFormatSettings {
+    pub format: RenderFormat,
+    pub raw: String,
+}
+
+impl RenderFormatSettings {
+    /// Create settings using the format's default REAPER configuration.
+    pub fn new(format: RenderFormat) -> Self {
+        let raw = format.to_string();
+        Self { format, raw }
+    }
+
+    /// Preserve an existing REAPER configuration and identify its format
+    /// where possible.
+    pub fn from_raw(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        let format = RenderFormat::from(raw.clone());
+        Self { format, raw }
+    }
+}
+
 impl From<String> for RenderFormat {
     fn from(value: String) -> Self {
-        match &value[0..4] {
-            "ZXZh" => RenderFormat::Wave,
-            "ZmZp" => RenderFormat::Aiff,
-            "ZmZh" => RenderFormat::Caff,
-            "Y2Fs" => RenderFormat::Flac,
-            "bDNw" => RenderFormat::Mp3,
-            "U2dn" => RenderFormat::OggSpeex,
-            "dmdn" => RenderFormat::OggVorbis,
-            "a3B2" => RenderFormat::WavePack,
-            "IHdh" => RenderFormat::Raw,
-            "IG9z" => RenderFormat::Iso,
-            "IHBk" => RenderFormat::Ddp,
-            "UE1G" => RenderFormat::FFmpeg,
-            "IEZJ" => RenderFormat::Gif,
-            "IEZD" => RenderFormat::Lcf,
+        let normalized = value.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "wave" | "wav" | "evaw" => return RenderFormat::Wave,
+            "aiff" | "aif" | "ffia" => return RenderFormat::Aiff,
+            "caff" | "caf" | "ffac" => return RenderFormat::Caff,
+            "flac" | "calf" => return RenderFormat::Flac,
+            "mp3" | "mp3l" | "l3pm" => return RenderFormat::Mp3,
+            "ogg" | "oggv" | "vggo" => return RenderFormat::OggVorbis,
+            "spx" | "oggs" => return RenderFormat::OggSpeex,
+            "wv" | "wvpk" => return RenderFormat::WavePack,
+            "raw" | "war" => return RenderFormat::Raw,
+            "iso" => return RenderFormat::Iso,
+            "ddp" => return RenderFormat::Ddp,
+            "ffmpeg" | "mp4" => return RenderFormat::FFmpeg,
+            "gif" => return RenderFormat::Gif,
+            "lcf" => return RenderFormat::Lcf,
+            _ => {}
+        }
+        match value.get(..4) {
+            Some("ZXZh") => RenderFormat::Wave,
+            Some("ZmZp") => RenderFormat::Aiff,
+            Some("ZmZh") => RenderFormat::Caff,
+            Some("Y2Fs") => RenderFormat::Flac,
+            Some("bDNw") => RenderFormat::Mp3,
+            Some("U2dn") => RenderFormat::OggSpeex,
+            Some("dmdn") => RenderFormat::OggVorbis,
+            Some("a3B2") => RenderFormat::WavePack,
+            Some("IHdh") => RenderFormat::Raw,
+            Some("IG9z") => RenderFormat::Iso,
+            Some("IHBk") => RenderFormat::Ddp,
+            Some("UE1G") => RenderFormat::FFmpeg,
+            Some("IEZJ") => RenderFormat::Gif,
+            Some("IEZD") => RenderFormat::Lcf,
             _ => RenderFormat::Other(value),
         }
+    }
+}
+
+impl From<&str> for RenderFormat {
+    fn from(value: &str) -> Self {
+        Self::from(value.to_owned())
     }
 }
 
@@ -2390,8 +2491,9 @@ impl From<String> for RenderFormat {
 mod tests {
     use super::{
         BoundsMode, RenderDitherFlags, RenderLimitMode, RenderMode,
-        RenderMonoAdjustment, RenderNormalize, RenderNormalizeMode,
-        RenderNormalizeTargetMode, RenderSettings,
+        RenderFormat, RenderFormatSettings, RenderMonoAdjustment,
+        RenderNormalize, RenderNormalizeMode, RenderNormalizeTargetMode,
+        RenderSettings,
     };
     use super::{FullRenderSettings, Position};
     use std::path::PathBuf;
@@ -2499,6 +2601,36 @@ mod tests {
         assert_eq!(deserialized.primary_format, settings.primary_format);
         assert_eq!(deserialized.secondary_format, settings.secondary_format);
         assert_eq!(deserialized.srate, settings.srate);
+    }
+
+    #[test]
+    fn render_format_recognizes_ids_names_and_extensions() {
+        assert_eq!(RenderFormat::from("ZXZhdxgAAQ=="), RenderFormat::Wave);
+        assert_eq!(RenderFormat::from("evaw"), RenderFormat::Wave);
+        assert_eq!(RenderFormat::from("WAV"), RenderFormat::Wave);
+        assert_eq!(RenderFormat::from("oggv"), RenderFormat::OggVorbis);
+        assert_eq!(RenderFormat::from(""), RenderFormat::Other(String::new()));
+    }
+
+    #[test]
+    fn render_format_settings_preserve_dump_and_default() {
+        let custom_dump = "bDNwbYAAAAAAAAAAAgAAAP////8EAAAAgAAAAAAAAAA=";
+        let settings = RenderFormatSettings::from_raw(custom_dump);
+        assert_eq!(settings.format, RenderFormat::Mp3);
+        assert_eq!(settings.raw, custom_dump);
+
+        let default = RenderFormat::Wave.default_settings();
+        assert_eq!(default.format, RenderFormat::Wave);
+        assert_eq!(default.raw, RenderFormat::Wave.to_string());
+    }
+
+    #[test]
+    fn full_render_settings_loads_legacy_format_dump() {
+        let legacy = r#"{"primary_format":"Wave","secondary_format":null}"#;
+        let settings: FullRenderSettings =
+            serde_json::from_str(legacy).unwrap();
+        assert_eq!(settings.primary_format, Some(RenderFormat::Wave));
+        assert_eq!(settings.primary_format_config, None);
     }
 }
 

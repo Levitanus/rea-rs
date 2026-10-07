@@ -4,10 +4,10 @@ use c_str_macro::c_str;
 use float_eq::assert_float_eq;
 use log::{debug, info, warn};
 use rea_rs::{
-    ActionHook, ActionKind, AutomationMode, BoundsMode, Color, CommandId,
-    EnvelopeChunk, EnvelopePoint, EnvelopePointShape, EnvelopeSelector,
-    EnvelopeSendInfo, ExtState, GenericSend, GenericSendMut, HardwareSocket,
-    ItemFade, MarkerRegionInfo, MessageBoxValue, Pan, PanLaw, Pitch, PlayRate,
+    ActionKind, AutomationMode, BoundsMode, Color, CommandId, EnvelopeChunk,
+    EnvelopePoint, EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo,
+    ExtState, GenericSend, GenericSendMut, HardwareSocket, ItemFade,
+    MarkerRegionInfo, MessageBoxValue, Pan, PanLaw, Pitch, PlayRate,
     PluginContext, Position, Project, RazorEdit, ReaRsError, Reaper, RecInput,
     RecMode, RecMonitoring, RecOutMode, RenderFormat, RenderMode,
     RenderSettings, RenderTail, RenderTailFlags, SampleAmount,
@@ -68,7 +68,7 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
         render_settings(),
     ]
     .into_iter();
-    let user_interaction =
+    let _user_interaction =
         vec![browse_for_file(), get_user_inputs(), show_message_box()]
             .into_iter();
     iter::empty() //
