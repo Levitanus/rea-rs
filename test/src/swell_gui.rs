@@ -14,7 +14,7 @@ use rea_rs::{
 };
 use rea_rs_low::raw;
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, sync::Arc};
+use std::{cell::RefCell, sync::Arc, time::Duration};
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
 const DOCK_STATE_KEY: &str = "rea_rs_widget_gallery.dock";
@@ -30,7 +30,7 @@ const PAINT_OVER_ACTION: &str = "TestSwellPaintOver";
 const PAINT_OVER_DESCRIPTION: &str = "test swell paint-over";
 const CSURF_TYPE: &str = "REARSPAINTover";
 const TIMER_ID: usize = 0x5241;
-const TIMER_INTERVAL_MS: u32 = 33;
+const TIMER_INTERVAL: Duration = Duration::from_millis(33);
 const LIST_RESET_CONTENT: raw::UINT = 0x0184;
 const MIDI_CANVAS_CHILD_INDEX: usize = 1;
 const MIDI_C3_PITCH: i32 = 48;
@@ -970,7 +970,7 @@ impl WindowHandler for DemoWindow {
     }
     fn on_open(&mut self) {
         self.update_menu_state();
-        self.timer = self.window.start_timer(TIMER_ID, TIMER_INTERVAL_MS).ok();
+        self.timer = self.window.start_timer(TIMER_ID, TIMER_INTERVAL).ok();
         self.rebuild_tracks();
         self.refresh_play_position();
         ensure_surface_registered();

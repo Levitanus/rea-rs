@@ -1,3 +1,9 @@
+//! Owned menu trees and callback-scoped access to REAPER-customizable menus.
+//!
+//! [`Menu`] owns its native menu handle and destroys it on drop. By contrast,
+//! [`CustomMenuContext`] borrows a REAPER-owned handle only for the duration
+//! of the customization callback.
+
 use rea_rs_low::raw;
 use std::{ffi::CString, ptr};
 

@@ -12,10 +12,18 @@ use rea_rs_low::raw;
 use std::{cell::RefCell, collections::HashMap, ffi::CString, rc::Rc};
 
 /// Native control ID assigned to a child window.
+///
+/// IDs must be unique among controls belonging to the same native window.
+/// [`ControlId::new`] allocates a process-local value; explicit tuple
+/// construction is available when a stable, caller-managed ID is required.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct ControlId(pub i32);
 
 impl ControlId {
+    /// Allocates a process-local ID from the crate's control-ID sequence.
+    ///
+    /// This does not coordinate with IDs created outside this crate; avoid
+    /// collisions with IDs used by other native controls in the same window.
     pub fn new() -> Self {
         use std::sync::atomic::{AtomicI32, Ordering};
         static NEXT_ID: AtomicI32 = AtomicI32::new(10_000);
@@ -45,23 +53,35 @@ pub enum ControlKind {
 }
 
 /// Runtime binding between a logical/native control ID and its current HWND.
+///
+/// This is a non-owning snapshot. Its HWND can become stale after native
+/// destruction or recreation, and constructing this value does not validate
+/// that the ID, kind, or handle belong together.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ControlHandle {
+    /// Logical/native child control ID.
     pub id: ControlId,
+    /// Control family used when decoding native notifications.
     pub kind: ControlKind,
+    /// Current raw SWELL/Win32 handle; may be null or stale.
     pub hwnd: raw::HWND,
 }
 
-/// Rectangle used by control positioning helpers.
+/// Rectangle used by control positioning helpers, in parent-client pixels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ControlRect {
+    /// Left coordinate relative to the parent client area.
     pub x: i32,
+    /// Top coordinate relative to the parent client area.
     pub y: i32,
+    /// Positive width in pixels.
     pub width: i32,
+    /// Positive height in pixels.
     pub height: i32,
 }
 
 impl ControlRect {
+    /// Creates a rectangle in parent-client coordinates.
     pub fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
         Self {
             x,
@@ -92,56 +112,70 @@ pub struct NativeContainer {
 }
 
 impl NativeContainer {
+    /// Wraps a handle as a container without validating its HWND or kind.
     pub fn new(handle: ControlHandle) -> Self {
         Self { handle }
     }
 
+    /// Creates a container view over an existing control.
     pub fn from_control(control: ReaperControl) -> Self {
         Self::new(control.handle)
     }
 
+    /// Returns the logical container identity used for event routing.
     pub fn id(&self) -> ContainerId {
         ContainerId(self.handle.id)
     }
 
+    /// Returns the underlying control ID.
     pub fn control_id(&self) -> ControlId {
         self.handle.id
     }
 
+    /// Returns the non-owning raw HWND.
     pub fn hwnd(&self) -> raw::HWND {
         self.handle.hwnd
     }
 
+    /// Positions the native container in its parent client area.
     pub fn set_rect(&self, rect: ControlRect) -> ReaperResult<()> {
         ReaperControl::new(self.handle).set_rect(rect)
     }
 
+    /// Shows or hides the native container.
     pub fn show(&self, visible: bool) -> ReaperResult<()> {
         ReaperControl::new(self.handle).show(visible)
     }
 
+    /// Enables or disables the native container.
     pub fn enable(&self, enabled: bool) -> ReaperResult<()> {
         ReaperControl::new(self.handle).enable(enabled)
     }
 }
 
 impl ReaperControl {
+    /// Wraps a control handle without validating its HWND or kind.
     pub fn new(handle: ControlHandle) -> Self {
         Self { handle }
     }
 
+    /// Returns the stable logical control ID.
     pub fn id(&self) -> ControlId {
         self.handle.id
     }
 
+    /// Returns the kind recorded when the control was registered.
     pub fn kind(&self) -> ControlKind {
         self.handle.kind
     }
 
+    /// Returns the non-owning raw HWND. It may become stale after a native
+    /// window transition.
     pub fn hwnd(&self) -> raw::HWND {
         self.handle.hwnd
     }
 
+    /// Shows or hides the control.
     pub fn show(&self, visible: bool) -> ReaperResult<()> {
         let swell = ReaperWindow::swell()?;
         unsafe {
@@ -153,6 +187,7 @@ impl ReaperControl {
         Ok(())
     }
 
+    /// Enables or disables input to the control.
     pub fn enable(&self, enabled: bool) -> ReaperResult<()> {
         let swell = ReaperWindow::swell()?;
         unsafe {
@@ -161,6 +196,7 @@ impl ReaperControl {
         Ok(())
     }
 
+    /// Requests keyboard focus for the control.
     pub fn focus(&self) -> ReaperResult<()> {
         unsafe {
             ReaperWindow::swell()?.SetFocus(self.hwnd());
@@ -168,6 +204,7 @@ impl ReaperControl {
         Ok(())
     }
 
+    /// Sets the control's native text. Interior NUL bytes are rejected.
     pub fn set_text(&self, text: &str) -> ReaperResult<()> {
         let text = CString::new(text)?;
         let result = unsafe {
@@ -180,6 +217,9 @@ impl ReaperControl {
         }
     }
 
+    /// Reads the control text into a fixed-size buffer; long text may be
+    /// truncated and native empty/error results are returned as an empty
+    /// string.
     pub fn text(&self) -> ReaperResult<String> {
         let mut buffer = vec![0i8; 4096];
         let length = unsafe {
@@ -197,6 +237,8 @@ impl ReaperControl {
             .into_owned())
     }
 
+    /// Sets the control rectangle in parent-client pixels. Width and height
+    /// must be positive.
     pub fn set_rect(&self, rect: ControlRect) -> ReaperResult<()> {
         if rect.width < 1 || rect.height < 1 {
             return Err(ReaRsError::UnsuccessfulOperation(
@@ -217,6 +259,11 @@ impl ReaperControl {
         Ok(())
     }
 
+    /// Sends an arbitrary native message.
+    ///
+    /// This is a low-level escape hatch: message-specific integer values,
+    /// pointer validity, mutability, and pointer lifetimes are the caller's
+    /// responsibility. Prefer typed widget methods for routine operations.
     pub fn send_message(
         &self,
         msg: raw::UINT,
@@ -239,36 +286,49 @@ macro_rules! typed_control {
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         pub struct $name(ReaperControl);
         impl $name {
+            /// Wraps a control handle without validating its native kind.
             pub fn new(handle: ControlHandle) -> Self {
                 Self(ReaperControl::new(handle))
             }
+            /// Returns the common low-level control wrapper.
             pub fn control(&self) -> ReaperControl {
                 self.0
             }
+            /// Returns the logical control ID.
             pub fn id(&self) -> ControlId {
                 self.0.id()
             }
+            /// Returns the non-owning raw HWND.
             pub fn hwnd(&self) -> raw::HWND {
                 self.0.hwnd()
             }
+            /// Shows or hides the native control.
             pub fn show(&self, value: bool) -> ReaperResult<()> {
                 self.0.show(value)
             }
+            /// Enables or disables input to the native control.
             pub fn enable(&self, value: bool) -> ReaperResult<()> {
                 self.0.enable(value)
             }
+            /// Requests keyboard focus for the native control.
             pub fn focus(&self) -> ReaperResult<()> {
                 self.0.focus()
             }
+            /// Sets the native control text. Interior NUL bytes are rejected.
             pub fn set_text(&self, value: &str) -> ReaperResult<()> {
                 self.0.set_text(value)
             }
+            /// Reads text into a fixed-size buffer; long text may be
+            /// truncated.
             pub fn text(&self) -> ReaperResult<String> {
                 self.0.text()
             }
+            /// Sets the control rectangle in parent-client pixels.
             pub fn set_rect(&self, rect: ControlRect) -> ReaperResult<()> {
                 self.0.set_rect(rect)
             }
+            /// Sends a raw native message; the caller owns its parameter and
+            /// pointer-safety contract.
             pub fn send_message(
                 &self,
                 msg: raw::UINT,
@@ -297,21 +357,30 @@ typed_control!(TreeView, TreeView);
 
 macro_rules! virtual_typed_control {
     ($name:ident) => {
+        /// Experimental virtual control hosted inside a [`Canvas`].
+        ///
+        /// This control is not a native HWND, is not fully debugged, and may
+        /// change in future releases.
         #[derive(Clone, Copy)]
         pub struct $name(rea_rs_low::VirtualControl);
         impl $name {
+            /// Returns this virtual control's logical ID.
             pub fn id(&self) -> ControlId {
                 ControlId(self.0.id())
             }
+            /// Sets the control's rectangle in its Canvas coordinates.
             pub fn set_rect(&self, rect: ControlRect) {
                 self.0.set_rect(rect.x, rect.y, rect.width, rect.height);
             }
+            /// Shows or hides the virtual control.
             pub fn set_visible(&self, visible: bool) {
                 self.0.set_visible(visible);
             }
+            /// Enables or disables the virtual control.
             pub fn set_enabled(&self, enabled: bool) {
                 self.0.set_enabled(enabled);
             }
+            /// Sets the displayed text; embedded NUL bytes return an error.
             pub fn set_text(
                 &self,
                 text: &str,
@@ -329,33 +398,41 @@ virtual_typed_control!(VirtualSlider);
 virtual_typed_control!(VirtualListBox);
 
 impl VirtualIconButton {
+    /// Sets the checked state.
     pub fn set_checked(&self, checked: bool) {
         self.0.set_checked(checked);
     }
 }
 impl VirtualComboBox {
+    /// Appends an item and returns its zero-based native-style index.
     pub fn add_item(&self, text: &str) -> Result<i32, std::ffi::NulError> {
         self.0.add_item(text)
     }
+    /// Returns the selected item index, or the native no-selection sentinel.
     pub fn selection(&self) -> i32 {
         self.0.selection()
     }
+    /// Selects an item by index; native behavior applies to invalid indices.
     pub fn set_selection(&self, index: i32) {
         self.0.set_selection(index);
     }
 }
 impl VirtualSlider {
+    /// Sets the minimum, maximum, and center values.
     pub fn set_range(&self, min: i32, max: i32, center: i32) {
         self.0.set_range(min, max, center);
     }
+    /// Returns the current slider value.
     pub fn value(&self) -> i32 {
         self.0.value()
     }
+    /// Sets the current slider value.
     pub fn set_value(&self, value: i32) {
         self.0.set_value(value);
     }
 }
 impl VirtualListBox {
+    /// Appends an item and returns its zero-based native-style index.
     pub fn add_item(&self, text: &str) -> Result<i32, std::ffi::NulError> {
         self.0.add_item(text)
     }
@@ -379,16 +456,47 @@ impl GroupBox {
 }
 
 impl Button {
+    /// Sends the native button-click message.
     pub fn click(&self) -> ReaperResult<()> {
         self.send_message(raw::BM_CLICK, 0, 0).map(|_| ())
     }
 }
 
 impl CheckBox {
+    /// Returns whether the checkbox is in the checked state.
+    ///
+    /// An indeterminate native checkbox is reported as `false`; use
+    /// [`ReaperControl::send_message`] when the third native state matters.
     pub fn checked(&self) -> ReaperResult<bool> {
         Ok(self.send_message(raw::BM_GETCHECK, 0, 0)?
             == raw::BST_CHECKED as isize)
     }
+    /// Sets the checkbox to checked or unchecked.
+    pub fn set_checked(&self, checked: bool) -> ReaperResult<()> {
+        self.send_message(
+            raw::BM_SETCHECK,
+            if checked {
+                raw::BST_CHECKED as usize
+            } else {
+                raw::BST_UNCHECKED as usize
+            },
+            0,
+        )
+        .map(|_| ())
+    }
+}
+
+impl RadioButton {
+    /// Returns whether this radio button is checked.
+    pub fn checked(&self) -> ReaperResult<bool> {
+        Ok(self.send_message(raw::BM_GETCHECK, 0, 0)?
+            == raw::BST_CHECKED as isize)
+    }
+
+    /// Checks or unchecks this radio button.
+    ///
+    /// Native radio-group behavior (including unchecking siblings) depends on
+    /// the control styles and native parentage.
     pub fn set_checked(&self, checked: bool) -> ReaperResult<()> {
         self.send_message(
             raw::BM_SETCHECK,
@@ -404,19 +512,33 @@ impl CheckBox {
 }
 
 impl EditField {
+    /// Selects all text in the edit control.
     pub fn select_all(&self) -> ReaperResult<()> {
         self.send_message(raw::EM_SETSEL, 0, -1).map(|_| ())
     }
 }
 
 impl ComboBox {
+    /// Returns the native selection index, or `-1` when no item is selected.
     pub fn selected_index(&self) -> ReaperResult<i32> {
         Ok(self.send_message(raw::CB_GETCURSEL, 0, 0)? as i32)
     }
+
+    /// Returns the selected item index, or `None` when no item is selected.
+    pub fn selection(&self) -> ReaperResult<Option<usize>> {
+        let index = self.selected_index()?;
+        Ok(usize::try_from(index).ok())
+    }
+
+    /// Selects an item by zero-based index. `-1` clears the selection.
+    /// Selects the item at `index`. The index is zero-based; native behavior
+    /// determines how out-of-range values are handled.
     pub fn select(&self, index: i32) -> ReaperResult<()> {
         self.send_message(raw::CB_SETCURSEL, index as usize, 0)
             .map(|_| ())
     }
+    /// Appends text and returns the native item index or error sentinel.
+    /// Interior NUL bytes are rejected.
     pub fn add_item(&self, text: &str) -> ReaperResult<i32> {
         let text = CString::new(text)?;
         Ok(
@@ -427,13 +549,25 @@ impl ComboBox {
 }
 
 impl ListBox {
+    /// Returns the native selection index, or `-1` when no item is selected.
     pub fn selected_index(&self) -> ReaperResult<i32> {
         Ok(self.send_message(raw::LB_GETCURSEL, 0, 0)? as i32)
     }
+
+    /// Returns the selected item index, or `None` when no item is selected.
+    pub fn selection(&self) -> ReaperResult<Option<usize>> {
+        let index = self.selected_index()?;
+        Ok(usize::try_from(index).ok())
+    }
+
+    /// Selects an item by zero-based index. `-1` clears the selection.
+    /// Selects the item at `index`; `-1` clears the selection.
     pub fn select(&self, index: i32) -> ReaperResult<()> {
         self.send_message(raw::LB_SETCURSEL, index as usize, 0)
             .map(|_| ())
     }
+    /// Appends text and returns the native item index or error sentinel.
+    /// Interior NUL bytes are rejected.
     pub fn add_item(&self, text: &str) -> ReaperResult<i32> {
         let text = CString::new(text)?;
         Ok(
@@ -444,13 +578,17 @@ impl ListBox {
 }
 
 impl Trackbar {
+    /// Returns the current position.
     pub fn position(&self) -> ReaperResult<i32> {
         Ok(self.send_message(raw::TBM_GETPOS, 0, 0)? as i32)
     }
+    /// Sets the current position; native range semantics determine clamping.
     pub fn set_position(&self, value: i32) -> ReaperResult<()> {
         self.send_message(raw::TBM_SETPOS, 1, value as isize)
             .map(|_| ())
     }
+    /// Sets the range using SWELL/Win32's packed 16-bit low/high values.
+    /// Values outside the low 16 bits are truncated by this native encoding.
     pub fn set_range(&self, min: i32, max: i32) -> ReaperResult<()> {
         self.send_message(
             raw::TBM_SETRANGE,
@@ -462,10 +600,12 @@ impl Trackbar {
 }
 
 impl ProgressBar {
+    /// Sets the current progress position.
     pub fn set_position(&self, value: i32) -> ReaperResult<()> {
         self.send_message(raw::PBM_SETPOS, value as usize, 0)
             .map(|_| ())
     }
+    /// Sets the progress range. This does not clamp an already-set position.
     pub fn set_range(&self, min: u16, max: u16) -> ReaperResult<()> {
         let packed = ((max as u32) << 16) | min as u32;
         self.send_message(raw::PBM_SETRANGE, 0, packed as isize)
@@ -536,8 +676,12 @@ impl ControlRegistry {
 /// Synchronous widget factory passed to [`ReaperWindow::build_ui`].
 ///
 /// The root context is deliberately just a creation surface over the window;
-/// it does not create an implicit panel.  Layout panels are available through
-/// the opt-in helper methods below.
+/// it does not create an implicit panel. Child widgets are created immediately
+/// as native controls. Methods such as [`Self::group_box`], [`Self::row`], and
+/// [`Self::scroll_view`] create a structural native parent and return a
+/// context that creates children under it. [`Self::panel`] is currently a
+/// pass-through and does not allocate a panel or alter layout; use the pure
+/// [`super::layout::PanelLayout`] API for panel allocation.
 pub struct CreationContext<'a> {
     window: &'a ReaperWindow,
     parent: raw::HWND,
@@ -557,6 +701,7 @@ impl<'a> CreationContext<'a> {
         size.into()
     }
 
+    /// Sets the layout insets for this context's current flow container.
     pub fn with_insets(self, insets: super::layout::Insets) -> Self {
         let mut layout = self.window.layout.borrow_mut();
         let node = match self.container {
@@ -570,6 +715,7 @@ impl<'a> CreationContext<'a> {
         self
     }
 
+    /// Creates a push button and registers it for this context's layout.
     pub fn button(
         &self,
         id: ControlId,
@@ -586,6 +732,8 @@ impl<'a> CreationContext<'a> {
         Ok(control)
     }
 
+    /// Creates a radio button with the supplied native style bits.
+    /// `styles` is passed through to SWELL/Win32 and is backend-dependent.
     pub fn radio_button(
         &self,
         id: ControlId,
@@ -604,6 +752,7 @@ impl<'a> CreationContext<'a> {
         Ok(control)
     }
 
+    /// Creates a trackbar with native style bits passed through unchanged.
     pub fn trackbar(
         &self,
         id: ControlId,
@@ -620,6 +769,7 @@ impl<'a> CreationContext<'a> {
         Ok(control)
     }
 
+    /// Creates a progress bar with native style bits passed through unchanged.
     pub fn progress_bar(
         &self,
         id: ControlId,
@@ -636,6 +786,7 @@ impl<'a> CreationContext<'a> {
         Ok(control)
     }
 
+    /// Creates a tab control with native style bits passed through unchanged.
     pub fn tab_control(
         &self,
         id: ControlId,
@@ -652,6 +803,7 @@ impl<'a> CreationContext<'a> {
         Ok(control)
     }
 
+    /// Creates a list view with native style bits passed through unchanged.
     pub fn list_view(
         &self,
         id: ControlId,
@@ -668,6 +820,7 @@ impl<'a> CreationContext<'a> {
         Ok(control)
     }
 
+    /// Creates a tree view with native style bits passed through unchanged.
     pub fn tree_view(
         &self,
         id: ControlId,
@@ -684,6 +837,8 @@ impl<'a> CreationContext<'a> {
         Ok(control)
     }
 
+    /// Creates an edit field with native style/flag bits passed through.
+    /// Their exact multiline and scrolling behavior depends on the backend.
     pub fn edit_field(
         &self,
         id: ControlId,
@@ -700,6 +855,7 @@ impl<'a> CreationContext<'a> {
         Ok(control)
     }
 
+    /// Creates a static text label and registers it for layout.
     pub fn label(
         &self,
         id: ControlId,
@@ -716,6 +872,7 @@ impl<'a> CreationContext<'a> {
         Ok(control)
     }
 
+    /// Creates a checkbox and registers it for layout.
     pub fn checkbox(
         &self,
         id: ControlId,
@@ -732,6 +889,7 @@ impl<'a> CreationContext<'a> {
         Ok(control)
     }
 
+    /// Creates a combo box with native flag bits passed through unchanged.
     pub fn combo_box(
         &self,
         id: ControlId,
@@ -748,6 +906,7 @@ impl<'a> CreationContext<'a> {
         Ok(control)
     }
 
+    /// Creates a list box with native style bits passed through unchanged.
     pub fn list_box(
         &self,
         id: ControlId,
@@ -764,7 +923,10 @@ impl<'a> CreationContext<'a> {
         Ok(control)
     }
 
-    /// Uses the existing declarative flow layout as an opt-in container.
+    /// Returns this context unchanged.
+    ///
+    /// `panel` currently has no effect on native parentage or placement. Use
+    /// [`super::layout::PanelLayout`] directly when panel geometry is needed.
     pub fn panel(&self, _panel: Panel) -> CreationContext<'a> {
         CreationContext {
             window: self.window,
@@ -773,10 +935,14 @@ impl<'a> CreationContext<'a> {
         }
     }
 
+    /// Selects the nominal central panel; currently equivalent to
+    /// [`Self::panel`].
     pub fn central_panel(&self) -> CreationContext<'a> {
         self.panel(Panel::Central)
     }
 
+    /// Creates a native group box and returns a context for its child
+    /// controls.
     pub fn group_box(
         &self,
         id: ControlId,
@@ -842,6 +1008,11 @@ impl<'a> CreationContext<'a> {
         })
     }
 
+    /// Creates a clipped scroll viewport and returns a child creation context.
+    ///
+    /// `Auto` selects CoolSB when available, otherwise native scrollbars on
+    /// Windows. It returns an error when no automatic backend is available;
+    /// explicitly requested unsupported renderers also return an error.
     pub fn scroll_view(
         &self,
         id: ControlId,
@@ -951,7 +1122,10 @@ impl<'a> CreationContext<'a> {
 
     /// Creates a structural child HWND intended for custom retained drawing.
     /// The child is registered by `id` and receives its own paint/input
-    /// dispatch while sharing the parent handler's retained resources.
+    /// dispatch while sharing the parent handler's retained resources. It is
+    /// currently registered as a layout container and may receive flow-based
+    /// child positioning; the opt-in isolated viewport behavior has not yet
+    /// been implemented.
     pub fn canvas(
         &self,
         id: ControlId,
@@ -979,6 +1153,10 @@ impl<'a> CreationContext<'a> {
         Ok(Canvas { id, hwnd })
     }
 
+    /// Creates an experimental virtual icon button inside a registered Canvas.
+    ///
+    /// Virtual controls are not native HWNDs, are not fully debugged, and may
+    /// change in future releases.
     pub fn virtual_icon_button(
         &self,
         id: ControlId,
@@ -994,6 +1172,8 @@ impl<'a> CreationContext<'a> {
         .map(VirtualIconButton)
     }
 
+    /// Creates an experimental virtual text control inside a registered
+    /// Canvas.
     pub fn virtual_static_text(
         &self,
         id: ControlId,
@@ -1009,6 +1189,7 @@ impl<'a> CreationContext<'a> {
         .map(VirtualStaticText)
     }
 
+    /// Creates an experimental virtual combo box inside a registered Canvas.
     pub fn virtual_combo_box(
         &self,
         id: ControlId,
@@ -1024,6 +1205,7 @@ impl<'a> CreationContext<'a> {
         .map(VirtualComboBox)
     }
 
+    /// Creates an experimental virtual slider inside a registered Canvas.
     pub fn virtual_slider(
         &self,
         id: ControlId,
@@ -1039,6 +1221,7 @@ impl<'a> CreationContext<'a> {
         .map(VirtualSlider)
     }
 
+    /// Creates an experimental virtual list box inside a registered Canvas.
     pub fn virtual_list_box(
         &self,
         id: ControlId,
@@ -1096,6 +1279,9 @@ impl<'a> CreationContext<'a> {
         Ok(control)
     }
 
+    /// Registers or replaces the event callback for a control ID.
+    /// The callback returns a routing response that determines whether event
+    /// dispatch is handled or forwarded.
     pub fn on_widget_event(
         &self,
         id: ControlId,
@@ -1105,6 +1291,7 @@ impl<'a> CreationContext<'a> {
         self.window.on_widget_event(id, callback);
     }
 
+    /// Registers or replaces the callback for scroll movements from a view.
     pub fn on_scroll_view_event(
         &self,
         id: ControlId,
@@ -1114,6 +1301,8 @@ impl<'a> CreationContext<'a> {
         self.window.on_scroll_view_event(id, callback);
     }
 
+    /// Registers or replaces the callback for events bubbled from a
+    /// container's child controls.
     pub fn on_container_event(
         &self,
         id: super::widgets::ContainerId,
@@ -1134,24 +1323,31 @@ pub struct Canvas {
 }
 
 impl Canvas {
+    /// Returns the logical canvas ID.
     pub fn id(&self) -> ControlId {
         self.id
     }
+    /// Returns the non-owning raw child HWND.
     pub fn hwnd(&self) -> raw::HWND {
         self.hwnd
     }
+    /// Requests keyboard focus for the canvas.
     pub fn focus(&self) -> ReaperResult<()> {
         unsafe { Reaper::get().swell().SetFocus(self.hwnd) };
         Ok(())
     }
+    /// Captures mouse input to this canvas until capture is released or lost.
     pub fn capture(&self) -> ReaperResult<()> {
         unsafe { Reaper::get().swell().SetCapture(self.hwnd) };
         Ok(())
     }
+    /// Releases the current thread's mouse capture.
     pub fn release_capture(&self) -> ReaperResult<()> {
         Reaper::get().swell().ReleaseCapture();
         Ok(())
     }
+    /// Positions the canvas in parent-client pixels. Width and height must be
+    /// positive.
     pub fn set_rect(&self, rect: ControlRect) -> ReaperResult<()> {
         if rect.width < 1 || rect.height < 1 {
             return Err(ReaRsError::UnsuccessfulOperation(

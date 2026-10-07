@@ -1,4 +1,20 @@
-//! High-level, platform-neutral APIs for REAPER's SWELL GUI.
+//! High-level APIs for building and interacting with REAPER's SWELL GUI.
+//!
+//! The API provides typed controls, window lifecycle helpers, layout and
+//! scrolling primitives, event decoding, menus, and retained GDI/LICE drawing
+//! resources. It wraps SWELL/Win32 behavior rather than promising identical
+//! native behavior on every backend; APIs that call REAPER or SWELL generally
+//! require REAPER to be initialized and should be used on its UI thread.
+//!
+//! Public APIs are available through this module (for example,
+//! `rea_rs::swell_gui::widgets::CreationContext`) and selected commonly used
+//! types are re-exported at the crate root (for example,
+//! `rea_rs::ReaperWindow`). The submodules group APIs by responsibility:
+//! [`drawing`] for resources and paint surfaces, [`events`] for decoded input,
+//! [`layout`] for geometry and flow layout, [`menu`] for native menus,
+//! [`scroll`] for scroll state, [`widgets`] for controls and their creation,
+//! [`windowing`] for window operations, and [`windows`] for window ownership
+//! and callbacks. Native procedure dispatch is an implementation detail.
 
 pub mod drawing;
 pub mod events;

@@ -79,14 +79,19 @@ impl WindowPlacement {
     }
 }
 
-/// Position of a REAPER docker.
+/// Position of a REAPER docker as reported by REAPER.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub enum DockPosition {
+    /// Docked at the bottom of the main window.
     Bottom = 0,
+    /// Docked at the left of the main window.
     Left = 1,
+    /// Docked at the top of the main window.
     Top = 2,
+    /// Docked at the right of the main window.
     Right = 3,
+    /// Not docked; shown as a floating window.
     Floating = 4,
 }
 
@@ -111,17 +116,26 @@ impl TryFrom<i32> for DockPosition {
 /// Description of a new top-level REAPER window.
 #[derive(Clone, Debug)]
 pub struct WindowSpec {
+    /// Initial title shown by the native window.
     pub title: String,
+    /// Requested initial outer width in pixels.
     pub width: i32,
+    /// Requested initial outer height in pixels.
     pub height: i32,
+    /// Whether the user can resize the window.
     pub resizable: bool,
+    /// Whether the window omits its minimize button.
     pub no_minimize: bool,
+    /// Whether the window omits its close button.
     pub no_close: bool,
+    /// Stable logical identifier used for REAPER docking and saved placement.
     pub dock_ident: String,
+    /// Whether registration may show the window automatically.
     pub allow_show: bool,
 }
 
 impl WindowSpec {
+    /// Creates a window specification with standard resizable-window defaults.
     pub fn new(title: impl Into<String>) -> Self {
         let title = title.into();
         let dock_ident =
@@ -138,32 +152,38 @@ impl WindowSpec {
         }
     }
 
+    /// Sets the requested initial outer size in pixels; zero is raised to one.
     pub fn size(mut self, width: u32, height: u32) -> Self {
         self.width = width.max(1) as i32;
         self.height = height.max(1) as i32;
         self
     }
 
+    /// Sets whether the window can be resized by the user.
     pub fn resizable(mut self, value: bool) -> Self {
         self.resizable = value;
         self
     }
 
+    /// Sets whether the window omits its minimize button.
     pub fn no_minimize(mut self, value: bool) -> Self {
         self.no_minimize = value;
         self
     }
 
+    /// Sets whether the window omits its close button.
     pub fn no_close(mut self, value: bool) -> Self {
         self.no_close = value;
         self
     }
 
+    /// Sets the stable REAPER docker identifier used for saved placement.
     pub fn dock_ident(mut self, ident: impl Into<String>) -> Self {
         self.dock_ident = ident.into();
         self
     }
 
+    /// Sets whether registration may show the window automatically.
     pub fn allow_show(mut self, value: bool) -> Self {
         self.allow_show = value;
         self
@@ -177,22 +197,41 @@ impl Default for WindowSpec {
 }
 
 /// Callback interface for an owned REAPER window.
+///
+/// Callbacks are invoked by native window dispatch, normally on REAPER's UI
+/// thread. They should return promptly and avoid holding mutable REAPER state
+/// across nested native message loops. Default implementations ignore events;
+/// `on_close` permits closing and event callbacks report whether they handled
+/// the event. Callback panics are not converted into errors by this trait.
 pub trait WindowHandler: 'static {
+    /// Returns the stable logical identity used to register this window.
     fn window_id(&self) -> WindowId;
+    /// Returns the window wrapper managed by this handler.
     fn window(&self) -> &ReaperWindow;
+    /// Called after the window is opened and registered for dispatch.
     fn on_open(&mut self) {}
+    /// Called when native close is requested. Return `true` to allow closing.
     fn on_close(&mut self) -> bool {
         true
     }
+    /// Called during final destruction, after the window ceases to be usable.
     fn on_destroy(&mut self) {}
+    /// Called for a decoded menu command.
     fn on_command(&mut self, _command: super::events::WindowCommand) {}
+    /// Called for a decoded native or virtual control notification.
     fn on_control_event(&mut self, _event: super::events::ControlEvent) {}
+    /// Called after the client area changes size; dimensions are client
+    /// pixels.
     fn on_resize(&mut self, _width: i32, _height: i32) {}
+    /// Called when native activation changes; `active` is the new state.
     fn on_activate(&mut self, _active: bool) {}
+    /// Called for a `WM_TIMER` notification. `id` is the native timer ID.
     fn on_timer(&mut self, _id: usize) {}
+    /// Called for general window input. Return `true` to mark it handled.
     fn on_event(&mut self, _event: super::events::WindowEvent) -> bool {
         false
     }
+    /// Called for input routed to a child widget. Return `true` if handled.
     fn on_widget_event(
         &mut self,
         _id: ControlId,
@@ -200,6 +239,8 @@ pub trait WindowHandler: 'static {
     ) -> bool {
         false
     }
+    /// Called when a message is offered to the host-message hook.
+    /// Return `true` to claim handling; otherwise native dispatch continues.
     fn handle_host_message(&self, _message: u32) -> bool {
         false
     }
@@ -466,26 +507,33 @@ pub(super) fn render_with_lice(
 }
 
 impl<'a> ScrollView<'a> {
+    /// Returns the logical control ID assigned to this viewport.
     pub fn id(&self) -> ControlId {
         self.id
     }
 
+    /// Returns the raw HWND that owns the scrollbars and viewport.
     pub fn hwnd(&self) -> raw::HWND {
         self.view
     }
 
+    /// Returns the translated child HWND that contains created widgets.
     pub fn content_hwnd(&self) -> raw::HWND {
         self.content
     }
 
+    /// Returns the renderer selected at creation time.
     pub fn renderer(&self) -> ScrollbarRenderer {
         self.renderer
     }
 
+    /// Returns a copy of the current pure scroll state.
     pub fn state(&self) -> ScrollState {
         *self.state.borrow()
     }
 
+    /// Sets the virtual content extent in pixels and clamps the current
+    /// offset.
     pub fn set_content_size(&self, size: super::layout::Size) {
         let state = {
             let mut state = self.state.borrow_mut();
@@ -496,6 +544,7 @@ impl<'a> ScrollView<'a> {
         self.sync_scrollbars();
     }
 
+    /// Sets the requested viewport dimensions in pixels.
     pub fn set_viewport_size(&self, size: super::layout::Size) {
         self.viewport.set(size);
         let mut state = self.state.borrow_mut();
@@ -683,6 +732,8 @@ impl<'a> ScrollView<'a> {
         );
     }
 
+    /// Scrolls by a signed pixel delta, clamps the offset, and emits a
+    /// programmatic scroll event.
     pub fn scroll_by(&self, axis: Axis, delta: i32) -> ScrollViewEvent {
         let mut state = self.state.borrow_mut();
         *state = state.scroll_by(axis, delta);
@@ -867,6 +918,11 @@ impl ReaperWindow {
     /// The LICE render bitmap is allocated lazily on the next paint.
     /// The callback's error is logged and the partially rendered bitmap is
     /// not presented.
+    /// Registers or replaces the custom LICE renderer for this window.
+    ///
+    /// The retained bitmap is allocated lazily. Rendering occurs during native
+    /// paint dispatch; callback errors are logged and the failed frame is not
+    /// presented. The surface is valid only for the callback invocation.
     pub fn on_render<F>(&self, callback: F) -> anyhow::Result<()>
     where
         F: for<'surface> FnMut(
@@ -882,6 +938,7 @@ impl ReaperWindow {
     }
 
     /// Registers or replaces a LICE renderer for custom child widgets.
+    /// The surface is valid only for the callback invocation.
     pub fn on_render_widget<F>(&self, callback: F) -> anyhow::Result<()>
     where
         F: for<'surface> FnMut(
@@ -907,7 +964,8 @@ impl ReaperWindow {
         Ok(())
     }
 
-    /// Removes the custom renderers and releases the retained LICE bitmap.
+    /// Removes the custom renderers and releases the retained LICE bitmap and
+    /// virtual control hosts.
     pub fn clear_render(&self) -> ReaperResult<()> {
         self.check_window()?;
         self.render_callback.borrow_mut().take();
@@ -919,8 +977,8 @@ impl ReaperWindow {
         self.invalidate(None)
     }
 
-    /// Replaces the window's child UI by invoking `build` with a fresh root
-    /// creation context. The top-level window and its lifecycle remain intact.
+    /// Clears the current child UI and returns a fresh root creation context.
+    /// The top-level window and its lifecycle remain intact.
     pub fn build_ui<'a>(&'a self) -> anyhow::Result<CreationContext<'a>> {
         self.reset_ui();
         Ok(CreationContext::new(self))
@@ -1394,6 +1452,10 @@ impl ReaperWindow {
         })
     }
 
+    /// Wraps a valid existing HWND without taking ownership of it.
+    ///
+    /// The wrapper validates the handle at construction, but the native window
+    /// can later be destroyed or recreated. Operations re-check validity.
     pub fn from_hwnd(hwnd: raw::HWND) -> ReaperResult<Self> {
         Self::from_hwnd_with_dock_ident(hwnd, None)
     }

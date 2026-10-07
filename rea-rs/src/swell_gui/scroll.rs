@@ -3,6 +3,9 @@
 //! This module deliberately does not own HWNDs. A native viewport can use
 //! [`ScrollState`] to calculate scrollbar metrics and the content offset, then
 //! apply that offset to its content window.
+//! Offsets and extents are measured in pixels from the content's top-left
+//! corner. A state value is pure data and does not itself move a native
+//! window.
 
 use super::layout::{Axis, Size};
 
@@ -52,11 +55,21 @@ pub(crate) const fn scrollbar_range_max(content_extent: u32) -> u32 {
 /// The scrollbar backend requested by a native ScrollView.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScrollbarRenderer {
+    /// Use the platform's standard scrollbar implementation. This is only
+    /// supported on Windows and returns an error on other SWELL backends.
     Native,
+    /// Use REAPER's CoolSB implementation. This returns an error when the
+    /// running REAPER backend does not provide CoolSB.
     CoolSb,
     /// Use REAPER CoolSB when available, otherwise use the platform-native
     /// backend when supported. The selected backend is exposed by the handle.
     Auto,
+}
+
+impl Default for ScrollbarRenderer {
+    fn default() -> Self {
+        Self::Auto
+    }
 }
 
 /// Visibility of the two viewport-owned scrollbars.
@@ -340,6 +353,11 @@ mod tests {
         ScrollState::with_line_step(10)
             .set_content(Size { x: 500, y: 1_000 })
             .set_viewport(Size { x: 100, y: 200 })
+    }
+
+    #[test]
+    fn default_renderer_uses_automatic_selection() {
+        assert_eq!(ScrollbarRenderer::default(), ScrollbarRenderer::Auto);
     }
 
     #[test]

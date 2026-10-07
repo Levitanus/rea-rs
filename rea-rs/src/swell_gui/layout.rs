@@ -2,6 +2,11 @@
 //!
 //! This module deliberately does not know about HWNDs. Native containers use
 //! these results to position themselves and their child windows.
+//! Dimensions and flow-layout coordinates are non-negative logical pixels;
+//! converting native signed coordinates to these types clamps negative
+//! origins to zero. Use signed native rectangles directly when negative
+//! screen-space coordinates (such as monitors left of the primary display)
+//! must be preserved.
 
 use log::trace;
 use rea_rs_low::raw;

@@ -1,3 +1,9 @@
+//! Semantic events decoded from SWELL/Win32 messages.
+//!
+//! These values retain the logical control identity and commonly useful
+//! payload while hiding native message decoding. They do not own controls or
+//! guarantee that a control remains registered after an event is delivered.
+
 use super::layout::Point;
 use super::scroll::ScrollOffset;
 use super::widgets::{ControlId, ControlKind};

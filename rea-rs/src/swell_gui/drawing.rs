@@ -1,8 +1,8 @@
 //! Retained SWELL resources and LICE drawing surfaces.
 //!
 //! Resource owners are independent of windows and creation contexts. Keep
-//! them in a concrete [`WindowHandler`]. LICE surfaces are borrowed only for
-//! the duration of a paint callback.
+//! them in a concrete [`super::windows::WindowHandler`]. LICE surfaces are
+//! borrowed only for the duration of a paint callback.
 
 use super::layout::{Point, Rect};
 use super::widgets::ListView;
@@ -12,7 +12,11 @@ use rea_rs_low::raw::{self, LICE_IBitmap, LICE_IFont, LICE_pixel};
 use std::{ffi::CString, marker::PhantomData, ptr::NonNull};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Text alignment and layout flags accepted by SWELL drawing operations.
+///
+/// These are native `DT_*` flags. Not every backend honors every combination.
 pub struct DrawTextOptions {
+    /// Combined native alignment and line-layout flags.
     pub alignment: DrawTextFlags,
 }
 
@@ -32,19 +36,12 @@ bitflags::bitflags! {
     }
 }
 
-impl DrawTextFlags {
-    fn raw(self) -> i32 {
-        self.bits()
-    }
-}
-
 impl DrawTextOptions {
+    /// Creates options from native-compatible draw-text flags.
     pub const fn new(alignment: DrawTextFlags) -> Self {
         Self { alignment }
     }
 }
-
-impl DrawTextFlags {}
 
 impl Default for DrawTextOptions {
     fn default() -> Self {
@@ -57,19 +54,33 @@ impl Default for DrawTextOptions {
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, IntEnum)]
 pub enum LiceCombineMode {
+    /// Replace destination pixels with source pixels.
     Copy = 0,
+    /// Add source color to destination.
     Add = 1,
+    /// LICE dodge blend mode.
     Dodge = 2,
+    /// Multiply source and destination colors.
     Multiply = 3,
+    /// LICE overlay blend mode.
     Overlay = 4,
+    /// Adjust hue, saturation, and value using source pixels.
     HsvAdjust = 5,
 }
 
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, IntEnum)]
 pub enum LiceBitmapKind {
+    /// CPU-memory-backed bitmap.
     Memory = 0,
+    /// System bitmap suitable for APIs requiring an HDC.
     System = 1,
+}
+
+impl LiceBitmapKind {
+    fn raw(self) -> i32 {
+        self.int_value()
+    }
 }
 
 /// The ListView image-list slot receiving an attached image list.
@@ -91,11 +102,14 @@ pub struct Bitmap {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImageSize {
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
 }
 
 impl ImageSize {
+    /// Creates dimensions in pixels.
     pub const fn new(width: u32, height: u32) -> Self {
         Self { width, height }
     }
@@ -110,6 +124,7 @@ pub struct LicePoint {
 }
 
 impl LicePoint {
+    /// Creates a subpixel point in bitmap pixels.
     pub const fn new(x: f64, y: f64) -> Self {
         Self { x, y }
     }
@@ -125,6 +140,7 @@ pub struct LiceRect {
 }
 
 impl LiceRect {
+    /// Creates a subpixel rectangle in bitmap pixels.
     pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
         Self {
             x,
@@ -214,8 +230,11 @@ impl Drop for Icon {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LiceBlitOptions {
+    /// Pixel-combination mode.
     pub mode: LiceCombineMode,
+    /// Request bilinear sampling when scaling.
     pub bilinear: bool,
+    /// Include source alpha in the blend.
     pub use_source_alpha: bool,
 }
 
@@ -239,8 +258,11 @@ impl LiceBlitOptions {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LiceTextOptions {
+    /// Text alignment and layout flags.
     pub flags: DrawTextFlags,
+    /// Pixel-combination behavior for the text.
     pub combine: LiceBlitOptions,
+    /// Text opacity, clamped to the inclusive range `0.0..=1.0`.
     pub alpha: f32,
 }
 
@@ -304,16 +326,25 @@ pub enum FontCharset {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FontSpec {
+    /// Requested face name. Non-ASCII bytes are replaced when converted to
+    /// the native fixed-width LOGFONT face-name field.
     pub face: String,
+    /// Requested font size in pixels.
     pub size: u32,
+    /// Native LOGFONT weight.
     pub weight: u16,
+    /// Whether the font is italic.
     pub italic: bool,
+    /// Whether the font is underlined.
     pub underline: bool,
+    /// Whether the font is struck out.
     pub strikeout: bool,
+    /// Character-set hint passed to the backend.
     pub charset: FontCharset,
 }
 
 impl FontSpec {
+    /// Creates a font specification with a 14-pixel regular default.
     pub fn new(font_face: impl Into<String>) -> Self {
         Self {
             face: font_face.into(),
@@ -325,26 +356,32 @@ impl FontSpec {
             charset: FontCharset::Default,
         }
     }
+    /// Sets the requested pixel size; zero is raised to one.
     pub fn set_size(mut self, size: u32) -> Self {
         self.size = size.max(1);
         self
     }
+    /// Sets the native LOGFONT weight.
     pub fn set_weight(mut self, weight: u16) -> Self {
         self.weight = weight;
         self
     }
+    /// Enables or disables italic styling.
     pub fn set_italic(mut self, value: bool) -> Self {
         self.italic = value;
         self
     }
+    /// Enables or disables underline styling.
     pub fn set_underline(mut self, value: bool) -> Self {
         self.underline = value;
         self
     }
+    /// Enables or disables strikeout styling.
     pub fn set_strikedout(mut self, value: bool) -> Self {
         self.strikeout = value;
         self
     }
+    /// Sets the native character-set hint.
     pub fn set_charset(mut self, charset: FontCharset) -> Self {
         self.charset = charset;
         self
@@ -373,7 +410,9 @@ impl FontSpec {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PaintInfo {
+    /// Damaged region that triggered painting, in client coordinates.
     pub damage_rect: Rect,
+    /// Full client-area bounds, in client coordinates.
     pub client_rect: Rect,
 }
 
@@ -399,6 +438,8 @@ impl Brush {
             .ok_or(ReaRsError::NullPtr("solid brush"))
     }
 
+    /// Creates an alpha brush where supported. Alpha is clamped to
+    /// `0.0..=1.0`; Windows falls back to an opaque solid brush.
     pub fn alpha(color: Color, alpha: f32) -> ReaperResult<Self> {
         #[cfg(target_family = "unix")]
         {
@@ -420,10 +461,6 @@ impl Brush {
             Self::solid(color)
         }
     }
-
-    fn raw(&self) -> raw::HBRUSH {
-        self.handle.as_ptr() as raw::HBRUSH
-    }
 }
 
 impl Drop for Brush {
@@ -444,6 +481,7 @@ impl Pen {
         Self::with_style(width, color, PenStyle::Solid)
     }
 
+    /// Creates a styled pen. Width is in pixels and must be nonzero.
     pub fn with_style(
         width: u32,
         color: Color,
@@ -468,6 +506,8 @@ impl Pen {
             .ok_or(ReaRsError::NullPtr("pen"))
     }
 
+    /// Creates an alpha pen where supported. Alpha is clamped to `0.0..=1.0`;
+    /// Windows falls back to an opaque solid pen.
     pub fn alpha(width: u32, color: Color, alpha: f32) -> ReaperResult<Self> {
         if width == 0 {
             return Err(ReaRsError::UnsuccessfulOperation(
@@ -498,10 +538,6 @@ impl Pen {
             Self::solid(width, color)
         }
     }
-
-    fn raw(&self) -> raw::HPEN {
-        self.handle.as_ptr() as raw::HPEN
-    }
 }
 
 impl Drop for Pen {
@@ -516,10 +552,12 @@ pub struct Font {
 }
 
 impl Font {
+    /// Creates a native font from a high-level specification.
     pub fn new(spec: FontSpec) -> ReaperResult<Self> {
         Self::from_logfont(spec.to_logfont())
     }
 
+    /// Creates a font from a LOGFONT value.
     pub fn from_logfont(mut logfont: raw::LOGFONT) -> ReaperResult<Self> {
         let handle =
             unsafe { Reaper::get().swell().CreateFontIndirect(&mut logfont) };
@@ -531,6 +569,9 @@ impl Font {
             .ok_or(ReaRsError::NullPtr("font"))
     }
 
+    /// Wraps a non-null HFONT. This wrapper assumes responsibility for
+    /// releasing it with `DeleteObject`; do not use this with a borrowed
+    /// handle.
     pub fn from_handle(handle: raw::HFONT) -> ReaperResult<Self> {
         NonNull::new(handle)
             .map(|handle| Self {
@@ -559,15 +600,10 @@ pub struct LiceBitmap {
     swell: rea_rs_low::Swell,
 }
 
-impl LiceBitmapKind {
-    fn raw(self) -> i32 {
-        self.int_value()
-    }
-}
-
 /// LICE bitmap storage allocation policy. Exact meanings are those of
 /// `LICE_CreateBitmap` in the running REAPER backend.
 impl LiceBitmap {
+    /// Creates a bitmap with the requested LICE storage kind and dimensions.
     pub fn with_kind(
         kind: LiceBitmapKind,
         width: u32,
@@ -576,6 +612,7 @@ impl LiceBitmap {
         Self::new(kind, width, height)
     }
 
+    /// Creates a bitmap with the requested LICE storage kind and dimensions.
     pub fn new(
         kind: LiceBitmapKind,
         width: u32,
@@ -610,23 +647,27 @@ impl LiceBitmap {
             .ok_or(ReaRsError::NullPtr("LICE bitmap"))
     }
 
-    pub fn load_png(
-        filename: &str,
-        kind: LiceBitmapKind,
-        width: u32,
-        height: u32,
-    ) -> ReaperResult<Self> {
-        let bitmap = Self::create(kind, width, height)?;
+    /// Loads a PNG into a newly allocated memory-backed bitmap.
+    ///
+    /// The bitmap dimensions are taken from the image. Loading fails if the
+    /// filename contains an interior NUL byte or the native loader returns
+    /// null. Use [`Self::new`] and an explicit load operation when a System
+    /// bitmap/HDC-compatible destination is required.
+    pub fn load_png(filename: &str) -> ReaperResult<Self> {
         let filename = CString::new(filename)?;
-        let loaded = unsafe {
-            Reaper::get()
-                .low()
-                .LICE_LoadPNG(filename.as_ptr(), bitmap.handle.as_ptr())
+        let low = *Reaper::get().low();
+        let swell = *Reaper::get().swell();
+        let handle = unsafe {
+            low.LICE_LoadPNG(filename.as_ptr(), std::ptr::null_mut())
         };
-        if loaded.is_null() {
-            return Err(ReaRsError::UnsuccessfulOperation("LICE_LoadPNG"));
-        }
-        Ok(bitmap)
+        NonNull::new(handle)
+            .map(|handle| Self {
+                handle,
+                _mode: LiceBitmapKind::Memory.raw(),
+                low,
+                swell,
+            })
+            .ok_or(ReaRsError::UnsuccessfulOperation("LICE_LoadPNG"))
     }
 
     pub fn load_png_resource(
@@ -708,6 +749,7 @@ pub struct LiceFont {
 }
 
 impl LiceFont {
+    /// Creates a LICE font that retains the native font for its lifetime.
     pub fn from_font(font: Font) -> ReaperResult<Self> {
         let handle = Reaper::get().low().LICE_CreateFont();
         let handle =
@@ -726,6 +768,7 @@ impl LiceFont {
         })
     }
 
+    /// Sets the text color.
     pub fn set_text_color(&mut self, color: Color) {
         unsafe {
             Reaper::get()
@@ -734,6 +777,7 @@ impl LiceFont {
         }
     }
 
+    /// Sets blend options and clamped text opacity (`0.0..=1.0`).
     pub fn set_combine_mode(&mut self, options: LiceBlitOptions, alpha: f32) {
         unsafe {
             Reaper::get().low().LICE__SetTextCombineMode(
@@ -766,6 +810,7 @@ pub struct ImageList {
 }
 
 impl ImageList {
+    /// Creates an owned native image list.
     pub fn new() -> ReaperResult<Self> {
         let swell = *Reaper::get().swell();
         let handle = swell.ImageList_CreateEx();
@@ -778,6 +823,7 @@ impl ImageList {
             .ok_or(ReaRsError::NullPtr("image list"))
     }
 
+    /// Adds a bitmap and optional mask without transferring bitmap ownership.
     pub fn add_bitmap(
         &mut self,
         bitmap: &Bitmap,
@@ -799,6 +845,7 @@ impl ImageList {
         }
     }
 
+    /// Adds an icon without transferring icon ownership.
     pub fn add_borrowed_icon(&mut self, icon: &Icon) -> ReaperResult<i32> {
         self.add_icon(icon)
     }
@@ -827,6 +874,7 @@ impl ImageList {
         }
     }
 
+    /// Removes the image at the zero-based index.
     pub fn remove(&mut self, index: i32) -> ReaperResult<()> {
         let ok = unsafe {
             self.swell.ImageList_Remove(self.handle.as_ptr(), index)
@@ -838,6 +886,8 @@ impl ImageList {
         }
     }
 
+    /// Attaches this image list to a ListView slot. The list detaches itself
+    /// from still-valid controls when dropped.
     pub fn attach_to_list_view(
         &mut self,
         list_view: &ListView,
@@ -862,6 +912,7 @@ impl ImageList {
         Ok(())
     }
 
+    /// Detaches this image list from a ListView slot if attached.
     pub fn detach_from_list_view(
         &mut self,
         list_view: &ListView,
@@ -911,6 +962,7 @@ impl LiceSurface<'_> {
         self.handle.as_ptr()
     }
 
+    /// Returns the bitmap dimensions in pixels.
     pub fn dimensions(&self) -> ImageSize {
         unsafe {
             ImageSize::new(
@@ -1643,18 +1695,16 @@ impl LiceSurface<'_> {
 pub(super) struct HdcSurface<'paint> {
     hdc: NonNull<raw::HDC__>,
     _paint: PhantomData<&'paint mut ()>,
-    swell: rea_rs_low::Swell,
 }
 
 impl<'paint> HdcSurface<'paint> {
     pub(super) unsafe fn from_paint_hdc_with_swell(
         hdc: raw::HDC,
-        swell: rea_rs_low::Swell,
+        _swell: rea_rs_low::Swell,
     ) -> Option<Self> {
         NonNull::new(hdc).map(|hdc| Self {
             hdc,
             _paint: PhantomData,
-            swell,
         })
     }
 

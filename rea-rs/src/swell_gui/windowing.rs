@@ -4,9 +4,22 @@ use rea_rs_low::{raw, Swell};
 use std::{
     collections::HashSet,
     ffi::{CStr, CString},
+    time::Duration,
 };
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
+
+fn timer_interval_ms(interval: Duration) -> ReaperResult<u32> {
+    let millis = interval.as_millis();
+    if millis == 0 || interval.subsec_nanos() % 1_000_000 != 0 {
+        return Err(ReaRsError::UnsuccessfulOperation(
+            "timer interval must be a positive whole number of milliseconds",
+        ));
+    }
+    u32::try_from(millis).map_err(|_| {
+        ReaRsError::UnsuccessfulOperation("timer interval is too large")
+    })
+}
 
 struct ChildWindowCollection {
     handles: Vec<raw::HWND>,
@@ -30,9 +43,19 @@ unsafe extern "C" fn collect_child_window(
 }
 
 impl ReaperWindow {
+    /// Returns the current raw SWELL/Win32 handle.
+    ///
+    /// The handle is non-owning and may become invalid when the native window
+    /// is destroyed or recreated. Check operations that return
+    /// [`ReaperResult`] before relying on continued validity. This raw handle
+    /// is exposed for interoperability; callers must uphold native API
+    /// parameter and pointer-lifetime requirements when using it directly.
     pub fn hwnd(&self) -> raw::HWND {
         self.hwnd.as_ptr()
     }
+
+    /// Returns whether this wrapper owns and is responsible for destroying
+    /// the native window.
     pub fn is_owned(&self) -> bool {
         self.owned.get()
     }
@@ -258,6 +281,10 @@ impl ReaperWindow {
         }
     }
 
+    /// Shows the window and requests repainting.
+    ///
+    /// An error indicates that REAPER is unavailable or the HWND is no longer
+    /// valid; success does not guarantee that the host will keep it visible.
     pub fn show(&self) -> ReaperResult<()> {
         self.check_window()?;
         unsafe {
@@ -267,6 +294,7 @@ impl ReaperWindow {
         Ok(())
     }
 
+    /// Hides the window without destroying it.
     pub fn hide(&self) -> ReaperResult<()> {
         self.check_window()?;
         unsafe {
@@ -275,6 +303,7 @@ impl ReaperWindow {
         Ok(())
     }
 
+    /// Sets the native window title. Interior NUL bytes are rejected.
     pub fn set_title(&self, title: &str) -> ReaperResult<()> {
         self.check_window()?;
         let title = CString::new(title)?;
@@ -288,6 +317,10 @@ impl ReaperWindow {
         }
     }
 
+    /// Reads the title into a fixed-size native buffer.
+    ///
+    /// An empty string is returned when the backend reports no title. The
+    /// result may be truncated if the title exceeds the buffer capacity.
     pub fn title(&self) -> ReaperResult<String> {
         self.check_window()?;
         let mut buffer = vec![0i8; 4096];
@@ -306,6 +339,10 @@ impl ReaperWindow {
             .into_owned())
     }
 
+    /// Returns the client-area rectangle in client coordinates.
+    ///
+    /// Native client rectangles normally have an origin of `(0, 0)`; their
+    /// right and bottom edges give the client width and height.
     pub fn client_rect(&self) -> ReaperResult<raw::RECT> {
         self.check_window()?;
         let mut rect = unsafe { std::mem::zeroed() };
@@ -315,6 +352,9 @@ impl ReaperWindow {
         Ok(rect)
     }
 
+    /// Returns the outer window rectangle in screen coordinates.
+    ///
+    /// Coordinates are signed and can be negative on multi-monitor desktops.
     pub fn window_rect(&self) -> ReaperResult<raw::RECT> {
         self.check_window()?;
         let mut rect = unsafe { std::mem::zeroed() };
@@ -327,6 +367,11 @@ impl ReaperWindow {
         }
     }
 
+    /// Sets the outer window position and size.
+    ///
+    /// `x` and `y` use the coordinate space expected by the native parent;
+    /// top-level windows generally use screen coordinates. Width and height
+    /// must be positive. Native backends may adjust the requested geometry.
     pub fn set_pos(
         &self,
         x: i32,
@@ -354,11 +399,14 @@ impl ReaperWindow {
         Ok(())
     }
 
+    /// Changes the outer size while retaining the current outer position.
+    /// Width and height must be positive.
     pub fn resize(&self, width: i32, height: i32) -> ReaperResult<()> {
         let rect = self.window_rect()?;
         self.set_pos(rect.left, rect.top, width, height)
     }
 
+    /// Enables or disables native input to this window.
     pub fn set_enabled(&self, enabled: bool) -> ReaperResult<()> {
         self.check_window()?;
         unsafe {
@@ -368,16 +416,22 @@ impl ReaperWindow {
         Ok(())
     }
 
+    /// Reports native visibility, which is distinct from whether the window
+    /// is unobscured on screen.
     pub fn is_visible(&self) -> ReaperResult<bool> {
         self.check_window()?;
         Ok(unsafe { Self::swell()?.IsWindowVisible(self.hwnd()) })
     }
 
+    /// Reports whether the native window is enabled for user interaction.
     pub fn is_enabled(&self) -> ReaperResult<bool> {
         self.check_window()?;
         Ok(unsafe { Self::swell()?.IsWindowEnabled(self.hwnd()) })
     }
 
+    /// Requests keyboard focus for this window.
+    ///
+    /// The host or native backend may choose a different focus target.
     pub fn focus(&self) -> ReaperResult<()> {
         self.check_window()?;
         unsafe {
@@ -444,18 +498,23 @@ impl ReaperWindow {
 
     /// Starts a periodic timer that delivers `WM_TIMER` to this window.
     ///
-    /// `id` must be non-zero and `interval_ms` is the requested period. The
-    /// returned ID is the ID reported by SWELL/Win32 and should be passed to
+    /// `id` must be non-zero and `interval` must be a positive whole number
+    /// of milliseconds representable by SWELL/Win32. The returned ID is the
+    /// ID reported by SWELL/Win32 and should be passed to
     /// [`Self::stop_timer`]. Timer callbacks run on REAPER's UI thread.
+    /// Native timer cadence is approximate and may be delayed or coalesced
+    /// by the host or operating system; this is not a high-resolution
+    /// timer.
     pub fn start_timer(
         &self,
         id: usize,
-        interval_ms: u32,
+        interval: Duration,
     ) -> ReaperResult<usize> {
         self.check_window()?;
-        if id == 0 || interval_ms == 0 {
+        if id == 0 {
             return Err(ReaRsError::UnsuccessfulOperation("invalid timer"));
         }
+        let interval_ms = timer_interval_ms(interval)?;
         let actual = unsafe {
             Self::swell()?.SetTimer(self.hwnd(), id, interval_ms, None)
         };
@@ -466,6 +525,8 @@ impl ReaperWindow {
         }
     }
 
+    /// Stops the timer identified by the ID returned from
+    /// [`Self::start_timer`].
     pub fn stop_timer(&self, id: usize) -> ReaperResult<()> {
         self.check_window()?;
         let ok = unsafe { Self::swell()?.KillTimer(self.hwnd(), id) };
@@ -476,6 +537,7 @@ impl ReaperWindow {
         }
     }
 
+    /// Stops all timers associated with this window.
     pub fn stop_all_timers(&self) -> ReaperResult<()> {
         self.check_window()?;
         let ok = unsafe { Self::swell()?.KillTimer(self.hwnd(), usize::MAX) };
@@ -486,6 +548,13 @@ impl ReaperWindow {
         }
     }
 
+    /// Docks this owned window in REAPER under the given display name and
+    /// logical identifier.
+    ///
+    /// Requires REAPER's `DockWindowAddEx` API. The method saves floating
+    /// placement, reparents/rebinds native children as needed, and may fail if
+    /// the host destroys the window during the transition. Calling it while
+    /// already docked is a no-op.
     pub fn dock(
         &self,
         name: &str,
@@ -555,6 +624,9 @@ impl ReaperWindow {
         Ok(())
     }
 
+    /// Removes an owned window from its docker and restores its saved floating
+    /// position. Requires the relevant REAPER docker APIs and a valid main
+    /// window; calling it when already floating is a no-op.
     pub fn float(&self) -> ReaperResult<()> {
         self.check_window()?;
         if !self.docked.get() {
@@ -677,6 +749,11 @@ impl ReaperWindow {
         Ok(())
     }
 
+    /// Reports whether this window is currently docked.
+    ///
+    /// For owned windows, reports the wrapper's current lifecycle state. For
+    /// borrowed windows, queries REAPER and may fail if the host API is
+    /// absent.
     pub fn is_docked(&self) -> ReaperResult<bool> {
         self.check_window()?;
         if self.owned.get() {
@@ -695,6 +772,7 @@ impl ReaperWindow {
         Ok(dock_index >= 0)
     }
 
+    /// Requests that REAPER refresh the docker containing this window.
     pub fn refresh_dock(&self) -> ReaperResult<()> {
         self.check_window()?;
         let low = Reaper::get().low();
@@ -725,6 +803,10 @@ impl ReaperWindow {
         DockPosition::try_from(low.DockGetPosition(dock_id))
     }
 
+    /// Destroys the native window if this wrapper owns it.
+    ///
+    /// Borrowed wrappers are left intact. Destruction tears down registered
+    /// child UI, timers, menus, and docker registration.
     pub fn destroy(&mut self) -> ReaperResult<()> {
         if !self.owned.get() {
             return Ok(());
@@ -769,5 +851,27 @@ impl Drop for ReaperWindow {
         if self.owned.get() {
             self.destroy_internal();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::timer_interval_ms;
+    use std::time::Duration;
+
+    #[test]
+    fn timer_interval_requires_positive_whole_milliseconds() {
+        assert_eq!(timer_interval_ms(Duration::from_millis(1)).unwrap(), 1);
+        assert!(timer_interval_ms(Duration::ZERO).is_err());
+        assert!(timer_interval_ms(Duration::from_nanos(999_999)).is_err());
+        assert!(timer_interval_ms(Duration::from_micros(1_500)).is_err());
+    }
+
+    #[test]
+    fn timer_interval_rejects_values_outside_native_range() {
+        assert!(
+            timer_interval_ms(Duration::from_millis(u32::MAX as u64 + 1))
+                .is_err()
+        );
     }
 }
