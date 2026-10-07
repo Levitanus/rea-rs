@@ -32,7 +32,7 @@
 //! The Common entry point should look like this:
 //!
 //! ```no_run
-//! use rea_rs::{ActionKind, ActionSections, Reaper, PluginContext};
+//! use rea_rs::{ActionKind, ActionRegistrationOptions, Section, Reaper, PluginContext};
 //! use rea_rs_macros::reaper_extension_plugin;
 //! use std::error::Error;
 //!
@@ -42,6 +42,7 @@
 //!     let reaper = Reaper::get_mut();
 //!     let message = "Hello from small extension";
 //!     reaper.show_console_msg(message);
+//!     let _ = ActionRegistrationOptions::new(Section::Main);
 //!     Ok(())
 //! }
 //! ```
@@ -51,7 +52,7 @@
 //!
 //! ```no_run
 //! use rea_rs::{
-//!     ActionHook, ActionKind, PluginContext, Reaper, RegisteredAccel, Timer,
+//!     ActionHook, ActionKind, ActionRegistrationOptions, PluginContext, Reaper, RegisteredAction, Timer,
 //! };
 //! use rea_rs_macros::reaper_extension_plugin;
 //! use std::error::Error;
@@ -59,7 +60,7 @@
 //!
 //! #[derive(Debug)]
 //! struct Listener {
-//!     action: RegisteredAccel,
+//!     action: RegisteredAction,
 //! }
 //!
 //! // Full list of function larger.
@@ -88,8 +89,8 @@
 //!         "description",
 //!         ActionKind::NotToggleable,
 //!         my_action_func,
-//!         // Only type currently supported
-//!         ActionSections::Global
+//!         // Register this action in REAPER's global section.
+//!         ActionRegistrationOptions::new(rea_rs::Section::Main)
 //!     )?;
 //!
 //!     reaper.register_timer(Arc::new(RefCell::new(Listener{action})));

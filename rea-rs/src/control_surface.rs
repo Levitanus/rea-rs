@@ -2,6 +2,7 @@ use std::{
     cell::RefCell,
     ffi::{CStr, CString},
     fmt::Debug,
+    panic::{catch_unwind, AssertUnwindSafe},
     ptr::null,
     slice,
     sync::Arc,
@@ -13,6 +14,15 @@ use rea_rs_low::{raw, IReaperControlSurface};
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{ptr_wrappers::MediaTrack, ReaRsError, Reaper, Track};
+
+fn control_surface_panic(payload: Box<dyn std::any::Any + Send>) -> Error {
+    let message = payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_owned());
+    anyhow::anyhow!("control-surface callback panicked: {message}")
+}
 
 pub trait ControlSurface: Debug {
     /// simple unique string with only A-Z, 0-9, no spaces or other chars
@@ -252,6 +262,7 @@ pub(crate) struct ControlSurfaceWrap {
     last_type_string: Option<String>,
     last_desc_string: Option<String>,
     last_config_string: Option<String>,
+    disabled: std::cell::Cell<bool>,
 }
 impl ControlSurfaceWrap {
     pub fn new(child: Arc<RefCell<dyn ControlSurface>>) -> Self {
@@ -263,6 +274,7 @@ impl ControlSurfaceWrap {
             last_type_string: None,
             last_desc_string: None,
             last_config_string: None,
+            disabled: std::cell::Cell::new(false),
         }
     }
 
@@ -299,10 +311,37 @@ impl ControlSurfaceWrap {
         Reaper::get().show_console_msg(formatted)
     }
 
-    fn check_for_error(&self, result: Result<()>) {
+    fn check_for_error(
+        &self,
+        context: &str,
+        callback: impl FnOnce() -> Result<()>,
+    ) {
+        let _ = self.invoke(context, callback);
+    }
+
+    fn invoke<T>(
+        &self,
+        context: &str,
+        callback: impl FnOnce() -> Result<T>,
+    ) -> Option<T> {
+        if self.disabled.get() {
+            return None;
+        }
+        let result = catch_unwind(AssertUnwindSafe(callback));
         match result {
-            Ok(_) => (),
-            Err(e) => self.error(e),
+            Ok(Ok(value)) => Some(value),
+            Ok(Err(error)) => {
+                self.error(error.context(context.to_owned()));
+                self.disabled.set(true);
+                None
+            }
+            Err(payload) => {
+                self.error(
+                    control_surface_panic(payload).context(context.to_owned()),
+                );
+                self.disabled.set(true);
+                None
+            }
         }
     }
 
@@ -373,8 +412,11 @@ impl ControlSurfaceWrap {
 }
 impl IReaperControlSurface for ControlSurfaceWrap {
     fn GetTypeString(&mut self) -> *const std::os::raw::c_char {
-        println!("get_type_string");
-        let new_value = self.child.borrow().get_type_string();
+        let Some(new_value) = self.invoke("get type string", || {
+            Ok(self.child.borrow().get_type_string())
+        }) else {
+            return null();
+        };
         Self::get_cached_cstring(
             &mut self.type_string_cache,
             &mut self.last_type_string,
@@ -383,8 +425,11 @@ impl IReaperControlSurface for ControlSurfaceWrap {
     }
 
     fn GetDescString(&mut self) -> *const std::os::raw::c_char {
-        println!("get_desc_string");
-        let new_value = self.child.borrow().get_desc_string();
+        let Some(new_value) = self.invoke("get description string", || {
+            Ok(self.child.borrow().get_desc_string())
+        }) else {
+            return null();
+        };
         Self::get_cached_cstring(
             &mut self.desc_string_cache,
             &mut self.last_desc_string,
@@ -393,8 +438,11 @@ impl IReaperControlSurface for ControlSurfaceWrap {
     }
 
     fn GetConfigString(&mut self) -> *const std::os::raw::c_char {
-        println!("get_config_string");
-        let new_value = self.child.borrow().get_config_string();
+        let Some(new_value) = self.invoke("get configuration string", || {
+            Ok(self.child.borrow().get_config_string())
+        }) else {
+            return null();
+        };
         match new_value {
             Some(line) => Self::get_cached_cstring(
                 &mut self.config_string_cache,
@@ -406,16 +454,20 @@ impl IReaperControlSurface for ControlSurfaceWrap {
     }
 
     fn CloseNoReset(&self) {
-        self.check_for_error(self.child.borrow().close_no_reset())
+        self.check_for_error("close without reset", || {
+            self.child.borrow().close_no_reset()
+        })
     }
 
     fn Run(&mut self) {
         // println!("run");
-        self.check_for_error(self.child.borrow().run())
+        self.check_for_error("run", || self.child.borrow().run())
     }
 
     fn SetTrackListChange(&self) {
-        self.check_for_error(self.child.borrow().set_track_list_change())
+        self.check_for_error("set track list change", || {
+            self.child.borrow().set_track_list_change()
+        })
     }
 
     fn SetSurfaceVolume(
@@ -426,9 +478,9 @@ impl IReaperControlSurface for ControlSurfaceWrap {
         if let Some(mut track) =
             self.track_from_mut(trackid, "SetSurfaceVolume")
         {
-            self.check_for_error(
-                self.child.borrow().set_surface_volume(&mut track, volume),
-            )
+            self.check_for_error("set surface volume", || {
+                self.child.borrow().set_surface_volume(&mut track, volume)
+            })
         }
     }
 
@@ -439,9 +491,9 @@ impl IReaperControlSurface for ControlSurfaceWrap {
     ) {
         if let Some(mut track) = self.track_from_mut(trackid, "SetSurfacePan")
         {
-            self.check_for_error(
-                self.child.borrow().set_surface_pan(&mut track, pan),
-            )
+            self.check_for_error("set surface pan", || {
+                self.child.borrow().set_surface_pan(&mut track, pan)
+            })
         }
     }
 
@@ -452,9 +504,9 @@ impl IReaperControlSurface for ControlSurfaceWrap {
     ) {
         if let Some(mut track) = self.track_from_mut(trackid, "SetSurfaceMute")
         {
-            self.check_for_error(
-                self.child.borrow().set_surface_mute(&mut track, mute),
-            )
+            self.check_for_error("set surface mute", || {
+                self.child.borrow().set_surface_mute(&mut track, mute)
+            })
         }
     }
 
@@ -466,11 +518,11 @@ impl IReaperControlSurface for ControlSurfaceWrap {
         if let Some(mut track) =
             self.track_from_mut(trackid, "SetSurfaceSelected")
         {
-            self.check_for_error(
+            self.check_for_error("set surface selected", || {
                 self.child
                     .borrow()
-                    .set_surface_selected(&mut track, selected),
-            )
+                    .set_surface_selected(&mut track, selected)
+            })
         }
     }
 
@@ -481,9 +533,9 @@ impl IReaperControlSurface for ControlSurfaceWrap {
     ) {
         if let Some(mut track) = self.track_from_mut(trackid, "SetSurfaceSolo")
         {
-            self.check_for_error(
-                self.child.borrow().set_surface_solo(&mut track, solo),
-            )
+            self.check_for_error("set surface solo", || {
+                self.child.borrow().set_surface_solo(&mut track, solo)
+            })
         }
     }
 
@@ -495,20 +547,22 @@ impl IReaperControlSurface for ControlSurfaceWrap {
         if let Some(mut track) =
             self.track_from_mut(trackid, "SetSurfaceRecArm")
         {
-            self.check_for_error(
-                self.child.borrow().set_surface_recarm(&mut track, recarm),
-            )
+            self.check_for_error("set surface record arm", || {
+                self.child.borrow().set_surface_recarm(&mut track, recarm)
+            })
         }
     }
 
     fn SetPlayState(&self, play: bool, pause: bool, rec: bool) {
-        self.check_for_error(
-            self.child.borrow().set_play_state(play, pause, rec),
-        )
+        self.check_for_error("set play state", || {
+            self.child.borrow().set_play_state(play, pause, rec)
+        })
     }
 
     fn SetRepeatState(&self, rep: bool) {
-        self.check_for_error(self.child.borrow().set_repeat_state(rep))
+        self.check_for_error("set repeat state", || {
+            self.child.borrow().set_repeat_state(rep)
+        })
     }
 
     fn SetTrackTitle(
@@ -523,9 +577,9 @@ impl IReaperControlSurface for ControlSurfaceWrap {
                 Err(e) => return self.error(e.into()),
                 Ok(s) => s.to_string(),
             };
-            self.check_for_error(
-                self.child.borrow().set_track_title(&mut track, title),
-            )
+            self.check_for_error("set track title", || {
+                self.child.borrow().set_track_title(&mut track, title)
+            })
         }
     }
 
@@ -538,41 +592,37 @@ impl IReaperControlSurface for ControlSurfaceWrap {
         else {
             return false;
         };
-        match self.child.borrow().get_touch_state(&mut track, is_pan) {
-            Err(e) => {
-                self.error(e);
-                false
-            }
-            Ok(r) => r,
-        }
+        self.invoke("get touch state", || {
+            self.child.borrow().get_touch_state(&mut track, is_pan)
+        })
+        .unwrap_or(false)
     }
 
     fn SetAutoMode(&self, mode: std::os::raw::c_int) {
-        self.check_for_error(self.child.borrow().set_auto_mode(mode))
+        self.check_for_error("set auto mode", || {
+            self.child.borrow().set_auto_mode(mode)
+        })
     }
 
     fn ResetCachedVolPanStates(&self) {
-        self.check_for_error(self.child.borrow().reset_cached_vol_pan_states())
+        self.check_for_error("reset cached volume and pan states", || {
+            self.child.borrow().reset_cached_vol_pan_states()
+        })
     }
 
     fn OnTrackSelection(&self, trackid: *mut rea_rs_low::raw::MediaTrack) {
         if let Some(mut track) =
             self.track_from_mut(trackid, "OnTrackSelection")
         {
-            self.check_for_error(
-                self.child.borrow().on_track_selection(&mut track),
-            )
+            self.check_for_error("on track selection", || {
+                self.child.borrow().on_track_selection(&mut track)
+            })
         }
     }
 
     fn IsKeyDown(&self, key: std::os::raw::c_int) -> bool {
-        match self.child.borrow().is_key_down(key) {
-            Err(e) => {
-                self.error(e);
-                false
-            }
-            Ok(r) => r,
-        }
+        self.invoke("is key down", || self.child.borrow().is_key_down(key))
+            .unwrap_or(false)
     }
 
     fn Extended(
@@ -992,18 +1042,9 @@ impl IReaperControlSurface for ControlSurfaceWrap {
             }
             _ => return 0,
         };
-        match self.child.borrow().extended(call) {
-            Err(e) => {
-                self.error(e);
-                0
-            }
-            Ok(r) => {
-                if r {
-                    1
-                } else {
-                    0
-                }
-            }
-        }
+        i32::from(
+            self.invoke("extended", || self.child.borrow().extended(call))
+                .unwrap_or(false),
+        )
     }
 }

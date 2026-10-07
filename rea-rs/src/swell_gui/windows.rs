@@ -232,47 +232,200 @@ mod window_spec_tests {
 /// thread. They should return promptly and avoid holding mutable REAPER state
 /// across nested native message loops. Default implementations ignore events;
 /// `on_close` permits closing and event callbacks report whether they handled
-/// the event. Callback panics are not converted into errors by this trait.
+/// the event. Errors and panics are contained at the native boundary and
+/// disable subsequent user callbacks for this window owner.
 pub trait WindowHandler: 'static {
     /// Returns the stable logical identity used to register this window.
     fn window_id(&self) -> WindowId;
     /// Returns the window wrapper managed by this handler.
     fn window(&self) -> &ReaperWindow;
     /// Called after the window is opened and registered for dispatch.
-    fn on_open(&mut self) {}
+    fn on_open(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// Called when native close is requested. Return `true` to allow closing.
-    fn on_close(&mut self) -> bool {
-        true
+    fn on_close(&mut self) -> anyhow::Result<bool> {
+        Ok(true)
     }
     /// Called during final destruction, after the window ceases to be usable.
-    fn on_destroy(&mut self) {}
+    fn on_destroy(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// Called for a decoded menu command.
-    fn on_command(&mut self, _command: super::events::WindowCommand) {}
+    fn on_command(
+        &mut self,
+        _command: super::events::WindowCommand,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// Called for a decoded native or virtual control notification.
-    fn on_control_event(&mut self, _event: super::events::ControlEvent) {}
+    fn on_control_event(
+        &mut self,
+        _event: super::events::ControlEvent,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// Called after the client area changes size; dimensions are client
     /// pixels.
-    fn on_resize(&mut self, _width: i32, _height: i32) {}
+    fn on_resize(&mut self, _width: i32, _height: i32) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// Called when native activation changes; `active` is the new state.
-    fn on_activate(&mut self, _active: bool) {}
+    fn on_activate(&mut self, _active: bool) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// Called for a `WM_TIMER` notification. `id` is the native timer ID.
-    fn on_timer(&mut self, _id: SwellId) {}
+    fn on_timer(&mut self, _id: SwellId) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// Called for general window input. Return `true` to mark it handled.
-    fn on_event(&mut self, _event: super::events::WindowEvent) -> bool {
-        false
+    fn on_event(
+        &mut self,
+        _event: super::events::WindowEvent,
+    ) -> anyhow::Result<bool> {
+        Ok(false)
     }
     /// Called for input routed to a child widget. Return `true` if handled.
     fn on_widget_event(
         &mut self,
         _id: SwellId,
         _event: super::events::WindowEvent,
-    ) -> bool {
-        false
+    ) -> anyhow::Result<bool> {
+        Ok(false)
     }
     /// Called when a message is offered to the host-message hook.
     /// Return `true` to claim handling; otherwise native dispatch continues.
-    fn handle_host_message(&self, _message: u32) -> bool {
-        false
+    fn handle_host_message(&self, _message: u32) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+}
+
+struct CallbackDispatchGuard<'a> {
+    active: *const Cell<u32>,
+    _marker: std::marker::PhantomData<&'a Cell<u32>>,
+}
+
+impl Drop for CallbackDispatchGuard<'_> {
+    fn drop(&mut self) {
+        // The cell is a field of the borrowed handler and outlives this guard.
+        let active = unsafe { &*self.active };
+        active.set(active.get().saturating_sub(1));
+    }
+}
+
+pub(crate) fn invoke_handler_callback<T>(
+    handler: &mut dyn WindowHandler,
+    context: &str,
+    callback: impl FnOnce(&mut dyn WindowHandler) -> anyhow::Result<T>,
+) -> Option<T> {
+    if handler.window().callbacks_disabled.get() {
+        return None;
+    }
+    let mut callback = Some(callback);
+    let active = &handler.window().active_callbacks as *const Cell<u32>;
+    // The callback must be allowed to mutably borrow `handler`; retain only a
+    // raw pointer to its stable in-place activity cell across that call.
+    let _dispatch_guard = CallbackDispatchGuard {
+        active,
+        _marker: std::marker::PhantomData,
+    };
+    unsafe { &*active }.set(unsafe { &*active }.get().saturating_add(1));
+    let result = super::events::invoke_callback(context, &mut || {
+        callback.take().expect("handler callback invoked once")(handler)
+    });
+    if result.is_err() {
+        handler.window().callbacks_disabled.set(true);
+    }
+    result.ok()
+}
+
+pub(crate) fn invoke_handler_close_callback(
+    handler: &mut dyn WindowHandler,
+    context: &str,
+) -> bool {
+    if handler.window().callbacks_disabled.get() {
+        return true;
+    }
+    invoke_handler_callback(handler, context, |handler| handler.on_close())
+        .unwrap_or(true)
+}
+
+/// Cleanup callbacks still run after an owner has failed; they are allowed
+/// one contained attempt so resource teardown is not silently skipped.
+pub(crate) fn invoke_handler_cleanup_callback<T>(
+    handler: &mut dyn WindowHandler,
+    context: &str,
+    callback: impl FnOnce(&mut dyn WindowHandler) -> anyhow::Result<T>,
+) -> Option<T> {
+    invoke_handler_callback_inner(handler, context, callback)
+}
+
+fn invoke_handler_callback_inner<T>(
+    handler: &mut dyn WindowHandler,
+    context: &str,
+    callback: impl FnOnce(&mut dyn WindowHandler) -> anyhow::Result<T>,
+) -> Option<T> {
+    let mut callback = Some(callback);
+    let result = super::events::invoke_callback(context, &mut || {
+        callback.take().expect("handler callback invoked once")(handler)
+    });
+    if result.is_err() {
+        handler.window().callbacks_disabled.set(true);
+    }
+    result.ok()
+}
+
+#[cfg(test)]
+fn invoke_callback_with_state<T>(
+    disabled: &Cell<bool>,
+    context: &str,
+    mut callback: impl FnMut() -> anyhow::Result<T>,
+) -> Option<T> {
+    if disabled.get() {
+        return None;
+    }
+    match super::events::invoke_callback(context, &mut callback) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            disabled.set(true);
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod callback_owner_tests {
+    use super::invoke_callback_with_state;
+    use std::cell::Cell;
+
+    #[test]
+    fn callback_failure_disables_owner_until_explicit_reset() {
+        let disabled = Cell::new(false);
+        let calls = Cell::new(0);
+        let failed =
+            invoke_callback_with_state(&disabled, "test owner", || {
+                calls.set(calls.get() + 1);
+                Err::<(), _>(anyhow::anyhow!("failure"))
+            });
+        assert!(failed.is_none());
+        assert!(disabled.get());
+
+        let skipped =
+            invoke_callback_with_state(&disabled, "test owner", || {
+                calls.set(calls.get() + 1);
+                Ok(())
+            });
+        assert!(skipped.is_none());
+        assert_eq!(calls.get(), 1);
+
+        disabled.set(false);
+        let recovered =
+            invoke_callback_with_state(&disabled, "test owner", || {
+                calls.set(calls.get() + 1);
+                Ok(42)
+            });
+        assert_eq!(recovered, Some(42));
+        assert_eq!(calls.get(), 2);
     }
 }
 
@@ -280,6 +433,8 @@ pub trait WindowHandler: 'static {
 pub struct ReaperWindow {
     pub(super) hwnd: Hwnd,
     pub(super) owned: Cell<bool>,
+    pub(super) callbacks_disabled: Cell<bool>,
+    pub(crate) active_callbacks: Cell<u32>,
     pub(crate) show_on_register: bool,
     pub(super) min_size: Option<(i32, i32)>,
     pub(super) floating_rect: Cell<Option<raw::RECT>>,
@@ -287,6 +442,8 @@ pub struct ReaperWindow {
     pub(super) dock_ident: Option<String>,
     pub(super) controls: RefCell<ControlRegistry>,
     pub(super) events: RefCell<EventRegistry>,
+    pub(super) window_event_callback:
+        RefCell<Option<super::events::WindowEventCallback>>,
     pub(super) scroll_views: RefCell<HashMap<usize, ScrollViewRuntime>>,
     pub(super) menu: RefCell<Option<Menu>>,
     pub(super) popup_request: Cell<Option<(usize, i32, i32, usize)>>,
@@ -440,7 +597,7 @@ pub(super) fn render_with_lice(
 ) {
     let width = info.client_rect.width;
     let height = info.client_rect.height;
-    if width == 0 || height == 0 {
+    if width == 0 || height == 0 || window.callbacks_disabled.get() {
         return;
     }
 
@@ -481,20 +638,43 @@ pub(super) fn render_with_lice(
             let mut surface = target.surface();
             match widget {
                 Some(id) => {
-                    if let Some(callback) =
-                        window.widget_render_callback.borrow_mut().as_mut()
-                    {
-                        if let Err(e) = callback(id, info, &mut surface) {
-                            return Err(ReaRsError::UnderlyingError(e));
-                        };
+                    let callback =
+                        window.widget_render_callback.borrow_mut().take();
+                    if let Some(mut callback) = callback {
+                        let result = super::events::invoke_callback(
+                            "window widget renderer",
+                            &mut || callback(id, info, &mut surface),
+                        );
+                        if result.is_ok() {
+                            window
+                                .widget_render_callback
+                                .borrow_mut()
+                                .get_or_insert(callback);
+                        } else {
+                            window.callbacks_disabled.set(true);
+                            return Err(ReaRsError::UnsuccessfulOperation(
+                                "window widget renderer failed",
+                            ));
+                        }
                     }
                 }
                 None => {
-                    if let Some(callback) =
-                        window.render_callback.borrow_mut().as_mut()
-                    {
-                        if let Err(e) = callback(info, &mut surface) {
-                            return Err(ReaRsError::UnderlyingError(e));
+                    let callback = window.render_callback.borrow_mut().take();
+                    if let Some(mut callback) = callback {
+                        let result = super::events::invoke_callback(
+                            "window renderer",
+                            &mut || callback(info, &mut surface),
+                        );
+                        if result.is_ok() {
+                            window
+                                .render_callback
+                                .borrow_mut()
+                                .get_or_insert(callback);
+                        } else {
+                            window.callbacks_disabled.set(true);
+                            return Err(ReaRsError::UnsuccessfulOperation(
+                                "window renderer failed",
+                            ));
                         }
                     }
                 }
@@ -1118,6 +1298,17 @@ impl ReaperWindow {
         Ok(())
     }
 
+    /// Re-enables user callbacks after correcting a callback that failed.
+    ///
+    /// Callback errors and panics disable the whole window callback owner.
+    /// Call this only after replacing or fixing all callbacks associated with
+    /// the window; it does not restore a callback that was removed on failure.
+    pub fn reset_callback_failure(&self) -> ReaperResult<()> {
+        self.check_window()?;
+        self.callbacks_disabled.set(false);
+        Ok(())
+    }
+
     pub(super) fn update_panel_layout(
         &self,
         update: impl FnOnce(&mut PanelLayout),
@@ -1279,7 +1470,10 @@ impl ReaperWindow {
             parent_wraps
         };
         let policy = if explicit_single_line {
-            OverflowPolicy::Clip
+            // Rows remain one lane, but overflowing children must still be
+            // placed and measured so their structural viewport can grow and
+            // let the enclosing ScrollView provide horizontal scrolling.
+            OverflowPolicy::Scroll
         } else if wraps {
             if scroll_view.is_some() {
                 OverflowPolicy::WrapScroll
@@ -1413,10 +1607,31 @@ impl ReaperWindow {
             }
             Ok(content_extent)
         } else if is_structural {
-            // Explicit structural rows are single-line clipping viewports.
-            // Their children may overflow horizontally, but that must not
-            // resize the row and expose the overflow.
-            Ok(rect.size())
+            // Structural rows keep a single-line layout, but must report and
+            // contain their children's required extent. Otherwise a row
+            // inside a GroupBox hides its minimum width from the GroupBox,
+            // which in turn prevents an enclosing ScrollView from enabling
+            // horizontal scrolling.
+            let required = super::layout::Size {
+                x: content_extent.x.max(rect.width),
+                y: content_extent.y.max(rect.height),
+            };
+            if required != rect.size() {
+                if let Some(hwnd) = layout.structural.get(&id).copied() {
+                    unsafe {
+                        Self::swell()?.SetWindowPos(
+                            hwnd,
+                            std::ptr::null_mut(),
+                            rect.x as i32,
+                            rect.y as i32,
+                            required.x.min(i32::MAX as u32) as i32,
+                            required.y.min(i32::MAX as u32) as i32,
+                            raw::SWP_NOZORDER as i32,
+                        );
+                    }
+                }
+            }
+            Ok(required)
         } else {
             // GroupBox child HWNDs clip their descendants, so expand the
             // native group to contain wrapped child lanes. Its parent (the
@@ -1620,6 +1835,8 @@ impl ReaperWindow {
         Ok(Self {
             hwnd,
             owned: Cell::new(true),
+            callbacks_disabled: Cell::new(false),
+            active_callbacks: Cell::new(0),
             show_on_register,
             min_size,
             floating_rect: Cell::new(None),
@@ -1627,6 +1844,7 @@ impl ReaperWindow {
             dock_ident: Some(dock_ident),
             controls: RefCell::new(ControlRegistry::default()),
             events: RefCell::new(EventRegistry::default()),
+            window_event_callback: RefCell::new(None),
             scroll_views: RefCell::new(HashMap::new()),
             menu: RefCell::new(None),
             popup_request: Cell::new(None),
@@ -1671,6 +1889,8 @@ impl ReaperWindow {
         Ok(Self {
             hwnd,
             owned: Cell::new(false),
+            callbacks_disabled: Cell::new(false),
+            active_callbacks: Cell::new(0),
             show_on_register: false,
             min_size: None,
             floating_rect: Cell::new(None),
@@ -1678,6 +1898,7 @@ impl ReaperWindow {
             dock_ident: dock_ident.into(),
             controls: RefCell::new(ControlRegistry::default()),
             events: RefCell::new(EventRegistry::default()),
+            window_event_callback: RefCell::new(None),
             scroll_views: RefCell::new(HashMap::new()),
             menu: RefCell::new(None),
             popup_request: Cell::new(None),

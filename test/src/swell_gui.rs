@@ -9,12 +9,13 @@ use rea_rs::{
     ActionHook, ActionKind, AutomationMode, CheckBox, Color, ComboBox,
     ControlEvent, ControlSurface, EditField, EventResponse, ExtState, Font,
     FontSpec, KnowsProject, LiceFont, ListBox, Measure, Panel, ProgressBar,
-    RadioButton, Reaper, ReaperWindow, ScrollbarRenderer, SoloMode, Track,
-    Trackbar, Volume, WindowHandler, WindowId, WindowSpec, WithReaperPtr,
+    RadioButton, ReaRsError, Reaper, ReaperWindow, ScrollbarRenderer,
+    SoloMode, Track, Trackbar, Volume, WindowHandler, WindowId, WindowSpec,
+    WithReaperPtr,
 };
 use rea_rs_low::raw;
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, sync::Arc, time::Duration};
+use std::{cell::RefCell, error, sync::Arc, time::Duration};
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
 const DOCK_STATE_KEY: &str = "rea_rs_widget_gallery.dock";
@@ -121,8 +122,8 @@ impl WindowHandler for PreferencesPage {
         &self.window
     }
 
-    fn handle_host_message(&self, message: u32) -> bool {
-        message == raw::WM_PAINT
+    fn handle_host_message(&self, message: u32) -> anyhow::Result<bool> {
+        Ok(message == raw::WM_PAINT)
     }
 }
 
@@ -499,18 +500,24 @@ impl DemoWindow {
                 .min_size(320, 240)
                 .dock_ident("rea_rs_widget_gallery"),
         )?;
+        trace!(
+                "gallery window created: hwnd={:?} valid={} visible={} parent={:?}",
+                window.hwnd(),
+                unsafe { Reaper::get().swell().IsWindow(window.hwnd()) },
+                unsafe { Reaper::get().swell().IsWindowVisible(window.hwnd()) },
+                unsafe { Reaper::get().swell().GetParent(window.hwnd()) },
+            );
         let ui = window.build_ui()?;
         let menu = Menu::new([
             MenuItem::command(MENU_DOCK, "Dock gallery"),
             MenuItem::command(MENU_FLOAT, "Float gallery"),
         ])?;
         window.set_menu_bar(Some(menu))?;
-        let panels = ui.panel_layout(
-            PanelLayout::new().with_sizes(PanelSizes {
+        let panels =
+            ui.panel_layout(PanelLayout::new().with_sizes(PanelSizes {
                 right: 120,
                 ..PanelSizes::default()
-            }),
-        )?;
+            }))?;
         let switches = panels.panel(Panel::Right);
         let content = panels
             .panel(Panel::Central)
@@ -541,6 +548,21 @@ impl DemoWindow {
             }
             Ok(EventResponse::Handled)
         });
+        let error_button = switches.button(
+            rea_rs::SwellId::new_control(),
+            "Raise Error",
+            WidgetSize::new_fill_x(120, 28),
+        )?;
+        window.on_widget_event(error_button.id(), |event| {
+            if let ControlEvent::ButtonClicked { control: _ } = event {
+                return Err(ReaRsError::Str(
+                    "Error from widget gallery button.",
+                )
+                .into());
+            }
+            Ok(EventResponse::Handled)
+        });
+
         let cursor_position = content.progress_bar(
             rea_rs::SwellId(101),
             WidgetSize::new_fill_x(width, 20).set_max_x(width),
@@ -637,12 +659,23 @@ impl DemoWindow {
         let paint_over = read_paint_over();
         paint_checkbox.set_checked(paint_over)?;
         if docked {
+            trace!(
+                "gallery restoring docked state before registration: hwnd={:?}",
+                window.hwnd(),
+            );
             window.dock(
                 "rea-rs track gallery",
                 "rea_rs_widget_gallery",
                 true,
             )?;
         }
+        trace!(
+            "gallery construction complete: hwnd={:?} valid={} visible={} docked={}",
+            window.hwnd(),
+            unsafe { Reaper::get().swell().IsWindow(window.hwnd()) },
+            unsafe { Reaper::get().swell().IsWindowVisible(window.hwnd()) },
+            window.is_docked().unwrap_or(false),
+        );
         Ok(Self {
             window,
             menu_manager: DynamicManager::default(),
@@ -988,16 +1021,36 @@ impl WindowHandler for DemoWindow {
     fn window(&self) -> &ReaperWindow {
         &self.window
     }
-    fn on_open(&mut self) {
+    fn on_open(&mut self) -> anyhow::Result<()> {
+        trace!(
+            "gallery on_open entered: hwnd={:?} valid={} visible={}",
+            self.window.hwnd(),
+            unsafe { Reaper::get().swell().IsWindow(self.window.hwnd()) },
+            unsafe {
+                Reaper::get().swell().IsWindowVisible(self.window.hwnd())
+            },
+        );
         self.update_menu_state();
         self.timer = self.window.start_timer(TIMER_ID, TIMER_INTERVAL).ok();
         self.rebuild_tracks();
         self.refresh_play_position();
         ensure_surface_registered();
+        trace!(
+            "gallery on_open completed: hwnd={:?} valid={} visible={}",
+            self.window.hwnd(),
+            unsafe { Reaper::get().swell().IsWindow(self.window.hwnd()) },
+            unsafe {
+                Reaper::get().swell().IsWindowVisible(self.window.hwnd())
+            },
+        );
+        Ok(())
     }
-    fn on_command(&mut self, command: rea_rs::swell_gui::WindowCommand) {
+    fn on_command(
+        &mut self,
+        command: rea_rs::swell_gui::WindowCommand,
+    ) -> anyhow::Result<()> {
         let rea_rs::swell_gui::WindowCommand::Menu { id } = command else {
-            return;
+            return Ok(());
         };
         match id.0 {
             MENU_DOCK => {
@@ -1008,15 +1061,16 @@ impl WindowHandler for DemoWindow {
             }
             _ => (),
         }
+        Ok(())
     }
-    fn on_event(&mut self, event: WindowEvent) -> bool {
+    fn on_event(&mut self, event: WindowEvent) -> anyhow::Result<bool> {
         let WindowEvent::Mouse {
             message: MouseMessage::Up(MouseButton::Right),
             position,
             ..
         } = event
         else {
-            return false;
+            return Ok(false);
         };
         let Ok(screen_position) = rea_rs::client_to_screen(
             self.window.hwnd().into(),
@@ -1025,7 +1079,7 @@ impl WindowHandler for DemoWindow {
                 y: position.y as i32,
             },
         ) else {
-            return false;
+            return Ok(false);
         };
         if let Err(error) = self
             .window
@@ -1033,11 +1087,11 @@ impl WindowHandler for DemoWindow {
         {
             warn!("could not queue dock context menu: {error}");
         }
-        true
+        Ok(true)
     }
-    fn on_timer(&mut self, id: rea_rs::SwellId) {
+    fn on_timer(&mut self, id: rea_rs::SwellId) -> anyhow::Result<()> {
         if id != TIMER_ID {
-            return;
+            return Ok(());
         }
         self.drain_events();
         self.refresh_play_position();
@@ -1048,8 +1102,9 @@ impl WindowHandler for DemoWindow {
             let _ = self.paint_checkbox.set_checked(paint_over);
             ensure_surface_registered();
         }
+        Ok(())
     }
-    fn on_destroy(&mut self) {
+    fn on_destroy(&mut self) -> anyhow::Result<()> {
         if let Some(timer) = self.timer.take() {
             let _ = self.window.stop_timer(timer);
         }
@@ -1062,10 +1117,16 @@ impl WindowHandler for DemoWindow {
         );
         let _ = queue.set(Vec::<DemoEvent>::new());
         ensure_surface_registered();
+        Ok(())
     }
-    fn on_control_event(&mut self, event: ControlEvent) {
+    fn on_control_event(&mut self, event: ControlEvent) -> anyhow::Result<()> {
+        trace!(
+            "gallery control event received: event={event:?} programmatic_update={}",
+            self.programmatic_update,
+        );
         if self.programmatic_update {
-            return;
+            trace!("gallery control event ignored during programmatic update: {event:?}");
+            return Ok(());
         }
         match event {
             ControlEvent::CheckBoxChanged { control }
@@ -1090,6 +1151,7 @@ impl WindowHandler for DemoWindow {
                 self.with_selected_track(|track| {
                     let _ = track.set_name(value);
                 });
+                self.rebuild_tracks();
             }
             ControlEvent::RadioButtonChanged { control } => {
                 self.with_selected_track(|track| {
@@ -1131,16 +1193,9 @@ impl WindowHandler for DemoWindow {
             ControlEvent::EditChanged { control }
                 if control == self.volume_value.id() =>
             {
-                if let Ok(db) = self
-                    .volume_value
-                    .text()
-                    .unwrap_or_default()
-                    .trim()
-                    .parse::<f64>()
-                {
-                    if !db.is_finite() {
-                        return;
-                    }
+                let text = self.volume_value.text().unwrap_or_default();
+                trace!("gallery volume edit event: text={text:?}");
+                if let Some(db) = parse_db_value(&text) {
                     let linear = db_to_linear(db);
                     self.with_selected_track(|track| {
                         let _ = track.set_volume(Volume::from(linear));
@@ -1155,13 +1210,14 @@ impl WindowHandler for DemoWindow {
             }
             _ => {}
         }
+        Ok(())
     }
 
     fn on_widget_event(
         &mut self,
         id: rea_rs::SwellId,
         event: rea_rs::WindowEvent,
-    ) -> bool {
+    ) -> anyhow::Result<bool> {
         if id == self.volume.id() {
             if let rea_rs::WindowEvent::Mouse { message, .. } = event {
                 match message {
@@ -1178,7 +1234,7 @@ impl WindowHandler for DemoWindow {
                 }
             }
         }
-        false
+        Ok(false)
     }
 }
 
@@ -1192,14 +1248,15 @@ impl WindowHandler for DemoHostWindow {
     fn window(&self) -> &ReaperWindow {
         &self.window
     }
-    fn handle_host_message(&self, message: u32) -> bool {
-        message == raw::WM_PAINT
+    fn handle_host_message(&self, message: u32) -> anyhow::Result<bool> {
+        Ok(message == raw::WM_PAINT)
     }
-    fn on_destroy(&mut self) {
+    fn on_destroy(&mut self) -> anyhow::Result<()> {
         // The borrowed host HWND has its original WndProc restored before
         // this callback. Drop the custom renderer and request a clean paint
         // through that original procedure.
         let _ = self.window.clear_render();
+        Ok(())
     }
 }
 
@@ -1245,6 +1302,27 @@ fn format_db(db: f64) -> String {
     }
 }
 
+fn parse_db_value(value: &str) -> Option<f64> {
+    value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_db_value;
+
+    #[test]
+    fn parses_signed_integer_and_decimal_db_values() {
+        assert_eq!(parse_db_value("-14"), Some(-14.0));
+        assert_eq!(parse_db_value(" 1.5 "), Some(1.5));
+        assert_eq!(parse_db_value("-"), None);
+        assert_eq!(parse_db_value("NaN"), None);
+    }
+}
+
 pub fn register_actions(reaper: &mut Reaper) -> anyhow::Result<()> {
     reaper.register_preferences_page(
         PREFS_PAGE_ID,
@@ -1286,7 +1364,7 @@ pub fn register_actions(reaper: &mut Reaper) -> anyhow::Result<()> {
         )));
     }
     let toggle_state = lifecycle.clone();
-    reaper.register_action(
+    let paint_action = reaper.register_action(
         PAINT_OVER_ACTION,
         PAINT_OVER_DESCRIPTION,
         ActionKind::Toggleable(paint_over),
@@ -1318,8 +1396,15 @@ pub fn register_actions(reaper: &mut Reaper) -> anyhow::Result<()> {
                     .unregister_window_handler(&DEMO_WINDOW_ID.to_string())?;
             } else {
                 let demo_window = DemoWindow::new()?;
+                trace!(
+                    "registering completed gallery window: hwnd={:?} valid={} visible={}",
+                    demo_window.window.hwnd(),
+                    unsafe { Reaper::get().swell().IsWindow(demo_window.window.hwnd()) },
+                    unsafe { Reaper::get().swell().IsWindowVisible(demo_window.window.hwnd()) },
+                );
                 Reaper::get_mut()
                     .register_window_handler(Box::new(demo_window))?;
+                trace!("completed gallery window registration");
                 ensure_surface_registered();
             }
             info!("rea-rs track gallery toggled");

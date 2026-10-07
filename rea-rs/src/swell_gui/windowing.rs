@@ -289,10 +289,27 @@ impl ReaperWindow {
     /// valid; success does not guarantee that the host will keep it visible.
     pub fn show(&self) -> ReaperResult<()> {
         self.check_window()?;
+        log::trace!(
+            "ShowWindow begin: hwnd={:?} parent={:?} visible_before={} owned={} docked={}",
+            self.hwnd(),
+            unsafe { Self::swell()?.GetParent(self.hwnd()) },
+            unsafe { Self::swell()?.IsWindowVisible(self.hwnd()) },
+            self.is_owned(),
+            self.docked.get(),
+        );
         unsafe {
             Self::swell()?.ShowWindow(self.hwnd(), raw::SW_SHOW);
             Self::swell()?.InvalidateRect(self.hwnd(), std::ptr::null(), 1);
         }
+        log::trace!(
+            "ShowWindow complete: hwnd={:?} valid={} visible_after={}",
+            self.hwnd(),
+            unsafe { Self::swell()?.IsWindow(self.hwnd()) },
+            unsafe {
+                Self::swell()?.IsWindow(self.hwnd())
+                    && Self::swell()?.IsWindowVisible(self.hwnd())
+            },
+        );
         Ok(())
     }
 
@@ -836,6 +853,24 @@ impl ReaperWindow {
         if !self.owned.replace(false) {
             return;
         }
+        log::trace!(
+            "owned window destruction begin: hwnd={:?} parent={:?} valid={} visible={} docked={} generation={}",
+            self.hwnd(),
+            if Reaper::is_available() {
+                unsafe { Reaper::get().swell().GetParent(self.hwnd()) }
+            } else {
+                std::ptr::null_mut()
+            },
+            Reaper::is_available()
+                && unsafe { Reaper::get().swell().IsWindow(self.hwnd()) },
+            Reaper::is_available()
+                && unsafe { Reaper::get().swell().IsWindow(self.hwnd()) }
+                && unsafe {
+                    Reaper::get().swell().IsWindowVisible(self.hwnd())
+                },
+            self.docked.get(),
+            self.lifecycle_generation.get(),
+        );
         self.reset_ui();
         if !self.hwnd().is_null() && Reaper::is_available() {
             unsafe {
@@ -858,6 +893,11 @@ impl ReaperWindow {
             if swell.IsWindow(self.hwnd()) {
                 swell.DestroyWindow(self.hwnd());
             }
+            log::trace!(
+                "owned window destruction complete: hwnd={:?} valid_after={}",
+                self.hwnd(),
+                swell.IsWindow(self.hwnd()),
+            );
         }
     }
 }

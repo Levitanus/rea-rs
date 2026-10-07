@@ -26,6 +26,72 @@ pub(super) struct HostWindowProc {
     installed: isize,
 }
 
+fn resolve_window_route(
+    routes: &HashMap<usize, String>,
+    mut hwnd: raw::HWND,
+    mut parent_of: impl FnMut(raw::HWND) -> raw::HWND,
+) -> Option<(String, bool)> {
+    let original = hwnd as usize;
+    if let Some(owner) = routes.get(&original) {
+        return Some((owner.clone(), true));
+    }
+    while !hwnd.is_null() {
+        if let Some(owner) = routes.get(&(hwnd as usize)) {
+            return Some((owner.clone(), false));
+        }
+        hwnd = parent_of(hwnd);
+    }
+    None
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::resolve_window_route;
+    use rea_rs_low::raw;
+    use std::collections::HashMap;
+
+    fn handle(value: usize) -> raw::HWND {
+        value as raw::HWND
+    }
+
+    #[test]
+    fn route_resolution_prefers_direct_then_walks_ancestors() {
+        let mut routes = HashMap::new();
+        routes.insert(10, "main".to_owned());
+        routes.insert(30, "other".to_owned());
+        let parents = HashMap::from([(20, 10), (40, 30)]);
+
+        assert_eq!(
+            resolve_window_route(&routes, handle(10), |_| std::ptr::null_mut(
+            )),
+            Some(("main".to_owned(), true)),
+        );
+        assert_eq!(
+            resolve_window_route(&routes, handle(20), |hwnd| {
+                handle(*parents.get(&(hwnd as usize)).unwrap_or(&0))
+            }),
+            Some(("main".to_owned(), false)),
+        );
+        assert_eq!(
+            resolve_window_route(&routes, handle(99), |_| std::ptr::null_mut(
+            )),
+            None,
+        );
+    }
+
+    #[test]
+    fn minimum_track_size_does_not_shrink_native_minimums() {
+        let mut info = [raw::POINT { x: 0, y: 0 }; 5];
+        info[3] = raw::POINT { x: 400, y: 300 };
+        info[4] = raw::POINT { x: 1800, y: 1200 };
+        super::enforce_min_track_size(&mut info, (320, 240));
+        assert_eq!(info[3].x, 400);
+        assert_eq!(info[3].y, 300);
+        assert_eq!(info[4].x, 1800);
+        assert_eq!(info[4].y, 1200);
+    }
+}
+
 fn dispatch_owned_command_detached(
     key: &str,
     hwnd: raw::HWND,
@@ -39,19 +105,37 @@ fn dispatch_owned_command_detached(
         Reaper::get_mut().windows.insert(key.to_owned(), handler);
         return false;
     }
+    Reaper::get_mut().begin_window_dispatch(key);
 
     let generation = handler.window().lifecycle_generation.get();
     log::debug!(
         "owned command callback detached: hwnd={hwnd:?} window_id={key:?} command={command:?} generation={generation}",
     );
-    handler.on_command(command);
+    if let super::events::WindowCommand::Control { id, notification } = command
+    {
+        let registered_control = handler.window().control(id);
+        if control_event.is_none() {
+            log::trace!(
+                "owned WM_COMMAND did not decode to a control event: hwnd={hwnd:?} control_id={id:?} notification={notification:?} registered_control={registered_control:?}",
+            );
+        }
+    }
+    let _ = super::windows::invoke_handler_callback(
+        handler.as_mut(),
+        "owned window command",
+        |handler| handler.on_command(command),
+    );
     if let Some(event) = control_event {
         let result = handler.window().dispatch_control_event(event);
         log::debug!(
             "detached control event dispatch: event={event:?} result={result:?}"
         );
         if matches!(result, super::events::DispatchResult::ForwardToWindow) {
-            handler.on_control_event(event);
+            let _ = super::windows::invoke_handler_callback(
+                handler.as_mut(),
+                "owned window control event",
+                |handler| handler.on_control_event(event),
+            );
         }
     }
 
@@ -63,12 +147,18 @@ fn dispatch_owned_command_detached(
             reaper.windows.entry(key.to_owned())
         {
             entry.insert(handler);
+            reaper.finish_window_dispatch(key);
         } else {
             log::error!(
                 "owned window handler could not be restored after command callback: window_id={key:?} hwnd={hwnd:?}; preserving existing registration"
             );
             handler.window().relinquish_native_ownership();
-            handler.on_destroy();
+            let _ = super::windows::invoke_handler_cleanup_callback(
+                handler.as_mut(),
+                "owned window destroy",
+                |handler| handler.on_destroy(),
+            );
+            Reaper::get_mut().finish_window_dispatch(key);
         }
     } else {
         log::warn!(
@@ -76,7 +166,12 @@ fn dispatch_owned_command_detached(
         );
         handler.window().destroy_structural_children();
         handler.window().relinquish_native_ownership();
-        handler.on_destroy();
+        let _ = super::windows::invoke_handler_cleanup_callback(
+            handler.as_mut(),
+            "owned window destroy",
+            |handler| handler.on_destroy(),
+        );
+        Reaper::get_mut().finish_window_dispatch(key);
     }
     true
 }
@@ -89,6 +184,37 @@ fn enforce_min_track_size(points: &mut [raw::POINT; 5], minimum: (i32, i32)) {
     let min_track_size = &mut points[3];
     min_track_size.x = min_track_size.x.max(minimum.0);
     min_track_size.y = min_track_size.y.max(minimum.1);
+}
+
+fn restore_borrowed_handler(
+    key: &str,
+    hwnd: raw::HWND,
+    mut handler: Box<dyn super::windows::WindowHandler>,
+) {
+    if unsafe { Reaper::get().swell().IsWindow(hwnd) }
+        && handler.window().hwnd() == hwnd
+    {
+        let reaper = Reaper::get_mut();
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            reaper.windows.entry(key.to_owned())
+        {
+            entry.insert(handler);
+        } else {
+            let _ = super::windows::invoke_handler_cleanup_callback(
+                handler.as_mut(),
+                "borrowed window destroy",
+                |handler| handler.on_destroy(),
+            );
+        }
+        reaper.finish_window_dispatch(key);
+        return;
+    }
+    let _ = super::windows::invoke_handler_cleanup_callback(
+        handler.as_mut(),
+        "borrowed window destroy",
+        |handler| handler.on_destroy(),
+    );
+    Reaper::get_mut().finish_window_dispatch(key);
 }
 
 pub(crate) fn remember_host_proc(hwnd: raw::HWND, previous: isize) {
@@ -365,33 +491,43 @@ pub(crate) unsafe extern "C" fn window_proc(
         // owner through the parent chain so messages reach the registered
         // top-level window.
         let direct_host = reaper.window_routes.get(&(hwnd as usize)).cloned();
-        let mut current = hwnd;
-        let mut key = direct_host.clone();
-        while key.is_none() && !current.is_null() {
-            if let Some(owner) = reaper.window_id_for_hwnd(current) {
-                key = Some(owner);
-                break;
-            }
-            current = reaper.swell().GetParent(current);
-        }
-        let Some(key) = key else {
+        let key = if let Some(key) = direct_host.as_ref() {
             if matches!(
                 msg,
                 raw::WM_CREATE | raw::WM_DESTROY | raw::WM_NCDESTROY
             ) {
                 log::trace!(
-                    "window_proc has no registered route for lifecycle callback: hwnd={hwnd:p} message={msg:#x} direct_host={direct_host:?}"
+                    "window_proc resolved direct route: id={key:?} hwnd={hwnd:p} message={msg:#x}"
                 );
             }
-            return reaper.swell().DefWindowProc(hwnd, msg, wparam, lparam)
-                as raw::INT_PTR;
+            key.clone()
+        } else {
+            let route =
+                resolve_window_route(&reaper.window_routes, hwnd, |window| {
+                    reaper.swell().GetParent(window)
+                });
+            let Some((key, _)) = route else {
+                if matches!(
+                    msg,
+                    raw::WM_CREATE | raw::WM_DESTROY | raw::WM_NCDESTROY
+                ) {
+                    log::trace!(
+                        "window_proc has no registered route for lifecycle callback: hwnd={hwnd:p} message={msg:#x}"
+                    );
+                }
+                return reaper.swell().DefWindowProc(hwnd, msg, wparam, lparam)
+                    as raw::INT_PTR;
+            };
+            if matches!(
+                msg,
+                raw::WM_CREATE | raw::WM_DESTROY | raw::WM_NCDESTROY
+            ) {
+                log::trace!(
+                    "window_proc resolved ancestor route: id={key:?} hwnd={hwnd:p} message={msg:#x}"
+                );
+            }
+            key
         };
-        if matches!(msg, raw::WM_CREATE | raw::WM_DESTROY | raw::WM_NCDESTROY)
-        {
-            log::trace!(
-                "window_proc resolved lifecycle callback: id={key:?} hwnd={hwnd:p} message={msg:#x} direct_host={direct_host:?}"
-            );
-        }
         (direct_host, key)
     };
     // Process posted popup requests before taking mutable access to the
@@ -543,17 +679,17 @@ pub(crate) unsafe extern "C" fn window_proc(
         dispatch_owned_command_detached(&key, hwnd, command, control_event);
         return 0;
     }
-    let reaper = Reaper::get_mut();
     let is_borrowed_host = direct_host.is_some()
-        && reaper
+        && Reaper::get()
             .windows
             .get(&key)
             .is_some_and(|handler| !handler.window().is_owned());
     if is_borrowed_host {
-        let host_message_enabled = reaper
-            .windows
-            .get(&key)
-            .is_some_and(|handler| handler.handle_host_message(msg));
+        let Some(mut handler) = Reaper::get_mut().windows.remove(&key) else {
+            return call_saved_host_proc(hwnd, msg, wparam, lparam)
+                .unwrap_or(0);
+        };
+        Reaper::get_mut().begin_window_dispatch(&key);
         let host_id = key.clone();
         if msg == raw::WM_DESTROY || msg == raw::WM_NCDESTROY {
             let previous = HOST_WINDOW_PROCS.get().and_then(|registry| {
@@ -563,87 +699,106 @@ pub(crate) unsafe extern "C" fn window_proc(
                     .get(&(hwnd as usize))
                     .map(|entry| entry.previous)
             });
-            let handler = reaper.windows.remove(&key);
-            reaper.window_routes.remove(&(hwnd as usize));
+            Reaper::get_mut().window_routes.remove(&(hwnd as usize));
             detach_host_proc(hwnd);
-            if let Some(mut handler) = handler {
-                handler.on_destroy();
-                drop(handler);
-            }
+            let _ = super::windows::invoke_handler_cleanup_callback(
+                handler.as_mut(),
+                "borrowed window destroy",
+                |handler| handler.on_destroy(),
+            );
+            drop(handler);
+            Reaper::get_mut().finish_window_dispatch(&host_id);
             return previous
                 .map(|proc| call_proc(proc, hwnd, msg, wparam, lparam))
                 .unwrap_or(0);
         }
         if msg == raw::WM_CLOSE {
-            let Some(mut handler) = reaper.windows.remove(&key) else {
-                return call_saved_host_proc(hwnd, msg, wparam, lparam)
-                    .unwrap_or(0);
-            };
-            reaper.window_routes.remove(&(hwnd as usize));
-            let allow = handler.on_close();
-            if unsafe { reaper.swell().IsWindow(hwnd) } {
-                reaper.window_routes.insert(hwnd as usize, key.clone());
-                reaper.windows.insert(key, handler);
+            Reaper::get_mut().window_routes.remove(&(hwnd as usize));
+            let allow = super::windows::invoke_handler_close_callback(
+                handler.as_mut(),
+                "borrowed window close",
+            );
+            if unsafe { Reaper::get().swell().IsWindow(hwnd) } {
+                Reaper::get_mut()
+                    .window_routes
+                    .insert(hwnd as usize, key.clone());
             } else {
-                handler.on_destroy();
+                let _ = super::windows::invoke_handler_cleanup_callback(
+                    handler.as_mut(),
+                    "borrowed window destroy",
+                    |handler| handler.on_destroy(),
+                );
                 drop(handler);
                 detach_host_proc(hwnd);
+                Reaper::get_mut().finish_window_dispatch(&key);
                 return 0;
             }
             if allow {
-                return call_saved_host_proc(hwnd, msg, wparam, lparam)
+                let result = call_saved_host_proc(hwnd, msg, wparam, lparam)
                     .unwrap_or(0);
+                restore_borrowed_handler(&host_id, hwnd, handler);
+                return result;
             }
+            restore_borrowed_handler(&host_id, hwnd, handler);
             return 0;
         }
+        let host_message_enabled = super::windows::invoke_handler_callback(
+            handler.as_mut(),
+            "borrowed window host message",
+            |handler| handler.handle_host_message(msg),
+        )
+        .unwrap_or(false);
         if msg == raw::WM_PAINT {
             let result =
                 call_saved_host_proc(hwnd, msg, wparam, lparam).unwrap_or(0);
             if host_message_enabled {
-                let hdc = reaper.swell().GetDC(hwnd);
+                let hdc = Reaper::get().swell().GetDC(hwnd);
                 if !hdc.is_null() {
                     let mut client = std::mem::zeroed();
-                    reaper.swell().GetClientRect(hwnd, &mut client);
+                    Reaper::get().swell().GetClientRect(hwnd, &mut client);
                     let info = PaintInfo {
                         damage_rect: Rect::from(client),
                         client_rect: Rect::from(client),
                     };
-                    if let Some(handler) =
-                        Reaper::get_mut().windows.get_mut(&host_id)
+                    if let Some(mut surface) =
+                        HdcSurface::from_paint_hdc_with_swell(
+                            hdc,
+                            *Reaper::get().swell(),
+                        )
                     {
-                        if let Some(mut surface) =
-                            HdcSurface::from_paint_hdc_with_swell(
-                                hdc,
-                                *Reaper::get().swell(),
-                            )
-                        {
-                            render_with_lice(
-                                handler.window(),
-                                &info,
-                                &mut surface,
-                                None,
-                            );
-                        }
+                        render_with_lice(
+                            handler.window(),
+                            &info,
+                            &mut surface,
+                            None,
+                        );
                     }
                     Reaper::get().swell().ReleaseDC(hwnd, hdc);
                 }
             }
+            restore_borrowed_handler(&host_id, hwnd, handler);
             return result;
-        }
-        if host_message_enabled {
+        } else if host_message_enabled {
             let event = decode_window_event(hwnd, msg, wparam, lparam);
             if let Some(event) = event {
-                if Reaper::get_mut()
-                    .windows
-                    .get_mut(&host_id)
-                    .is_some_and(|handler| handler.on_event(event))
+                if super::windows::invoke_handler_callback(
+                    handler.as_mut(),
+                    "borrowed window event",
+                    |handler| handler.on_event(event),
+                )
+                .unwrap_or(false)
                 {
+                    restore_borrowed_handler(&host_id, hwnd, handler);
                     return 0;
                 }
             }
         }
-        return call_saved_host_proc(hwnd, msg, wparam, lparam).unwrap_or(0);
+        let result =
+            call_saved_host_proc(hwnd, msg, wparam, lparam).unwrap_or(0);
+        restore_borrowed_handler(&host_id, hwnd, handler);
+        return result;
     }
+    let reaper = Reaper::get_mut();
     let widget_id = Reaper::get().windows.get(&key).and_then(|handler| {
         handler
             .window()
@@ -845,16 +1000,17 @@ pub(crate) unsafe extern "C" fn window_proc(
                 if let Some(handler) = Reaper::get_mut().windows.get_mut(&key)
                 {
                     for command in commands {
-                        let result = handler
-                            .window()
-                            .events
-                            .borrow_mut()
-                            .dispatch(command);
+                        let result =
+                            handler.window().dispatch_control_event(command);
                         if matches!(
                             result,
                             super::events::DispatchResult::ForwardToWindow
                         ) {
-                            handler.on_control_event(command);
+                            let _ = super::windows::invoke_handler_callback(
+                                handler.as_mut(),
+                                "window virtual control event",
+                                |handler| handler.on_control_event(command),
+                            );
                         }
                     }
                 }
@@ -878,26 +1034,92 @@ pub(crate) unsafe extern "C" fn window_proc(
         if let Some(handler) = Reaper::get_mut().windows.get_mut(&key) {
             let virtual_events = handler.window().dispatch_virtual_commands();
             for virtual_event in virtual_events {
-                let result = handler
-                    .window()
-                    .events
-                    .borrow_mut()
-                    .dispatch(virtual_event);
+                let result =
+                    handler.window().dispatch_control_event(virtual_event);
                 if matches!(
                     result,
                     super::events::DispatchResult::ForwardToWindow
                 ) {
-                    handler.on_control_event(virtual_event);
+                    let _ = super::windows::invoke_handler_callback(
+                        handler.as_mut(),
+                        "window virtual control event",
+                        |handler| handler.on_control_event(virtual_event),
+                    );
                 }
             }
-            if let Some(id) = widget_id {
-                let handled = handler.on_widget_event(id, event.clone());
-                if handled || handler.on_event(event) {
-                    return 0;
-                }
-            } else if handler.on_event(event) {
-                return 0;
+        }
+        let Some(mut handler) = Reaper::get_mut().windows.remove(&key) else {
+            return Reaper::get()
+                .swell()
+                .DefWindowProc(hwnd, msg, wparam, lparam)
+                as raw::INT_PTR;
+        };
+        Reaper::get_mut().begin_window_dispatch(&key);
+        let window_event_response = super::events::dispatch_window_event(
+            handler.window(),
+            event.clone(),
+        );
+        let handled = if window_event_response
+            == super::events::EventResponse::Handled
+        {
+            true
+        } else if let Some(id) = widget_id {
+            super::windows::invoke_handler_callback(
+                handler.as_mut(),
+                "window widget event",
+                |handler| handler.on_widget_event(id, event.clone()),
+            )
+            .unwrap_or(false)
+                || super::windows::invoke_handler_callback(
+                    handler.as_mut(),
+                    "window event",
+                    |handler| handler.on_event(event),
+                )
+                .unwrap_or(false)
+        } else {
+            super::windows::invoke_handler_callback(
+                handler.as_mut(),
+                "window event",
+                |handler| handler.on_event(event),
+            )
+            .unwrap_or(false)
+        };
+        // The routed HWND may be a child widget (for example, SWELL sends a
+        // focus event to the control that receives focus when the parent is
+        // shown). Keep the owned top-level handler as long as its own HWND is
+        // still alive; comparing it with the event's child HWND incorrectly
+        // treats normal child input as destruction of the entire window.
+        let owner_hwnd = handler.window().hwnd();
+        if unsafe { Reaper::get().swell().IsWindow(owner_hwnd) } {
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                Reaper::get_mut().windows.entry(key.clone())
+            {
+                entry.insert(handler);
+            } else {
+                log::warn!(
+                    "window handler could not be restored after event dispatch: window_id={key:?} event_hwnd={hwnd:?} owner_hwnd={owner_hwnd:?}; preserving existing registration and relinquishing duplicate ownership"
+                );
+                // A nested native callback may have installed a handler for
+                // this logical ID while this handler was detached. Dropping
+                // this stale handler must not destroy the HWND still used by
+                // the surviving registration.
+                handler.window().relinquish_native_ownership();
+                let _ = super::windows::invoke_handler_cleanup_callback(
+                    handler.as_mut(),
+                    "window destroy after event dispatch",
+                    |handler| handler.on_destroy(),
+                );
             }
+        } else {
+            let _ = super::windows::invoke_handler_cleanup_callback(
+                handler.as_mut(),
+                "window destroy after event dispatch",
+                |handler| handler.on_destroy(),
+            );
+        }
+        Reaper::get_mut().finish_window_dispatch(&key);
+        if handled {
+            return 0;
         }
     }
     let swell = reaper.swell() as *const rea_rs_low::Swell;
@@ -914,25 +1136,34 @@ pub(crate) unsafe extern "C" fn window_proc(
             let Some(mut handler) = reaper.windows.remove(&key) else {
                 return 1;
             };
+            reaper.begin_window_dispatch(&key);
             reaper.window_routes.remove(&(hwnd as usize));
             let virtual_events = handler.window().dispatch_virtual_commands();
             for virtual_event in virtual_events {
-                let result = handler
-                    .window()
-                    .events
-                    .borrow_mut()
-                    .dispatch(virtual_event);
+                let result =
+                    handler.window().dispatch_control_event(virtual_event);
                 if matches!(
                     result,
                     super::events::DispatchResult::ForwardToWindow
                 ) {
-                    handler.on_control_event(virtual_event);
+                    let _ = super::windows::invoke_handler_callback(
+                        handler.as_mut(),
+                        "window virtual control event",
+                        |handler| handler.on_control_event(virtual_event),
+                    );
                 }
             }
-            let allow = handler.on_close();
+            let allow = super::windows::invoke_handler_close_callback(
+                handler.as_mut(),
+                "window close",
+            );
             if !unsafe { reaper.swell().IsWindow(hwnd) } {
                 handler.window().relinquish_native_ownership();
-                handler.on_destroy();
+                let _ = super::windows::invoke_handler_cleanup_callback(
+                    handler.as_mut(),
+                    "window destroy",
+                    |handler| handler.on_destroy(),
+                );
                 drop(handler);
                 return 1;
             }
@@ -945,7 +1176,11 @@ pub(crate) unsafe extern "C" fn window_proc(
                 if let Some(mut handler) = reaper.windows.remove(&key) {
                     reaper.window_routes.remove(&(hwnd as usize));
                     handler.window().relinquish_native_ownership();
-                    handler.on_destroy();
+                    let _ = super::windows::invoke_handler_cleanup_callback(
+                        handler.as_mut(),
+                        "window destroy",
+                        |handler| handler.on_destroy(),
+                    );
                     drop(handler);
                 }
             }
@@ -987,7 +1222,11 @@ pub(crate) unsafe extern "C" fn window_proc(
             if let Some(mut handler) = handler {
                 handler.window().destroy_structural_children();
                 handler.window().relinquish_native_ownership();
-                handler.on_destroy();
+                let _ = super::windows::invoke_handler_cleanup_callback(
+                    handler.as_mut(),
+                    "window destroy",
+                    |handler| handler.on_destroy(),
+                );
                 drop(handler);
             }
             if let Some(low) =
@@ -1001,14 +1240,18 @@ pub(crate) unsafe extern "C" fn window_proc(
             }
             0
         }
+        // Detach the routed handler around commands above: callbacks may
+        // synchronously redock, unregister, or destroy their own window.
         raw::WM_COMMAND => {
-            let Some(handler) = reaper.windows.get_mut(&key) else {
+            let Some(mut handler) = reaper.windows.remove(&key) else {
                 return 0;
             };
+            reaper.begin_window_dispatch(&key);
             let id = (wparam as usize & 0xffff) as i32;
             let code = ((wparam as usize >> 16) & 0xffff) as i32;
             if id == raw::IDCANCEL as i32 && lparam == 0 {
-                let _ = handler;
+                reaper.windows.insert(key.clone(), handler);
+                reaper.finish_window_dispatch(&key);
                 let _ = window_proc(hwnd, raw::WM_CLOSE, wparam, lparam);
                 return 1;
             }
@@ -1025,17 +1268,31 @@ pub(crate) unsafe extern "C" fn window_proc(
                 }
             };
             log::debug!("WM_COMMAND: hwnd={hwnd:?} id={id} code={code} command={command:?}");
-            handler.on_command(command);
+            let registered_control = if lparam != 0 {
+                handler.window().control(super::widgets::SwellId(id as u32))
+            } else {
+                None
+            };
+            if lparam != 0 && registered_control.is_none() {
+                log::trace!(
+                    "WM_COMMAND source is not registered as a control: hwnd={hwnd:?} id={id} code={code} source_hwnd={lparam:?} parent={:?}",
+                    unsafe { reaper.swell().GetParent(lparam as raw::HWND) },
+                );
+            }
+            let _ = super::windows::invoke_handler_callback(
+                handler.as_mut(),
+                "window command",
+                |handler| handler.on_command(command),
+            );
             if lparam != 0 {
                 let control_id = super::widgets::SwellId(id as u32);
-                let event =
-                    handler.window().control(control_id).and_then(|control| {
-                        super::events::decode_control_event(
-                            control.kind,
-                            control_id,
-                            super::events::CommandNotification::from_raw(code),
-                        )
-                    });
+                let event = registered_control.and_then(|control| {
+                    super::events::decode_control_event(
+                        control.kind,
+                        control_id,
+                        super::events::CommandNotification::from_raw(code),
+                    )
+                });
                 if let Some(event) = event {
                     let result =
                         handler.window().dispatch_control_event(event);
@@ -1044,9 +1301,44 @@ pub(crate) unsafe extern "C" fn window_proc(
                         result,
                         super::events::DispatchResult::ForwardToWindow
                     ) {
-                        handler.on_control_event(event);
+                        let _ = super::windows::invoke_handler_callback(
+                            handler.as_mut(),
+                            "window control event",
+                            |handler| handler.on_control_event(event),
+                        );
                     }
+                } else {
+                    log::trace!(
+                        "WM_COMMAND did not decode to a control event: hwnd={hwnd:?} control_id={control_id:?} registered_control={registered_control:?} code={code}",
+                    );
                 }
+            }
+            if unsafe { reaper.swell().IsWindow(hwnd) }
+                && handler.window().hwnd() == hwnd
+            {
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    reaper.windows.entry(key.clone())
+                {
+                    entry.insert(handler);
+                    Reaper::get_mut().finish_window_dispatch(&key);
+                } else {
+                    handler.window().relinquish_native_ownership();
+                    let _ = super::windows::invoke_handler_cleanup_callback(
+                        handler.as_mut(),
+                        "window destroy after reentrant command",
+                        |handler| handler.on_destroy(),
+                    );
+                    Reaper::get_mut().finish_window_dispatch(&key);
+                }
+            } else {
+                handler.window().destroy_structural_children();
+                handler.window().relinquish_native_ownership();
+                let _ = super::windows::invoke_handler_cleanup_callback(
+                    handler.as_mut(),
+                    "window destroy after command",
+                    |handler| handler.on_destroy(),
+                );
+                Reaper::get_mut().finish_window_dispatch(&key);
             }
             0
         }
@@ -1219,7 +1511,11 @@ pub(crate) unsafe extern "C" fn window_proc(
                     result,
                     super::events::DispatchResult::ForwardToWindow
                 ) {
-                    handler.on_control_event(event);
+                    let _ = super::windows::invoke_handler_callback(
+                        handler.as_mut(),
+                        "window control event",
+                        |handler| handler.on_control_event(event),
+                    );
                 }
             }
             0
@@ -1312,7 +1608,11 @@ pub(crate) unsafe extern "C" fn window_proc(
                     result,
                     super::events::DispatchResult::ForwardToWindow
                 ) {
-                    handler.on_control_event(event);
+                    let _ = super::windows::invoke_handler_callback(
+                        handler.as_mut(),
+                        "window control event",
+                        |handler| handler.on_control_event(event),
+                    );
                 }
             }
             0
@@ -1390,7 +1690,16 @@ pub(crate) unsafe extern "C" fn window_proc(
             if let Err(error) = handler.window().apply_default_layout() {
                 log::warn!("could not apply default window layout: {error}");
             }
-            handler.on_resize(rect.right - rect.left, rect.bottom - rect.top);
+            let _ = super::windows::invoke_handler_callback(
+                handler.as_mut(),
+                "window resize",
+                |handler| {
+                    handler.on_resize(
+                        rect.right - rect.left,
+                        rect.bottom - rect.top,
+                    )
+                },
+            );
             0
         }
         raw::WM_GETMINMAXINFO => {
@@ -1424,13 +1733,26 @@ pub(crate) unsafe extern "C" fn window_proc(
         }
         raw::WM_TIMER => {
             if let Some(handler) = reaper.windows.get_mut(&key) {
-                handler.on_timer(super::widgets::SwellId(wparam as u32));
+                let _ = super::windows::invoke_handler_callback(
+                    handler.as_mut(),
+                    "window timer",
+                    |handler| {
+                        handler
+                            .on_timer(super::widgets::SwellId(wparam as u32))
+                    },
+                );
             }
             0
         }
         raw::WM_ACTIVATE => {
             if let Some(handler) = reaper.windows.get_mut(&key) {
-                handler.on_activate((wparam as usize & 0xffff) != 0);
+                let _ = super::windows::invoke_handler_callback(
+                    handler.as_mut(),
+                    "window activation",
+                    |handler| {
+                        handler.on_activate((wparam as usize & 0xffff) != 0)
+                    },
+                );
             }
             0
         }
@@ -1460,10 +1782,18 @@ pub(super) unsafe extern "C" fn container_event_proc(
         let mut parent = Reaper::get().swell().GetParent(hwnd);
         while !parent.is_null() {
             if Reaper::get().window_id_for_hwnd(parent).is_some() {
+                log::trace!(
+                    "container native message forwarded: source={hwnd:?} parent={parent:?} message={msg:#x} wparam={wparam:#x} lparam={lparam:#x} id_or_code={} notification_or_position={}",
+                    (wparam as usize & 0xffff),
+                    ((wparam as usize >> 16) & 0xffff),
+                );
                 return window_proc(parent, msg, wparam, lparam);
             }
             parent = Reaper::get().swell().GetParent(parent);
         }
+        log::trace!(
+            "container native message has no registered window ancestor: source={hwnd:?} message={msg:#x} wparam={wparam:#x} lparam={lparam:#x}",
+        );
     }
 
     let previous = CONTAINER_WINDOW_PROCS.get().and_then(|registry| {

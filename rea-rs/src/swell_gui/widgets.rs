@@ -1521,6 +1521,11 @@ impl<'a> CreationContext<'a> {
     ) -> anyhow::Result<CreationContext<'a>> {
         let rect = self.size(size);
         let row = self.window.create_structural_child(self.parent, rect)?;
+        // Native controls notify their immediate parent through WM_COMMAND.
+        // Route those notifications through the row to the owning window just
+        // like GroupBox notifications, while retaining the row's clipping
+        // and single-line layout behavior.
+        self.window.install_container_event_proc(row)?;
         self.register_layout_entry(id, size);
         self.window.layout.borrow_mut().structural.insert(id, row);
         self.window.layout.borrow_mut().groups.insert(

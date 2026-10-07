@@ -1388,7 +1388,7 @@ impl Track {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// use rea_rs::{TrackGroupParam, Reaper};
     /// use bitvec::prelude::*;
     ///

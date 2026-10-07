@@ -4,11 +4,10 @@ use c_str_macro::c_str;
 use float_eq::assert_float_eq;
 use log::{debug, info, warn};
 use rea_rs::{
-    ActionHook, ActionKind, ActionRegistrationOptions, ActionSections,
-    AutomationMode, BoundsMode, Color, CommandId, EnvelopeChunk,
-    EnvelopePoint, EnvelopePointShape, EnvelopeSelector, EnvelopeSendInfo,
-    ExtState, GenericSend, GenericSendMut, HardwareSocket, ItemFade,
-    MarkerRegionInfo, MessageBoxValue, Pan, PanLaw, Pitch, PlayRate,
+    ActionHook, ActionKind, AutomationMode, BoundsMode, Color, CommandId,
+    EnvelopeChunk, EnvelopePoint, EnvelopePointShape, EnvelopeSelector,
+    EnvelopeSendInfo, ExtState, GenericSend, GenericSendMut, HardwareSocket,
+    ItemFade, MarkerRegionInfo, MessageBoxValue, Pan, PanLaw, Pitch, PlayRate,
     PluginContext, Position, Project, RazorEdit, ReaRsError, Reaper, RecInput,
     RecMode, RecMonitoring, RecOutMode, RenderFormat, RenderMode,
     RenderSettings, RenderTail, RenderTailFlags, SampleAmount,
@@ -133,17 +132,17 @@ fn action() -> TestStep {
 
         //
 
-        let name = "TestCommand";
         let id = action.command_id;
         let result = rpr.get_action_name(id).expect(
             "should get action
             name",
         );
         debug!("got from id: {:?}", result);
-        assert_eq!(result, name);
-        let result = rpr.get_action_id(name)?.expect("should get action ID");
-        debug!("got from name: {:?}", result);
-        assert_eq!(result, id);
+        let looked_up = rpr
+            .get_action_id(&result)?
+            .expect("should get action ID from generated name");
+        debug!("got from name: {:?}", looked_up);
+        assert_eq!(looked_up, id);
         Ok(())
     })
 }

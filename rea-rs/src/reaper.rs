@@ -15,11 +15,11 @@ use c_str_macro::c_str;
 use serde_derive::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::CString,
     ptr::NonNull,
     sync::Arc,
-    time::{self, Duration, Instant},
+    time::{Duration, Instant},
 };
 
 static mut INSTANCE: Option<Reaper> = None;
@@ -38,16 +38,27 @@ extern "C" fn custom_menu_hook(
         unsafe { std::ffi::CStr::from_ptr(menu_id) }.to_string_lossy();
     let context =
         swell_gui::CustomMenuContext::new(&menu_id, menu as raw::HMENU, flag);
-    let result =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if let Some(callback) = Reaper::get_mut().custom_menu_hook.as_mut()
-            {
-                callback(&context);
-            }
-        }));
-    if result.is_err() {
-        log::error!("panic contained in REAPER customizable-menu hook");
+    if Reaper::get().custom_menu_hook_in_flight {
+        return;
     }
+    let Some((mut callback, disabled, in_flight)) =
+        Reaper::get_mut().custom_menu_hook.take()
+    else {
+        return;
+    };
+    if disabled {
+        Reaper::get_mut().custom_menu_hook = Some((callback, true, in_flight));
+        return;
+    }
+    Reaper::get_mut().custom_menu_hook_in_flight = true;
+    let result = swell_gui::events::invoke_callback(
+        "REAPER customizable-menu hook",
+        &mut || callback(&context),
+    );
+    let reaper = Reaper::get_mut();
+    reaper.custom_menu_hook_in_flight = false;
+    reaper.custom_menu_hook =
+        Some((callback, result.is_err() || disabled, false));
 }
 
 unsafe extern "C" fn create_preferences_page(parent: raw::HWND) -> raw::HWND {
@@ -61,11 +72,16 @@ unsafe extern "C" fn create_preferences_page(parent: raw::HWND) -> raw::HWND {
     // Move the factory out before invoking user code. The factory can call
     // back into `Reaper`, so holding a mutable borrow of the global instance
     // while it runs would alias that access.
-    let Some(mut builder) = Reaper::get_mut().preferences_page_builder.take()
+    let Some((mut builder, disabled)) =
+        Reaper::get_mut().preferences_page_builder.take()
     else {
         trace!("Preferences page create callback has no registered builder");
         return std::ptr::null_mut();
     };
+    if disabled {
+        Reaper::get_mut().preferences_page_builder = Some((builder, true));
+        return std::ptr::null_mut();
+    }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
         || {
             let window = Reaper::get()
@@ -91,17 +107,50 @@ unsafe extern "C" fn create_preferences_page(parent: raw::HWND) -> raw::HWND {
             Ok::<_, anyhow::Error>(hwnd)
         },
     ));
-    Reaper::get_mut().preferences_page_builder = Some(builder);
+    if disabled {
+        Reaper::get_mut().preferences_page_builder = Some((builder, true));
+        return std::ptr::null_mut();
+    }
     match result {
-        Ok(Ok(hwnd)) => hwnd,
+        Ok(Ok(hwnd)) => {
+            if Reaper::get().preferences_page_builder.is_none() {
+                Reaper::get_mut().preferences_page_builder =
+                    Some((builder, false));
+            }
+            return hwnd;
+        }
         Ok(Err(error)) => {
             trace!("Preferences page creation failed; returning null HWND");
-            log::error!("could not create REAPER Preferences page: {error}");
-            std::ptr::null_mut()
+            let mut error = Some(error);
+            let _ = swell_gui::events::invoke_callback(
+                "REAPER Preferences page builder",
+                &mut || Err::<(), _>(error.take().expect("reported once")),
+            );
+            if Reaper::get().preferences_page_builder.is_none() {
+                Reaper::get_mut().preferences_page_builder =
+                    Some((builder, true));
+            }
+            return std::ptr::null_mut();
         }
-        Err(_) => {
+        Err(payload) => {
             trace!("Preferences page builder panicked; returning null HWND");
-            log::error!("panic contained in REAPER Preferences page creation");
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|message| (*message).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".to_owned());
+            let _ = swell_gui::events::invoke_callback(
+                "REAPER Preferences page builder",
+                &mut || {
+                    Err::<(), _>(anyhow::anyhow!(
+                        "callback panicked: {message}"
+                    ))
+                },
+            );
+            if Reaper::get().preferences_page_builder.is_none() {
+                Reaper::get_mut().preferences_page_builder =
+                    Some((builder, true));
+            }
             std::ptr::null_mut()
         }
     }
@@ -125,6 +174,8 @@ pub struct Action {
     bindings: Vec<ActionBinding>,
     operation: Box<ActionCallback>,
     kind: ActionKind,
+    disabled: bool,
+    in_flight: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -156,6 +207,22 @@ struct PreferencesPageRegistration {
 struct PreferencesPageWindowGuard {
     hwnd: raw::HWND,
     retained: bool,
+}
+
+struct RetiredControlSurface {
+    id: String,
+    rust_owner: Box<Box<dyn IReaperControlSurface>>,
+    cpp_owner: Option<NonNull<raw::IReaperControlSurface>>,
+}
+
+impl Drop for RetiredControlSurface {
+    fn drop(&mut self) {
+        if let Some(cpp_owner) = self.cpp_owner.take() {
+            unsafe { delete_cpp_control_surface(cpp_owner) };
+        }
+        let _ = &self.id;
+        let _ = &self.rust_owner;
+    }
 }
 
 impl Drop for PreferencesPageWindowGuard {
@@ -391,62 +458,248 @@ extern "C" fn hookcommand2(
         return false;
     };
     let section_id = section.unique_id();
-    let actions = &mut Reaper::get_mut().actions;
-    for action in actions.iter_mut() {
-        if action.bindings.iter().any(|binding| {
+    let matched_index = Reaper::get().actions.iter().position(|action| {
+        action.bindings.iter().any(|binding| {
             binding.section.id() == section_id.get()
                 && binding.command_id.get() == command_id as u32
-        }) {
-            let operation = &action.operation;
-            let mut hook = ActionHook::new(
-                section,
-                CommandId::new(command_id as u32),
-                val,
-                val2,
-                relmode,
-                NonNull::new(hwnd),
-                0,
-                &mut action.kind,
-            );
-            match operation(&mut hook) {
-                Ok(_) => (),
-                Err(e) => action_error(e),
-            }
-            return true;
-        }
+        })
+    });
+    let Some(index) = matched_index else {
+        return false;
+    };
+    let mut action = Reaper::get_mut().actions.remove(index);
+    if action.in_flight {
+        Reaper::get_mut().actions.insert(index, action);
+        return true;
     }
-    false
+    if action.disabled {
+        Reaper::get_mut().actions.insert(index, action);
+        return true;
+    }
+    let action_identity = action
+        .bindings
+        .iter()
+        .map(|binding| (binding.section.id(), binding.command_id.get()))
+        .collect::<Vec<_>>();
+    let command_id = CommandId::new(command_id as u32);
+    let operation_ref = &action.operation;
+    let kind = &mut action.kind;
+    let mut section = Some(section);
+    let mut operation = || {
+        let mut hook = ActionHook::new(
+            section.take().expect("action callback invoked once"),
+            command_id,
+            val,
+            val2,
+            relmode,
+            NonNull::new(hwnd),
+            0,
+            kind,
+        );
+        operation_ref(&mut hook)
+    };
+    let _result = dispatch_registered_action(
+        &mut action.disabled,
+        &mut action.in_flight,
+        &mut operation,
+    );
+    let actions = &mut Reaper::get_mut().actions;
+    let replacement_index = actions.iter().position(|candidate| {
+        candidate
+            .bindings
+            .iter()
+            .map(|binding| (binding.section.id(), binding.command_id.get()))
+            .collect::<Vec<_>>()
+            == action_identity
+    });
+    if let Some(replacement_index) = replacement_index {
+        actions[replacement_index].disabled |= action.disabled;
+    } else {
+        actions.insert(index.min(actions.len()), action);
+    }
+    true
 }
 
 extern "C" fn toggle_action_hook(command_id: i32) -> i32 {
-    let actions = &Reaper::get().actions;
-    for action in actions.iter() {
-        if action
-            .bindings
-            .iter()
-            .any(|binding| binding.command_id.get() == command_id as u32)
-        {
-            return match action.kind.toggle_state() {
-                Some(true) => 1,
-                Some(false) => 0,
-                None => -1,
-            };
-        }
-    }
-    -1
+    Reaper::get()
+        .actions
+        .iter()
+        .find(|action| {
+            action
+                .bindings
+                .iter()
+                .any(|binding| binding.command_id.get() == command_id as u32)
+        })
+        .filter(|action| !action.disabled)
+        .and_then(|action| action.kind.toggle_state())
+        .map_or(-1, |checked| i32::from(checked))
 }
 
 extern "C" fn timer_f() {
-    let timers = &mut Reaper::get_mut().timers;
-    for (_, (last_time, timer)) in timers.iter_mut() {
-        let now = time::Instant::now();
-        if now.duration_since(last_time.clone()) > timer.borrow().interval() {
-            match timer.borrow_mut().run() {
-                Ok(_) => (),
-                Err(e) => action_error(e),
-            };
-            *last_time = now;
+    // Snapshot identities first: timer callbacks may register/unregister
+    // timers or recursively enter the host timer hook.
+    let timers: Vec<_> = Reaper::get()
+        .timers
+        .iter()
+        .map(|(id, (last_time, timer))| {
+            (id.clone(), *last_time, Arc::clone(timer))
+        })
+        .collect();
+
+    for (id, last_time, timer) in timers {
+        if !Reaper::get_mut().active_timer_callbacks.insert(id.clone()) {
+            continue;
         }
+        let interval_result = swell_gui::events::invoke_callback(
+            "plugin timer interval",
+            &mut || Ok(timer.borrow().interval()),
+        );
+        if Reaper::get_mut().pending_timer_removals.remove(&id) {
+            Reaper::get_mut().active_timer_callbacks.remove(&id);
+            let _ = Reaper::get_mut().unregister_timer(id.clone());
+            continue;
+        }
+        let interval = match interval_result {
+            Ok(interval) => interval,
+            Err(_) => {
+                Reaper::get_mut().active_timer_callbacks.remove(&id);
+                remove_failed_timer(&id, &timer);
+                continue;
+            }
+        };
+        let now = Instant::now();
+        if now.duration_since(last_time) <= interval {
+            Reaper::get_mut().active_timer_callbacks.remove(&id);
+            if Reaper::get_mut().pending_timer_removals.remove(&id) {
+                let _ = Reaper::get_mut().unregister_timer(id.clone());
+            }
+            continue;
+        }
+        let result =
+            swell_gui::events::invoke_callback("plugin timer", &mut || {
+                timer.borrow_mut().run()
+            });
+        Reaper::get_mut().active_timer_callbacks.remove(&id);
+        if Reaper::get_mut().pending_timer_removals.remove(&id) {
+            let _ = Reaper::get_mut().unregister_timer(id.clone());
+            continue;
+        }
+        if result.is_err() {
+            remove_failed_timer(&id, &timer);
+            continue;
+        }
+
+        if let Some((registered_at, registered_timer)) =
+            Reaper::get_mut().timers.get_mut(&id)
+        {
+            if Arc::ptr_eq(registered_timer, &timer) {
+                *registered_at = now;
+            }
+        }
+    }
+}
+
+fn remove_failed_timer(id: &str, failed_timer: &Arc<RefCell<dyn Timer>>) {
+    let reaper = Reaper::get_mut();
+    let is_same_timer = reaper
+        .timers
+        .get(id)
+        .is_some_and(|(_, registered)| Arc::ptr_eq(registered, failed_timer));
+    if is_same_timer {
+        let _ = reaper.unregister_timer(id.to_owned());
+    }
+}
+
+fn dispatch_registered_action(
+    disabled: &mut bool,
+    in_flight: &mut bool,
+    mut operation: impl FnMut() -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    if *disabled || *in_flight {
+        return Ok(());
+    }
+    *in_flight = true;
+    let result = swell_gui::events::invoke_callback(
+        "registered action",
+        &mut operation,
+    );
+    *in_flight = false;
+    if result.is_err() {
+        *disabled = true;
+    }
+    result
+}
+
+#[cfg(test)]
+mod callback_dispatch_tests {
+    use super::{dispatch_registered_action, Action, ActionKind};
+    use std::cell::Cell;
+
+    fn action() -> Action {
+        Action {
+            bindings: Vec::new(),
+            operation: Box::new(|_| Ok(())),
+            kind: ActionKind::NotToggleable,
+            disabled: false,
+            in_flight: false,
+        }
+    }
+
+    #[test]
+    fn action_failure_disables_owner_and_later_calls_are_skipped() {
+        let mut action = action();
+        let calls = Cell::new(0);
+        let result = dispatch_registered_action(
+            &mut action.disabled,
+            &mut action.in_flight,
+            || {
+                calls.set(calls.get() + 1);
+                Err(anyhow::anyhow!("action failed"))
+            },
+        );
+        assert!(result.is_err());
+        assert!(action.disabled);
+        assert_eq!(calls.get(), 1);
+        assert!(dispatch_registered_action(
+            &mut action.disabled,
+            &mut action.in_flight,
+            || Ok(()),
+        )
+        .is_ok());
+        assert_eq!(calls.get(), 1);
+    }
+}
+
+#[cfg(test)]
+mod action_registration_tests {
+    use super::{ActionKind, ActionRegistrationOptions};
+    use crate::misc_enums::Section;
+
+    #[test]
+    fn registration_options_deduplicate_sections_before_native_calls() {
+        let options = ActionRegistrationOptions {
+            sections: super::ActionSections::Sections(vec![
+                Section::Main,
+                Section::Main,
+            ]),
+            default_key_binding: None,
+        };
+        assert_eq!(options.sections.into_vec().len(), 1);
+    }
+
+    #[test]
+    fn disabled_action_has_no_toggle_state() {
+        let mut action = super::Action {
+            bindings: Vec::new(),
+            operation: Box::new(|_| Ok(())),
+            kind: ActionKind::Toggleable(true),
+            disabled: true,
+            in_flight: false,
+        };
+        assert!(action.disabled);
+        assert_eq!(action.kind.toggle_state(), Some(true));
+        action.disabled = false;
+        assert!(!action.disabled);
     }
 }
 
@@ -465,15 +718,26 @@ pub struct Reaper {
     toggle_action_hook: extern "C" fn(i32) -> i32,
     registrations: Vec<ActionRegistration>,
     default_key_bindings: Vec<DefaultKeyBindingRegistration>,
-    custom_menu_hook: Option<Box<dyn FnMut(&swell_gui::CustomMenuContext)>>,
+    custom_menu_hook: Option<(
+        Box<dyn FnMut(&swell_gui::CustomMenuContext) -> anyhow::Result<()>>,
+        bool,
+        bool,
+    )>,
     custom_menu_hook_registered: bool,
+    custom_menu_hook_in_flight: bool,
     preferences_page: Option<Box<PreferencesPageRegistration>>,
-    preferences_page_builder: Option<
+    preferences_page_builder: Option<(
         Box<dyn FnMut(ReaperWindow) -> anyhow::Result<Box<dyn WindowHandler>>>,
-    >,
+        bool,
+    )>,
     timers: HashMap<String, (Instant, Arc<RefCell<dyn Timer>>)>,
+    active_timer_callbacks: HashSet<String>,
+    pending_timer_removals: HashSet<String>,
     pub(crate) windows: HashMap<WindowId, Box<dyn WindowHandler>>,
     pub(crate) window_routes: HashMap<usize, WindowId>,
+    pub(crate) dispatching_windows: HashSet<WindowId>,
+    pub(crate) window_dispatch_depths: HashMap<WindowId, usize>,
+    pending_window_removals: HashSet<WindowId>,
     csurfases: HashMap<
         String,
         (
@@ -482,6 +746,7 @@ pub struct Reaper {
             NonNull<raw::IReaperControlSurface>,
         ),
     >,
+    retired_csurfases: Vec<RetiredControlSurface>,
 }
 impl Reaper {
     pub fn load(context: PluginContext) -> Reaper {
@@ -513,12 +778,19 @@ impl Reaper {
             default_key_bindings: Vec::new(),
             custom_menu_hook: None,
             custom_menu_hook_registered: false,
+            custom_menu_hook_in_flight: false,
             preferences_page: None,
             preferences_page_builder: None,
             timers: HashMap::new(),
+            active_timer_callbacks: HashSet::new(),
+            pending_timer_removals: HashSet::new(),
             windows: HashMap::new(),
             window_routes: HashMap::new(),
+            dispatching_windows: HashSet::new(),
+            window_dispatch_depths: HashMap::new(),
+            pending_window_removals: HashSet::new(),
             csurfases: HashMap::new(),
+            retired_csurfases: Vec::new(),
         }
     }
     fn make_available_globally(reaper: Reaper) {
@@ -545,19 +817,20 @@ impl Reaper {
     /// display phases. The supplied menu handle is borrowed for the callback.
     pub fn register_custom_menu_hook(
         &mut self,
-        callback: impl FnMut(&swell_gui::CustomMenuContext) + 'static,
+        callback: impl FnMut(&swell_gui::CustomMenuContext) -> anyhow::Result<()>
+            + 'static,
     ) -> anyhow::Result<()> {
         if self.custom_menu_hook_registered {
             anyhow::bail!("a custom menu hook is already registered");
         }
-        self.custom_menu_hook = Some(Box::new(callback));
+        self.custom_menu_hook = Some((Box::new(callback), false, false));
+        self.custom_menu_hook_registered = true;
         unsafe {
             self.low.plugin_register(
                 c_str!("hookcustommenu").as_ptr(),
                 custom_menu_hook as *mut _,
             );
         }
-        self.custom_menu_hook_registered = true;
         Ok(())
     }
 
@@ -588,7 +861,7 @@ impl Reaper {
         }
         let id = CString::new(id)?;
         let display_name = CString::new(display_name)?;
-        self.preferences_page_builder = Some(Box::new(builder));
+        self.preferences_page_builder = Some((Box::new(builder), false));
         let mut registration = raw::prefs_page_register_t::default();
         registration.idstr = id.as_ptr();
         registration.displayname = display_name.as_ptr();
@@ -643,7 +916,7 @@ impl Reaper {
             "validating Preferences page parent: parent={parent:p} valid={parent_valid}"
         );
         if !parent_valid {
-            return Err(crate::ReaRsError::InvalidObject(
+            return Err(ReaRsError::InvalidObject(
                 "Preferences page parent is not a valid window",
             ));
         }
@@ -701,8 +974,10 @@ impl Reaper {
         }
         .ok_or(ReaRsError::NullPtr("window"))?;
         trace!(
-            "native REAPER window created with window_proc: title={:?} hwnd={hwnd:p} callback={:p}",
+            "native REAPER window created with window_proc: title={:?} hwnd={hwnd:p} parent={parent:p} valid={} visible={} callback={:p}",
             spec.title,
+            unsafe { self.swell.IsWindow(hwnd) },
+            unsafe { self.swell.IsWindowVisible(hwnd) },
             swell_gui::window_proc as *const (),
         );
         let window = ReaperWindow::owned(
@@ -730,6 +1005,11 @@ impl Reaper {
         // reparented into a docker. This is the fallback restore rectangle
         // for the first dock -> float transition.
         window.remember_floating_rect()?;
+        trace!(
+            "window initial placement captured: title={:?} hwnd={hwnd:p} visible={}",
+            spec.title,
+            unsafe { self.swell.IsWindowVisible(hwnd) },
+        );
         Ok(window)
     }
 
@@ -765,8 +1045,17 @@ impl Reaper {
         }
         let show_on_register = handler.window().show_on_register;
         let owned = window.is_owned();
+        trace!(
+            "window registration preparation: id={window_id:?} hwnd={hwnd:p} owned={owned} show_on_register={show_on_register} visible={} parent={parent:p}",
+            unsafe { self.swell.IsWindowVisible(hwnd) },
+        );
         if owned {
             handler.window().apply_default_layout()?;
+            trace!(
+                "window initial layout applied: id={window_id:?} hwnd={hwnd:p} valid={} visible={}",
+                unsafe { self.swell.IsWindow(hwnd) },
+                unsafe { self.swell.IsWindow(hwnd) && self.swell.IsWindowVisible(hwnd) },
+            );
         }
         self.windows.insert(window_id.clone(), handler);
         self.window_routes.insert(hwnd_key, window_id.clone());
@@ -792,17 +1081,60 @@ impl Reaper {
             "window handler registered: id={window_id:?} hwnd={hwnd:p} parent={parent:p} owned={owned} route={:?}",
             self.window_routes.get(&hwnd_key),
         );
-        if let Some(handler) = self.windows.get_mut(&window_id) {
-            handler.on_open();
+        self.begin_window_dispatch(&window_id);
+        trace!(
+            "window open callback begin: id={window_id:?} hwnd={hwnd:p} valid={} visible={}",
+            unsafe { self.swell.IsWindow(hwnd) },
+            unsafe { self.swell.IsWindow(hwnd) && self.swell.IsWindowVisible(hwnd) },
+        );
+        let mut opening_handler = self.windows.remove(&window_id);
+        if let Some(handler) = opening_handler.as_mut() {
+            let _ = swell_gui::windows::invoke_handler_callback(
+                handler.as_mut(),
+                "window open",
+                |handler| handler.on_open(),
+            );
         }
+        if let Some(handler) = opening_handler {
+            self.windows.insert(window_id.clone(), handler);
+        }
+        trace!(
+            "window open callback complete: id={window_id:?} hwnd={hwnd:p} valid={} visible={} pending_removal={}",
+            unsafe { self.swell.IsWindow(hwnd) },
+            unsafe { self.swell.IsWindow(hwnd) && self.swell.IsWindowVisible(hwnd) },
+            self.pending_window_removals.contains(&window_id),
+        );
         if show_on_register {
             if let Some(handler) = self.windows.get(&window_id) {
+                trace!(
+                    "showing registered window: id={window_id:?} hwnd={hwnd:p} valid={} visible_before={}",
+                    unsafe { self.swell.IsWindow(hwnd) },
+                    unsafe { self.swell.IsWindow(hwnd) && self.swell.IsWindowVisible(hwnd) },
+                );
                 if let Err(error) = handler.window().show() {
-                    self.unregister_window_handler(&window_id)?;
+                    trace!(
+                        "showing registered window failed: id={window_id:?} hwnd={hwnd:p} valid={} error={error}",
+                        unsafe { self.swell.IsWindow(hwnd) },
+                    );
+                    self.pending_window_removals.insert(window_id.clone());
+                    self.finish_window_dispatch(&window_id);
                     return Err(error);
                 }
+                trace!(
+                    "registered window show complete: id={window_id:?} hwnd={hwnd:p} valid={} visible={}",
+                    unsafe { self.swell.IsWindow(hwnd) },
+                    unsafe { self.swell.IsWindow(hwnd) && self.swell.IsWindowVisible(hwnd) },
+                );
+            }
+        } else if owned {
+            if let Some(handler) = self.windows.get(&window_id) {
+                trace!(
+                    "hiding registered window by spec: id={window_id:?} hwnd={hwnd:p}",
+                );
+                let _ = handler.window().hide();
             }
         }
+        self.finish_window_dispatch(&window_id);
         Ok(window_id)
     }
 
@@ -823,6 +1155,22 @@ impl Reaper {
         &mut self,
         window_id: &WindowId,
     ) -> ReaperResult<()> {
+        trace!(
+            "window unregister requested: id={window_id:?} dispatching={} active_callbacks={}",
+            self.dispatching_windows.contains(window_id),
+            self.windows
+                .get(window_id)
+                .map(|handler| handler.window().active_callbacks.get())
+                .unwrap_or_default(),
+        );
+        if self.dispatching_windows.contains(window_id)
+            || self.windows.get(window_id).is_some_and(|handler| {
+                handler.window().active_callbacks.get() > 0
+            })
+        {
+            self.pending_window_removals.insert(window_id.clone());
+            return Ok(());
+        }
         let Some(mut handler) = self.windows.remove(window_id) else {
             log::debug!(
                 "unregister window handler skipped: id={window_id:?} not registered"
@@ -843,7 +1191,11 @@ impl Reaper {
             swell_gui::host_proc::detach_host_proc(hwnd);
         }
         handler.window().destroy_structural_children();
-        handler.on_destroy();
+        let _ = swell_gui::windows::invoke_handler_cleanup_callback(
+            handler.as_mut(),
+            "window destroy",
+            |handler| handler.on_destroy(),
+        );
         if owned {
             handler.window().destroy_owned_native();
         }
@@ -852,7 +1204,36 @@ impl Reaper {
             "unregister window handler complete: id={window_id:?} hwnd={hwnd:p} owned={owned} hwnd_valid_after={}",
             unsafe { self.swell.IsWindow(hwnd) },
         );
+        self.pending_window_removals.remove(window_id);
         Ok(())
+    }
+
+    pub(crate) fn finish_window_dispatch(&mut self, window_id: &str) {
+        let depth = self.window_dispatch_depths.get_mut(window_id);
+        if let Some(depth) = depth {
+            *depth = depth.saturating_sub(1);
+            if *depth > 0 {
+                return;
+            }
+        }
+        self.window_dispatch_depths.remove(window_id);
+        self.dispatching_windows.remove(window_id);
+        if self.pending_window_removals.remove(window_id) {
+            let window_id = window_id.to_owned();
+            if let Err(error) = self.unregister_window_handler(&window_id) {
+                log::error!(
+                    "deferred window cleanup failed: id={window_id:?} error={error}"
+                );
+            }
+        }
+    }
+
+    pub(crate) fn begin_window_dispatch(&mut self, window_id: &str) {
+        *self
+            .window_dispatch_depths
+            .entry(window_id.to_owned())
+            .or_default() += 1;
+        self.dispatching_windows.insert(window_id.to_owned());
     }
 
     /// Compatibility helper: resolves a native HWND to its stable ID.
@@ -917,6 +1298,12 @@ impl Reaper {
         }
     }
     pub fn unregister_timer(&mut self, id_string: String) -> ReaperResult<()> {
+        // A timer snapshot owns an Arc until its callback returns, so self-
+        // unregistration drops registry membership but not the active target.
+        if self.active_timer_callbacks.contains(&id_string) {
+            self.pending_timer_removals.insert(id_string);
+            return Ok(());
+        }
         match self.timers.remove(&id_string) {
             Some(_) => {
                 if self.timers.len() == 0 {
@@ -1046,11 +1433,28 @@ impl Reaper {
             bindings,
             operation: Box::new(operation),
             kind,
+            disabled: false,
+            in_flight: false,
         };
         self.actions.push(action);
-        Ok(RegisteredAction {
-            command_id: self.actions.last().unwrap().command_id(),
-        })
+        let command_id = self.actions.last().unwrap().command_id();
+        Ok(RegisteredAction { command_id })
+    }
+
+    pub fn set_action_toggle_state(
+        &mut self,
+        command_id: CommandId,
+        state: bool,
+    ) -> bool {
+        self.actions
+            .iter_mut()
+            .find(|action| {
+                action
+                    .bindings
+                    .iter()
+                    .any(|binding| binding.command_id == command_id)
+            })
+            .is_some_and(|action| action.kind.set_toggle_state(state))
     }
 
     pub fn register_control_surface(
@@ -1058,6 +1462,15 @@ impl Reaper {
         csurf: Arc<RefCell<dyn ControlSurface>>,
     ) {
         let id_string = csurf.borrow().get_type_string();
+        if self.csurfases.contains_key(&id_string)
+            || self
+                .retired_csurfases
+                .iter()
+                .any(|retired| retired.id == id_string)
+        {
+            log::error!("control surface already registered or retained: id={id_string:?}");
+            return;
+        }
         let mut low_cs: Box<dyn IReaperControlSurface> =
             Box::new(ControlSurfaceWrap::new(csurf));
         // Create thin pointer of low_cs before making it a trait
@@ -1102,9 +1515,11 @@ impl Reaper {
         &mut self,
         id_string: String,
     ) -> Result<(), ReaRsError> {
-        // Keep the Rust callback target alive until REAPER has stopped using
-        // the C++ wrapper. Then destroy the wrapper before dropping its Rust
-        // backing object.
+        // Detach immediately, but retain both the C++ wrapper and Rust target
+        // until plugin teardown. The low-level API cannot identify a safe
+        // post-virtual-return point: REAPER may run timers during nested
+        // loops. Keep the Rust callback target alive until REAPER has
+        // stopped using the detached C++ wrapper.
         let cpp_cs = self
             .csurfases
             .get(&id_string)
@@ -1119,19 +1534,25 @@ impl Reaper {
             "control surface unregister begin: id={id_string:?} cpp={:p}",
             cpp_cs.as_ptr(),
         );
-        unsafe {
-            let result = self.low().plugin_register(
+        let result = unsafe {
+            self.low().plugin_register(
                 c_str!("-csurf_inst").as_ptr(),
                 cpp_cs.as_ptr() as _,
-            );
-            debug!(
-                "control surface detached from REAPER: id={id_string:?} result={result} cpp={:p}",
-                cpp_cs.as_ptr(),
-            );
-            delete_cpp_control_surface(cpp_cs);
-        }
-        self.csurfases.remove(&id_string);
-        debug!("control surface dropped: id={id_string:?}");
+            )
+        };
+        debug!(
+            "control surface detached and retained until plugin teardown: id={id_string:?} result={result} cpp={:p}",
+            cpp_cs.as_ptr(),
+        );
+        let retained = self
+            .csurfases
+            .remove(&id_string)
+            .expect("control surface checked above");
+        self.retired_csurfases.push(RetiredControlSurface {
+            id: id_string,
+            rust_owner: retained.0,
+            cpp_owner: Some(retained.2),
+        });
         Ok(())
     }
 }
@@ -1157,7 +1578,11 @@ impl Drop for Reaper {
             }
             window.destroy_structural_children();
             let mut handler = handler;
-            handler.on_destroy();
+            let _ = swell_gui::windows::invoke_handler_cleanup_callback(
+                handler.as_mut(),
+                "window destroy during plugin teardown",
+                |handler| handler.on_destroy(),
+            );
             drop(handler);
             let _ = id;
         }
@@ -1177,6 +1602,13 @@ impl Drop for Reaper {
                 c_str!("-toggleaction").as_ptr(),
                 self.toggle_action_hook as *mut _,
             );
+            low.plugin_register(c_str!("-timer").as_ptr(), timer_f as *mut _);
+            for (_, (_, _, cpp_surface)) in self.csurfases.drain() {
+                let _ = low.plugin_register(
+                    c_str!("-csurf_inst").as_ptr(),
+                    cpp_surface.as_ptr() as _,
+                );
+            }
         }
         self.preferences_page_builder.take();
         self.preferences_page.take();

@@ -362,7 +362,48 @@ pub enum NativeKey {
 }
 
 /// Callback for general window/Canvas input events.
-pub type WindowEventCallback = Box<dyn FnMut(WindowEvent) -> EventResponse>;
+pub type WindowEventCallback =
+    Box<dyn FnMut(WindowEvent) -> anyhow::Result<EventResponse>>;
+
+impl ReaperWindow {
+    /// Registers a fallible callback for general window input events.
+    pub fn on_window_event(
+        &self,
+        callback: impl FnMut(WindowEvent) -> anyhow::Result<EventResponse>
+            + 'static,
+    ) {
+        *self.window_event_callback.borrow_mut() = Some(Box::new(callback));
+    }
+}
+
+pub(super) fn dispatch_window_event(
+    window: &ReaperWindow,
+    event: WindowEvent,
+) -> EventResponse {
+    if window.callbacks_disabled.get() {
+        return EventResponse::Handled;
+    }
+    let callback = window.window_event_callback.borrow_mut().take();
+    let Some(mut callback) = callback else {
+        return EventResponse::ForwardToWindow;
+    };
+    let mut event = Some(event);
+    match invoke_callback("window input event", &mut || {
+        callback(event.take().expect("window event dispatched once"))
+    }) {
+        Ok(response) => {
+            let mut slot = window.window_event_callback.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(callback);
+            }
+            response
+        }
+        Err(_) => {
+            window.callbacks_disabled.set(true);
+            EventResponse::Handled
+        }
+    }
+}
 
 pub type WidgetEventCallback =
     Box<dyn FnMut(ControlEvent) -> anyhow::Result<EventResponse>>;
@@ -381,14 +422,24 @@ fn report_callback_failure(context: &str, error: &anyhow::Error) {
     }
 }
 
-pub(super) fn invoke_callback<T>(
+pub(crate) fn invoke_callback<T>(
     context: &str,
     callback: &mut impl FnMut() -> anyhow::Result<T>,
+) -> Result<T, anyhow::Error> {
+    invoke_callback_with_reporter(context, callback, |error| {
+        report_callback_failure(context, error);
+    })
+}
+
+fn invoke_callback_with_reporter<T>(
+    _context: &str,
+    callback: &mut impl FnMut() -> anyhow::Result<T>,
+    mut report: impl FnMut(&anyhow::Error),
 ) -> Result<T, anyhow::Error> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)) {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => {
-            report_callback_failure(context, &error);
+            report(&error);
             Err(error)
         }
         Err(payload) => {
@@ -398,12 +449,74 @@ pub(super) fn invoke_callback<T>(
                 .or_else(|| payload.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "non-string panic payload".to_owned());
             let error = anyhow::anyhow!("callback panicked: {message}");
-            report_callback_failure(context, &error);
+            report(&error);
             Err(error)
         }
     }
 }
 
+#[cfg(test)]
+mod callback_boundary_tests {
+    use super::invoke_callback_with_reporter;
+    use std::cell::Cell;
+
+    #[test]
+    fn callback_boundary_preserves_success_value_without_reporting() {
+        let reports = Cell::new(0);
+        let mut callback = || Ok::<_, anyhow::Error>(42);
+
+        let value = invoke_callback_with_reporter(
+            "test callback",
+            &mut callback,
+            |_| {
+                reports.set(reports.get() + 1);
+            },
+        );
+
+        assert_eq!(value.unwrap(), 42);
+        assert_eq!(reports.get(), 0);
+    }
+
+    #[test]
+    fn callback_boundary_reports_error_exactly_once() {
+        let reports = Cell::new(0);
+        let mut callback =
+            || Err::<(), _>(anyhow::anyhow!("expected failure"));
+
+        let error = invoke_callback_with_reporter(
+            "test callback",
+            &mut callback,
+            |_| {
+                reports.set(reports.get() + 1);
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("expected failure"));
+        assert_eq!(reports.get(), 1);
+    }
+
+    #[test]
+    fn callback_boundary_normalizes_and_reports_panic_exactly_once() {
+        let reports = Cell::new(0);
+        let mut callback =
+            || -> anyhow::Result<()> { panic!("expected panic") };
+
+        let error = invoke_callback_with_reporter(
+            "test callback",
+            &mut callback,
+            |_| {
+                reports.set(reports.get() + 1);
+            },
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("callback panicked: expected panic"));
+        assert_eq!(reports.get(), 1);
+    }
+}
 #[derive(Default)]
 pub(super) struct EventRegistry {
     pub(super) widget_callbacks: HashMap<SwellId, WidgetEventCallback>,
@@ -422,6 +535,7 @@ pub(super) struct EventRegistry {
 pub(super) enum DispatchResult {
     Handled,
     ForwardToWindow,
+    CallbackFailed,
 }
 
 impl EventRegistry {
@@ -537,9 +651,11 @@ impl EventRegistry {
             let response =
                 invoke_callback("widget event", &mut || callback(event));
             let Ok(response) = response else {
-                return DispatchResult::Handled;
+                return DispatchResult::CallbackFailed;
             };
-            self.widget_callbacks.insert(control, callback);
+            if !self.widget_callbacks.contains_key(&control) {
+                self.widget_callbacks.insert(control, callback);
+            }
             match response {
                 EventResponse::Handled => return DispatchResult::Handled,
                 EventResponse::ForwardToWindow => {
@@ -566,9 +682,11 @@ impl EventRegistry {
                 callback(container_event)
             });
             let Ok(response) = response else {
-                return DispatchResult::Handled;
+                return DispatchResult::CallbackFailed;
             };
-            self.container_callbacks.insert(container, callback);
+            if !self.container_callbacks.contains_key(&container) {
+                self.container_callbacks.insert(container, callback);
+            }
             match response {
                 EventResponse::Handled => return DispatchResult::Handled,
                 EventResponse::ForwardToWindow => {
@@ -581,6 +699,28 @@ impl EventRegistry {
             }
         }
         DispatchResult::ForwardToWindow
+    }
+}
+
+#[cfg(test)]
+mod event_failure_tests {
+    use super::{ControlEvent, DispatchResult, EventRegistry};
+    use crate::swell_gui::widgets::SwellId;
+
+    #[test]
+    fn failed_widget_callback_consumes_event_and_is_not_restored() {
+        let mut registry = EventRegistry::default();
+        let id = SwellId(11);
+        registry.register_widget_callback(
+            id,
+            Box::new(|_| Err(anyhow::anyhow!("widget failed"))),
+        );
+
+        assert_eq!(
+            registry.dispatch(ControlEvent::ButtonClicked { control: id }),
+            DispatchResult::CallbackFailed,
+        );
+        assert!(!registry.widget_callbacks.contains_key(&id));
     }
 }
 
@@ -786,6 +926,9 @@ impl ReaperWindow {
         id: SwellId,
         event: ScrollViewEvent,
     ) -> EventResponse {
+        if self.callbacks_disabled.get() {
+            return EventResponse::Handled;
+        }
         let callback = self.events.borrow_mut().take_scroll_view_callback(id);
         let Some(mut callback) = callback else {
             return EventResponse::ForwardToWindow;
@@ -793,16 +936,14 @@ impl ReaperWindow {
         let response =
             invoke_callback("ScrollView event", &mut || callback(event));
         if let Ok(response) = response {
-            self.events
-                .borrow_mut()
-                .restore_scroll_view_callback(id, callback);
+            let mut events = self.events.borrow_mut();
+            if !events.scroll_view_callbacks.contains_key(&id) {
+                events.restore_scroll_view_callback(id, callback);
+            }
             return response;
         }
-        let result = DispatchResult::Handled;
-        match result {
-            DispatchResult::Handled => EventResponse::Handled,
-            DispatchResult::ForwardToWindow => EventResponse::ForwardToWindow,
-        }
+        self.callbacks_disabled.set(true);
+        EventResponse::Handled
     }
 
     pub fn on_container_event(
@@ -821,6 +962,9 @@ impl ReaperWindow {
         &self,
         event: ControlEvent,
     ) -> DispatchResult {
+        if self.callbacks_disabled.get() {
+            return DispatchResult::Handled;
+        }
         let control = event.control();
         let (widget_callback, mut registry) = {
             let mut events = self.events.borrow_mut();
@@ -849,6 +993,9 @@ impl ReaperWindow {
             registry.dispatch(event)
         };
         registry.restore_missing_into(&mut self.events.borrow_mut());
+        if result == DispatchResult::CallbackFailed {
+            self.callbacks_disabled.set(true);
+        }
         result
     }
 
