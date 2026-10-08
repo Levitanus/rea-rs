@@ -476,6 +476,11 @@ pub(crate) unsafe extern "C" fn window_proc(
             "window_proc lifecycle callback: hwnd={hwnd:p} message={msg:#x} wparam={wparam:#x} lparam={lparam:#x}"
         );
     }
+    if matches!(msg, raw::WM_SIZE | raw::WM_MOVE | raw::WM_SHOWWINDOW) {
+        log::trace!(
+            "window_proc geometry/visibility callback: hwnd={hwnd:p} message={msg:#x} wparam={wparam:#x} lparam={lparam:#x}"
+        );
+    }
     if !Reaper::is_available() {
         log::trace!(
             "window_proc ignored lifecycle callback because Reaper is unavailable: hwnd={hwnd:p} message={msg:#x}"

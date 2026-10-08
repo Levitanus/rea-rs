@@ -610,6 +610,7 @@ impl ReaperWindow {
         );
         self.lifecycle_generation
             .set(self.lifecycle_generation.get().wrapping_add(1));
+        let generation = self.lifecycle_generation.get();
         let name = CString::new(name)?;
         let ident = CString::new(ident)?;
         // Preserve only the floating geometry. A docker resize is not a
@@ -623,6 +624,17 @@ impl ReaperWindow {
                 "DockWindowAddEx not available".into(),
             ));
         }
+        log::trace!(
+            "DockWindowAddEx call begin: hwnd={:?} name={:?} ident={:?} allow_show={} generation={} parent={:?} visible={} scroll_views={}",
+            self.hwnd(),
+            name,
+            ident,
+            allow_show,
+            generation,
+            unsafe { Self::swell()?.GetParent(self.hwnd()) },
+            unsafe { Self::swell()?.IsWindowVisible(self.hwnd()) },
+            self.scroll_views.borrow().len(),
+        );
         unsafe {
             low.DockWindowAddEx(
                 self.hwnd(),
@@ -631,6 +643,14 @@ impl ReaperWindow {
                 allow_show,
             );
         }
+        log::trace!(
+            "DockWindowAddEx call returned: hwnd={:?} valid={} parent={:?} visible={} generation={}",
+            self.hwnd(),
+            unsafe { Self::swell()?.IsWindow(self.hwnd()) },
+            unsafe { Self::swell()?.GetParent(self.hwnd()) },
+            unsafe { Self::swell()?.IsWindowVisible(self.hwnd()) },
+            generation,
+        );
         if !unsafe { Self::swell()?.IsWindow(self.hwnd()) } {
             return Err(ReaRsError::InvalidObject(
                 "window was destroyed while docking",
@@ -641,13 +661,48 @@ impl ReaperWindow {
         // next host layout pass. Explicitly show and repaint it so the docked
         // content is initialized immediately.
         self.show()?;
+        log::trace!(
+            "dock transition shown: hwnd={:?} parent={:?} visible={} generation={}",
+            self.hwnd(),
+            unsafe { Self::swell()?.GetParent(self.hwnd()) },
+            unsafe { Self::swell()?.IsWindowVisible(self.hwnd()) },
+            generation,
+        );
         if low.pointers().DockWindowActivate.is_some() {
+            log::trace!(
+                "DockWindowActivate call begin: hwnd={:?} generation={generation}",
+                self.hwnd(),
+            );
             unsafe {
                 low.DockWindowActivate(self.hwnd());
             }
+            log::trace!(
+                "DockWindowActivate call returned: hwnd={:?} valid={} parent={:?} generation={generation}",
+                self.hwnd(),
+                unsafe { Self::swell()?.IsWindow(self.hwnd()) },
+                unsafe { Self::swell()?.GetParent(self.hwnd()) },
+            );
         }
+        log::trace!(
+            "dock controls rebind begin: hwnd={:?} generation={generation}",
+            self.hwnd(),
+        );
         self.rebind_controls()?;
+        log::trace!(
+            "dock controls rebind complete: hwnd={:?} generation={generation}",
+            self.hwnd(),
+        );
+        log::trace!(
+            "dock layout begin: hwnd={:?} generation={generation}",
+            self.hwnd(),
+        );
         self.apply_default_layout()?;
+        log::trace!(
+            "dock layout complete: hwnd={:?} valid={} parent={:?} generation={generation}",
+            self.hwnd(),
+            unsafe { Self::swell()?.IsWindow(self.hwnd()) },
+            unsafe { Self::swell()?.GetParent(self.hwnd()) },
+        );
         log::warn!(
             "dock transition complete: hwnd={:?} parent={:?} generation={}",
             self.hwnd(),
@@ -694,14 +749,26 @@ impl ReaperWindow {
         );
         self.lifecycle_generation
             .set(self.lifecycle_generation.get().wrapping_add(1));
+        let generation = self.lifecycle_generation.get();
         if low.pointers().DockWindowRemove.is_none() {
             return Err(ReaRsError::UnexpectedAPI(
                 "DockWindowRemove not available".into(),
             ));
         }
+        log::trace!(
+            "DockWindowRemove call begin: hwnd={:?} parent={:?} generation={generation}",
+            self.hwnd(),
+            unsafe { Self::swell()?.GetParent(self.hwnd()) },
+        );
         unsafe {
             low.DockWindowRemove(self.hwnd());
         }
+        log::trace!(
+            "DockWindowRemove call returned: hwnd={:?} valid={} parent={:?} generation={generation}",
+            self.hwnd(),
+            unsafe { Self::swell()?.IsWindow(self.hwnd()) },
+            unsafe { Self::swell()?.GetParent(self.hwnd()) },
+        );
         if !unsafe { Self::swell()?.IsWindow(self.hwnd()) } {
             return Err(ReaRsError::InvalidObject(
                 "window was destroyed while removing it from the docker",
@@ -724,6 +791,13 @@ impl ReaperWindow {
                 main_hwnd as isize,
             );
         }
+        log::trace!(
+            "float parent restored: hwnd={:?} valid={} parent={:?} owner={:?} generation={generation}",
+            self.hwnd(),
+            unsafe { Self::swell()?.IsWindow(self.hwnd()) },
+            unsafe { Self::swell()?.GetParent(self.hwnd()) },
+            unsafe { Self::swell()?.GetWindow(self.hwnd(), raw::GW_OWNER) },
+        );
         if !unsafe { Self::swell()?.IsWindow(self.hwnd()) } {
             return Err(ReaRsError::InvalidObject(
                 "window was destroyed while restoring its parent",
@@ -779,6 +853,13 @@ impl ReaperWindow {
         }
         self.rebind_controls()?;
         self.apply_default_layout()?;
+        log::trace!(
+            "float transition complete: hwnd={:?} valid={} parent={:?} visible={} generation={generation}",
+            self.hwnd(),
+            unsafe { Self::swell()?.IsWindow(self.hwnd()) },
+            unsafe { Self::swell()?.GetParent(self.hwnd()) },
+            unsafe { Self::swell()?.IsWindowVisible(self.hwnd()) },
+        );
         Ok(())
     }
 

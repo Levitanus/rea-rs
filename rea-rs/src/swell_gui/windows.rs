@@ -778,6 +778,16 @@ impl<'a> ScrollView<'a> {
         viewport: super::layout::Size,
         content: super::layout::Size,
     ) {
+        log::trace!(
+            "scroll layout sizing begin: window={:?} id={:?} view={:?} clip={:?} content_hwnd={:?} scrollbar_host={:?} renderer={:?} requested_viewport={viewport:?} requested_content={content:?}",
+            self.window.hwnd(),
+            self.id,
+            self.view,
+            self.clip,
+            self.content,
+            self.scrollbar_hwnd,
+            self.renderer,
+        );
         self.viewport.set(viewport);
         {
             let mut state = self.state.borrow_mut();
@@ -804,8 +814,16 @@ impl<'a> ScrollView<'a> {
         };
         let state = state.set_content(content);
         let offset = state.offset();
+        log::trace!(
+            "scroll child resize begin: window={:?} id={:?} view={:?} clip={:?} content_hwnd={:?} client={client:?} content={content:?} offset={offset:?}",
+            self.window.hwnd(),
+            self.id,
+            self.view,
+            self.clip,
+            self.content,
+        );
         unsafe {
-            let _ = Reaper::get().swell().SetWindowPos(
+            Reaper::get().swell().SetWindowPos(
                 self.clip,
                 std::ptr::null_mut(),
                 0,
@@ -815,7 +833,14 @@ impl<'a> ScrollView<'a> {
                 (raw::SWP_NOZORDER | raw::SWP_NOACTIVATE | raw::SWP_NOREDRAW)
                     as i32,
             );
-            let _ = Reaper::get().swell().SetWindowPos(
+            log::trace!(
+                "scroll clip resize returned: window={:?} id={:?} clip={:?} valid={}",
+                self.window.hwnd(),
+                self.id,
+                self.clip,
+                Reaper::get().swell().IsWindow(self.clip),
+            );
+            Reaper::get().swell().SetWindowPos(
                 self.content,
                 std::ptr::null_mut(),
                 -(offset.x.min(i32::MAX as u32) as i32),
@@ -825,10 +850,24 @@ impl<'a> ScrollView<'a> {
                 (raw::SWP_NOZORDER | raw::SWP_NOACTIVATE | raw::SWP_NOREDRAW)
                     as i32,
             );
-            let _ = Reaper::get().swell().InvalidateRect(
+            log::trace!(
+                "scroll content resize returned: window={:?} id={:?} content_hwnd={:?} valid={}",
+                self.window.hwnd(),
+                self.id,
+                self.content,
+                Reaper::get().swell().IsWindow(self.content),
+            );
+            Reaper::get().swell().InvalidateRect(
                 self.clip,
                 std::ptr::null(),
                 1,
+            );
+            log::trace!(
+                "scroll child resize complete: window={:?} id={:?} clip={:?} content_hwnd={:?}",
+                self.window.hwnd(),
+                self.id,
+                self.clip,
+                self.content,
             );
         }
         *self.state.borrow_mut() =
@@ -854,6 +893,15 @@ impl<'a> ScrollView<'a> {
         let Some(reaper) = Reaper::is_available().then(Reaper::get) else {
             return;
         };
+        log::trace!(
+            "scrollbar sync begin: window={:?} id={:?} view={:?} host={:?} renderer={:?} state={:?}",
+            self.window.hwnd(),
+            self.id,
+            self.view,
+            self.scrollbar_hwnd,
+            self.renderer,
+            *self.state.borrow(),
+        );
         let bar = |horizontal| {
             if horizontal {
                 raw::SB_HORZ
