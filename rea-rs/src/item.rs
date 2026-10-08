@@ -68,7 +68,7 @@ impl Item {
             Reaper::get().low().GetMediaItem_Track(self.get()?.as_ptr())
         };
         match MediaTrack::new(ptr) {
-            None => panic!("Got null ptr! Maybe track is deleted?"),
+            None => Err(ReaRsError::NullPtr("track for media item")),
             Some(ptr) => Ok(Track::new(self.project().get()?, ptr)),
         }
     }
@@ -129,13 +129,13 @@ impl Item {
     }
 
     pub fn position(&self) -> ReaperResult<Position> {
-        Ok(self.get_info_value("D_POSITION")?.into())
+        Position::from_host_seconds(self.get_info_value("D_POSITION")?)
     }
     pub fn length(&self) -> ReaperResult<Duration> {
         Ok(Duration::from_secs_f64(self.get_info_value("D_LENGTH")?))
     }
     pub fn end_position(&self) -> ReaperResult<Position> {
-        Ok(self.position()? + self.length()?.into())
+        Ok(self.position()? + self.length()?)
     }
     pub fn is_muted(&self) -> ReaperResult<bool> {
         Ok(self.get_info_value("B_MUTE")? != 0.0)
@@ -149,10 +149,10 @@ impl Item {
     ///
     /// This function will not override the same parameters on other items
     pub fn solo_override(&self) -> ReaperResult<ItemSoloOverride> {
-        Ok(ItemSoloOverride::from_int(
-            self.get_info_value("C_MUTE_SOLO")? as i32
-        )
-        .expect("can not convert value to item solo override"))
+        ItemSoloOverride::from_int(self.get_info_value("C_MUTE_SOLO")? as i32)
+            .map_err(|_| {
+                ReaRsError::InvalidObject("unknown item solo override")
+            })
     }
     pub fn is_looped(&self) -> ReaperResult<bool> {
         Ok(self.get_info_value("B_LOOPSRC")? != 0.0)
@@ -161,10 +161,8 @@ impl Item {
         Ok(self.get_info_value("B_ALLTAKESPLAY")? != 0.0)
     }
     pub fn time_base(&self) -> ReaperResult<TimeMode> {
-        Ok(
-            TimeMode::from_int(self.get_info_value("C_BEATATTACHMODE")? as i32)
-                .expect("Can not convert balue to time mode"),
-        )
+        TimeMode::from_int(self.get_info_value("C_BEATATTACHMODE")? as i32)
+            .map_err(|_| ReaRsError::InvalidObject("unknown item time base"))
     }
     pub fn auto_stretch(&self) -> ReaperResult<bool> {
         Ok(self.get_info_value("C_AUTOSTRETCH")? != 0.0)
@@ -173,7 +171,7 @@ impl Item {
         Ok(self.get_info_value("C_LOCK")? != 0.0)
     }
     pub fn volume(&self) -> ReaperResult<Volume> {
-        Ok(Volume::from(self.get_info_value("D_VOL")?))
+        Volume::try_from(self.get_info_value("D_VOL")?)
     }
     pub fn snap_offset(&self) -> ReaperResult<Duration> {
         Ok(Duration::from_secs_f64(
@@ -295,8 +293,8 @@ impl Item {
     }
     pub fn guid(&self) -> ReaperResult<GUID> {
         let guid_str = self.get_info_string("GUID", 50)?;
-        Ok(GUID::from_string(guid_str)
-            .expect("Can not convert GUID string to GUID"))
+        GUID::from_string(guid_str)
+            .map_err(|_| ReaRsError::InvalidObject("invalid item GUID"))
     }
 
     pub fn add_take(&mut self) -> ReaperResult<Take> {
@@ -304,7 +302,7 @@ impl Item {
             Reaper::get().low().AddTakeToMediaItem(self.get()?.as_ptr())
         };
         match MediaItemTake::new(ptr) {
-            None => panic!("can not make Take"),
+            None => Err(ReaRsError::NullPtr("new media take")),
             Some(ptr) => Take::new(ptr, Some(self)),
         }
     }
@@ -316,7 +314,7 @@ impl Item {
         unsafe {
             Reaper::get().low().SetMediaItemPosition(
                 self.get()?.as_ptr(),
-                position.into().into(),
+                position.into().as_seconds_f64(),
                 true,
             );
         }
@@ -336,7 +334,8 @@ impl Item {
         &mut self,
         end_position: impl Into<Position>,
     ) -> ReaperResult<()> {
-        let length: Duration = (end_position.into() - self.position()?).into();
+        let end_position = end_position.into();
+        let length = end_position.get_length(self.position()?)?;
         unsafe {
             Reaper::get().low().SetMediaItemLength(
                 self.get()?.as_ptr(),
@@ -374,7 +373,7 @@ impl Item {
         self,
         position: impl Into<Position>,
     ) -> ReaperResult<ItemSplit> {
-        let position: f64 = position.into().into();
+        let position = position.into().as_seconds_f64();
         let ptr = unsafe {
             Reaper::get()
                 .low()
@@ -512,14 +511,22 @@ impl Item {
     ///
     /// 0 -> top of track, 1 -> bottom of track (will never be 1)
     pub fn set_y_pos_free_mode(&mut self, y_pos: f64) -> ReaperResult<()> {
-        assert!((0.0..1.0).contains(&y_pos));
+        if !y_pos.is_finite() || !(0.0..1.0).contains(&y_pos) {
+            return Err(ReaRsError::InvalidObject(
+                "free-mode item y position must be between 0 and 1",
+            ));
+        }
         self.set_info_value("F_FREEMODE_Y", y_pos as f64)
     }
     /// Height in pixels, when track is in free mode
     ///
     /// 0 -> no height (will never be), 1 -> full track.
     pub fn set_height_free_mode(&mut self, height: f64) -> ReaperResult<()> {
-        assert!((0.0..1.0).contains(&height));
+        if !height.is_finite() || !(0.0..1.0).contains(&height) {
+            return Err(ReaRsError::InvalidObject(
+                "free-mode item height must be between 0 and 1",
+            ));
+        }
         self.set_info_value("F_FREEMODE_H", height)
     }
     /// if None -> default.
@@ -559,7 +566,7 @@ impl Item {
         self.set_info_string("P_NOTES", notes)
     }
     pub fn set_guid(&self, guid: GUID) -> ReaperResult<()> {
-        let guid_str = guid.to_string();
+        let guid_str = guid.to_string()?;
         self.set_info_string("GUID", guid_str)
     }
 }

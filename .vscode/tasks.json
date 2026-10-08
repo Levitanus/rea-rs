@@ -1,0 +1,47 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build & Copy REAPER integration test",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "cargo build -p reaper-test-extension-plugin && mkdir -p ./target/reaper/reaper_linux_x86_64/REAPER/UserPlugins && cp ./target/debug/libreaper_test_extension_plugin.so ./target/reaper/reaper_linux_x86_64/REAPER/UserPlugins/reaper_test_extension_plugin.so"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "RUST_LOG": "trace,rea_rs::ext_state=info,glycin=warn",
+          "RUST_BACKTRACE": "full"
+        }
+      },
+      "group": "build",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "Launch downloaded REAPER",
+      "type": "shell",
+      "command": "${workspaceFolder}/target/reaper/reaper_linux_x86_64/REAPER/reaper",
+      "args": ["-newinst", "-new"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "RUST_LOG": "trace,rea_rs::ext_state=info,glycin=warn",
+          "RUST_BACKTRACE": "full"
+        }
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Run REAPER integration test",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["test", "-p", "reaper-test-extension-plugin", "--test", "integration_test"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "test",
+      "problemMatcher": ["$rustc"]
+    }
+  ]
+}

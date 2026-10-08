@@ -470,6 +470,8 @@ pub mod root {
     pub const CSURF_EXT_SETFXCHANGE: i32 = 65555;
     pub const CSURF_EXT_SETPROJECTMARKERCHANGE: i32 = 65556;
     pub const CSURF_EXT_TRACKFX_PRESET_CHANGED: i32 = 65557;
+    pub const CSURF_EXT_TRACKFX_PARAMINFO_CHANGED: i32 = 65558;
+    pub const CSURF_EXT_TAKEFX_PARAMINFO_CHANGED: i32 = 65559;
     pub const CSURF_EXT_SUPPORTS_EXTENDED_TOUCH: i32 = 524289;
     pub const CSURF_EXT_MIDI_DEVICE_REMAP: i32 = 65689;
     pub const UNDO_STATE_ALL: u32 = 4294967295;
@@ -1832,6 +1834,9 @@ pub mod root {
             >;
         }
         extern "C" {
+            # [link_name = "\u{1}_ZN16reaper_functions17AddRegionOrMarkerE"] pub static mut AddRegionOrMarker : :: std :: option :: Option < unsafe extern "C" fn (proj : * mut root :: ReaProject , isrgn : bool , pos : f64 , rgnend : f64 , name : * const :: std :: os :: raw :: c_char , wantidx : :: std :: os :: raw :: c_int , color : :: std :: os :: raw :: c_int) -> * mut root :: reaper_functions :: ProjectMarker > ;
+        }
+        extern "C" {
             #[link_name = "\u{1}_ZN16reaper_functions18AddRemoveReaScriptE"]
             pub static mut AddRemoveReaScript: ::std::option::Option<
                 unsafe extern "C" fn(
@@ -3082,6 +3087,17 @@ pub mod root {
                     regionindex: ::std::os::raw::c_int,
                     rendertrack: ::std::os::raw::c_int,
                 ) -> *mut root::MediaTrack,
+            >;
+        }
+        extern "C" {
+            #[link_name = "\u{1}_ZN16reaper_functions15EnumThemeColorsE"]
+            pub static mut EnumThemeColors: ::std::option::Option<
+                unsafe extern "C" fn(
+                    idx: ::std::os::raw::c_int,
+                    typeOutOptional: *mut ::std::os::raw::c_int,
+                    nameOutOptional: *mut *const ::std::os::raw::c_char,
+                )
+                    -> *const ::std::os::raw::c_char,
             >;
         }
         extern "C" {
@@ -4660,6 +4676,18 @@ pub mod root {
             >;
         }
         extern "C" {
+            #[link_name = "\u{1}_ZN16reaper_functions29GetSetTempoTimeSigMarkerBasisE"]
+            pub static mut GetSetTempoTimeSigMarkerBasis:
+                ::std::option::Option<
+                    unsafe extern "C" fn(
+                        project: *mut root::ReaProject,
+                        point_index: ::std::os::raw::c_int,
+                        beatbase: f64,
+                        is_set: bool,
+                    ) -> f64,
+                >;
+        }
+        extern "C" {
             #[link_name = "\u{1}_ZN16reaper_functions28GetSetTempoTimeSigMarkerFlagE"]
             pub static mut GetSetTempoTimeSigMarkerFlag: ::std::option::Option<
                 unsafe extern "C" fn(
@@ -5279,6 +5307,19 @@ pub mod root {
             >;
         }
         extern "C" {
+            #[link_name = "\u{1}_ZN16reaper_functions15GetUserFileNameE"]
+            pub static mut GetUserFileName: ::std::option::Option<
+                unsafe extern "C" fn(
+                    mode: ::std::os::raw::c_int,
+                    caption: *const ::std::os::raw::c_char,
+                    initial_file_or_path: *const ::std::os::raw::c_char,
+                    extension_list: *const ::std::os::raw::c_char,
+                    fnOutNeedBig: *mut ::std::os::raw::c_char,
+                    fnOutNeedBig_sz: ::std::os::raw::c_int,
+                ) -> bool,
+            >;
+        }
+        extern "C" {
             #[link_name = "\u{1}_ZN16reaper_functions22GetUserFileNameForReadE"]
             pub static mut GetUserFileNameForRead: ::std::option::Option<
                 unsafe extern "C" fn(
@@ -5481,6 +5522,11 @@ pub mod root {
                     flags: ::std::os::raw::c_int,
                 ),
             >;
+        }
+        extern "C" {
+            #[link_name = "\u{1}_ZN16reaper_functions10IsDarkModeE"]
+            pub static mut IsDarkMode:
+                ::std::option::Option<unsafe extern "C" fn() -> bool>;
         }
         extern "C" {
             #[link_name = "\u{1}_ZN16reaper_functions17IsInRealTimeAudioE"]
@@ -7901,6 +7947,16 @@ pub mod root {
             >;
         }
         extern "C" {
+            #[link_name = "\u{1}_ZN16reaper_functions21set_config_var_stringE"]
+            pub static mut set_config_var_string: ::std::option::Option<
+                unsafe extern "C" fn(
+                    name: *const ::std::os::raw::c_char,
+                    value: *const ::std::os::raw::c_char,
+                    persist: ::std::os::raw::c_int,
+                ) -> ::std::os::raw::c_int,
+            >;
+        }
+        extern "C" {
             #[link_name = "\u{1}_ZN16reaper_functions13SetActiveTakeE"]
             pub static mut SetActiveTake: ::std::option::Option<
                 unsafe extern "C" fn(take: *mut root::MediaItem_Take),
@@ -8728,8 +8784,8 @@ pub mod root {
                         fx: ::std::os::raw::c_int,
                         param: ::std::os::raw::c_int,
                         value: f64,
-                        buf: *mut ::std::os::raw::c_char,
-                        buf_sz: ::std::os::raw::c_int,
+                        bufOut: *mut ::std::os::raw::c_char,
+                        bufOut_sz: ::std::os::raw::c_int,
                     ) -> bool,
                 >;
         }
@@ -8943,6 +8999,18 @@ pub mod root {
                     fx: ::std::os::raw::c_int,
                     param: ::std::os::raw::c_int,
                 ) -> f64,
+            >;
+        }
+        extern "C" {
+            #[link_name = "\u{1}_ZN16reaper_functions26TakeFX_GetParamSectionNameE"]
+            pub static mut TakeFX_GetParamSectionName: ::std::option::Option<
+                unsafe extern "C" fn(
+                    take: *mut root::MediaItem_Take,
+                    fx: ::std::os::raw::c_int,
+                    param: ::std::os::raw::c_int,
+                    bufOut: *mut ::std::os::raw::c_char,
+                    bufOut_sz: ::std::os::raw::c_int,
+                ),
             >;
         }
         extern "C" {
@@ -9429,8 +9497,8 @@ pub mod root {
                         fx: ::std::os::raw::c_int,
                         param: ::std::os::raw::c_int,
                         value: f64,
-                        buf: *mut ::std::os::raw::c_char,
-                        buf_sz: ::std::os::raw::c_int,
+                        bufOut: *mut ::std::os::raw::c_char,
+                        bufOut_sz: ::std::os::raw::c_int,
                     ) -> bool,
                 >;
         }
@@ -9685,6 +9753,18 @@ pub mod root {
                     fx: ::std::os::raw::c_int,
                     param: ::std::os::raw::c_int,
                 ) -> f64,
+            >;
+        }
+        extern "C" {
+            #[link_name = "\u{1}_ZN16reaper_functions27TrackFX_GetParamSectionNameE"]
+            pub static mut TrackFX_GetParamSectionName: ::std::option::Option<
+                unsafe extern "C" fn(
+                    track: *mut root::MediaTrack,
+                    fx: ::std::os::raw::c_int,
+                    param: ::std::os::raw::c_int,
+                    bufOut: *mut ::std::os::raw::c_char,
+                    bufOut_sz: ::std::os::raw::c_int,
+                ),
             >;
         }
         extern "C" {
@@ -9965,6 +10045,50 @@ pub mod root {
             >;
         }
         extern "C" {
+            #[link_name = "\u{1}_ZN16reaper_functions16Undo_GetCurEntryE"]
+            pub static mut Undo_GetCurEntry: ::std::option::Option<
+                unsafe extern "C" fn(
+                    proj: *mut root::ReaProject,
+                ) -> ::std::os::raw::c_int,
+            >;
+        }
+        extern "C" {
+            #[link_name = "\u{1}_ZN16reaper_functions17Undo_GetEntryDescE"]
+            pub static mut Undo_GetEntryDesc: ::std::option::Option<
+                unsafe extern "C" fn(
+                    proj: *mut root::ReaProject,
+                    index: ::std::os::raw::c_int,
+                )
+                    -> *const ::std::os::raw::c_char,
+            >;
+        }
+        extern "C" {
+            #[link_name = "\u{1}_ZN16reaper_functions17Undo_GetEntryTimeE"]
+            pub static mut Undo_GetEntryTime: ::std::option::Option<
+                unsafe extern "C" fn(
+                    proj: *mut root::ReaProject,
+                    index: ::std::os::raw::c_int,
+                ) -> f64,
+            >;
+        }
+        extern "C" {
+            #[link_name = "\u{1}_ZN16reaper_functions18Undo_GetNumEntriesE"]
+            pub static mut Undo_GetNumEntries: ::std::option::Option<
+                unsafe extern "C" fn(
+                    proj: *mut root::ReaProject,
+                ) -> ::std::os::raw::c_int,
+            >;
+        }
+        extern "C" {
+            #[link_name = "\u{1}_ZN16reaper_functions19Undo_IsEntryAltTreeE"]
+            pub static mut Undo_IsEntryAltTree: ::std::option::Option<
+                unsafe extern "C" fn(
+                    proj: *mut root::ReaProject,
+                    index: ::std::os::raw::c_int,
+                ) -> ::std::os::raw::c_int,
+            >;
+        }
+        extern "C" {
             #[link_name = "\u{1}_ZN16reaper_functions18Undo_OnStateChangeE"]
             pub static mut Undo_OnStateChange: ::std::option::Option<
                 unsafe extern "C" fn(
@@ -10009,6 +10133,16 @@ pub mod root {
                     descchange: *const ::std::os::raw::c_char,
                     whichStates: ::std::os::raw::c_int,
                     trackparm: ::std::os::raw::c_int,
+                ),
+            >;
+        }
+        extern "C" {
+            #[link_name = "\u{1}_ZN16reaper_functions14Undo_SetCurPosE"]
+            pub static mut Undo_SetCurPos: ::std::option::Option<
+                unsafe extern "C" fn(
+                    proj: *mut root::ReaProject,
+                    index: ::std::os::raw::c_int,
+                    loadAltTreeOptional: ::std::os::raw::c_int,
                 ),
             >;
         }
@@ -10652,6 +10786,14 @@ pub mod root {
                     in1: *const root::RECT,
                     in2: *const root::RECT,
                 ) -> ::std::os::raw::c_int,
+            >;
+        }
+        extern "C" {
+            pub static mut MoveFile: ::std::option::Option<
+                unsafe extern "C" fn(
+                    srcfilename: *const ::std::os::raw::c_char,
+                    destfilename: *const ::std::os::raw::c_char,
+                ) -> root::BOOL,
             >;
         }
         extern "C" {
@@ -12000,7 +12142,9 @@ pub mod root {
         }
         extern "C" {
             pub static mut CreateFontIndirect: ::std::option::Option<
-                unsafe extern "C" fn(arg1: *mut root::LOGFONT) -> root::HFONT,
+                unsafe extern "C" fn(
+                    arg1: *const root::LOGFONT,
+                ) -> root::HFONT,
             >;
         }
         extern "C" {
@@ -12223,8 +12367,8 @@ pub mod root {
             pub static mut PolyPolyline: ::std::option::Option<
                 unsafe extern "C" fn(
                     ctx: root::HDC,
-                    pts: *mut root::POINT,
-                    cnts: *mut root::DWORD,
+                    pts: *const root::POINT,
+                    cnts: *const root::DWORD,
                     nseg: ::std::os::raw::c_int,
                 ),
             >;
@@ -12258,7 +12402,7 @@ pub mod root {
         extern "C" {
             pub static mut CreateIconIndirect: ::std::option::Option<
                 unsafe extern "C" fn(
-                    iconinfo: *mut root::ICONINFO,
+                    iconinfo: *const root::ICONINFO,
                 ) -> root::HICON,
             >;
         }

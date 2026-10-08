@@ -504,7 +504,7 @@ pub trait Timer {
 
 fn action_error(error: anyhow::Error) {
     log::error!("{:#?}\n Backtrace: {:#?}", error, error.backtrace());
-    Reaper::get().show_console_msg(format!(
+    let _ = Reaper::get().show_console_msg(format!(
         "Error while performing action: \n{}",
         error.to_string()
     ));

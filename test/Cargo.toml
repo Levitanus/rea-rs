@@ -2,7 +2,7 @@
 edition = "2021"
 name = "reaper-test-extension-plugin"
 publish = false
-version = "0.2.0"
+version = "1.0.0"
 
 [dependencies]
 anyhow = {workspace = true}
@@ -11,10 +11,10 @@ c_str_macro = "1.0.2"
 env_logger.workspace = true
 float_eq = "1.0"
 log = "0.4"
-rea-rs = {version = "=0.2.0", path = "../rea-rs"}
-rea-rs-low = {version = "=0.2.0", path = "../low"}
-rea-rs-macros = {version = "=0.2.0", path = "../macros"}
-rea-rs-test = {version = "=0.2.0", path = "../rea-rs-test"}
+rea-rs = {version = "=1.0.0", path = "../rea-rs"}
+rea-rs-low = {version = "=1.0.0", path = "../low"}
+rea-rs-macros = {version = "=1.0.0", path = "../macros"}
+rea-rs-test = {version = "=1.0.0", path = "../rea-rs-test"}
 thiserror = {workspace = true}
 serde = { workspace = true, features = ["derive"] }
 

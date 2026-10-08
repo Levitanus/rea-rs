@@ -1,0 +1,2 @@
+[alias]
+update-sdk = "check -p rea-rs-low --features update"

@@ -1,20 +1,20 @@
 [package]
 authors = ["Benjamin Klum <benjamin.klum@helgoboss.org>", "Timofei Kazantsev aka Levitanus <pianoist@ya.ru>"]
-description = "Library for testing reaper extensions within real REAPER instance."
+description = "Library for testing REAPER extension plug-ins within a real REAPER instance."
 edition = "2021"
 keywords = ["reaper", "daw", "plug-in", "audio", "midi"]
 license = "MIT"
 name = "rea-rs-test"
 readme = "README.md"
-version = "0.2.0"
+repository = "https://github.com/Levitanus/rea-rs"
+rust-version = "1.82"
+version = "1.0.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-env_logger = "0.10"
-log = "0.4"
-rea-rs = {version = "=0.2.0", path = "../rea-rs"}
-rea-rs-low = {version = "=0.2.0", path = "../low"}
+rea-rs = {version = "=1.0.0", path = "../rea-rs"}
+rea-rs-low = {version = "=1.0.0", path = "../low"}
 
 anyhow = {workspace = true}
 fs_extra = "1.3.0"
@@ -25,4 +25,4 @@ wait-timeout = "0.1.5"
 xz2 = "0.1"
 
 [dev-dependencies]
-rea-rs-macros = {version = "=0.2.0", path = "../macros"}
+rea-rs-macros = {version = "=1.0.0", path = "../macros"}

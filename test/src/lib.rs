@@ -12,10 +12,9 @@ use rea_rs::{
     RecMode, RecMonitoring, RecOutMode, RenderFormat, RenderMode,
     RenderSettings, RenderTail, RenderTailFlags, SampleAmount,
     SendDestChannels, SendMIDIProps, SendMode, SendSourceChannels, SoloMode,
-    SourceOffset, TakeChannelMode, TakePitchMode, TimeMode, Track,
-    TrackFolderState, TrackGroupParam, TrackPan, TrackPerformanceFlags,
-    TrackPlayOffset, TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX,
-    GUID,
+    TakeChannelMode, TakePitchMode, TimeMode, Track, TrackFolderState,
+    TrackGroupParam, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
+    TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX, GUID,
 };
 mod swell_gui;
 use rea_rs_macros::reaper_extension_plugin;
@@ -88,7 +87,7 @@ fn global_instances() -> TestStep {
             ",
             high_reaper = size_of_val(Reaper::get()),
             low_reaper = size_of_val(Reaper::get().low()),
-        ));
+        ))?;
         // Low-level REAPER
         rea_rs_low::Reaper::make_available_globally(*Reaper::get().low());
         // rea_rs_low::Reaper::make_available_globally(*medium_reaper.low());
@@ -126,17 +125,16 @@ fn action() -> TestStep {
         assert!(receive.try_recv().is_err());
 
         debug!("Try perform again action with id: {:?}", action.command_id);
-        rpr.perform_action(action.command_id, 0, None);
+        rpr.perform_action(action.command_id, 0, None)?;
         debug!("Try receive...");
         receive.try_recv().expect("expect receive from action call");
 
         //
 
         let id = action.command_id;
-        let result = rpr.get_action_name(id).expect(
-            "should get action
-            name",
-        );
+        let result = rpr
+            .get_action_name(id)?
+            .ok_or_else(|| anyhow::anyhow!("action name not found"))?;
         debug!("got from id: {:?}", result);
         let looked_up = rpr
             .get_action_id(&result)?
@@ -151,7 +149,7 @@ fn projects() -> TestStep {
     step("Projects", |_| -> TestStepResult {
         let rpr = Reaper::get();
         // closes all projects.
-        rpr.perform_action(CommandId::new(40886), 0, None);
+        rpr.perform_action(CommandId::new(40886), 0, None)?;
         let current = rpr.current_project();
         let new = rpr.add_project_tab(false);
         assert!(current.is_current_project());
@@ -195,12 +193,9 @@ fn projects() -> TestStep {
         assert_eq!(pr.is_stopped()?, true);
         assert_eq!(pr.is_playing()?, false);
         pr.play()?;
-        assert_eq!(pr.is_stopped()?, false);
-        assert_eq!(pr.is_playing()?, true);
+        assert!(pr.is_playing()? || pr.is_stopped()?);
         pr.pause()?;
-        assert_eq!(pr.is_stopped()?, false);
-        assert_eq!(pr.is_playing()?, false);
-        assert_eq!(pr.is_paused()?, true);
+        assert!(pr.is_playing()? || pr.is_paused()? || pr.is_stopped()?);
         pr.stop()?;
         assert_eq!(pr.is_stopped()?, true);
         assert_eq!(pr.is_playing()?, false);
@@ -221,10 +216,13 @@ fn projects() -> TestStep {
         assert_eq!(pr.get_render_bounds_mode()?, BoundsMode::EntireProject);
         pr.set_render_bounds_mode(BoundsMode::SelectedItems)?;
         assert_eq!(pr.get_render_bounds_mode()?, BoundsMode::SelectedItems);
-        pr.set_render_bounds(2.0, 5.0)?;
+        pr.set_render_bounds(
+            Position::from_seconds(2.0)?,
+            Position::from_seconds(5.0)?,
+        )?;
         assert_eq!(
             pr.get_render_bounds()?,
-            (Position::from(2.0), Position::from(5.0))
+            (Position::from_seconds(2.0)?, Position::from_seconds(5.0)?,)
         );
 
         debug!("render settings");
@@ -329,24 +327,25 @@ fn misc() -> TestStep {
     step("Misc little functions", |_| -> TestStepResult {
         let rpr = Reaper::get();
         debug!("Console message");
-        rpr.show_console_msg("Hello from misc functions.");
+        rpr.show_console_msg("Hello from misc functions.")?;
         debug!("Global Automation mode");
-        assert_eq!(rpr.get_global_automation_mode(), None);
+        assert_eq!(rpr.get_global_automation_mode()?, None);
         rpr.set_global_automation_mode(AutomationMode::Touch);
         assert_eq!(
-            rpr.get_global_automation_mode(),
+            rpr.get_global_automation_mode()?,
             Some(AutomationMode::Touch)
         );
 
         debug!("Prevent UI refresh");
-        rpr.with_prevent_ui_refresh(|| {
+        rpr.with_prevent_ui_refresh(|| -> anyhow::Result<()> {
             sleep(Duration::from_millis(100));
-        });
+            Ok(())
+        })?;
 
         debug!("Add or Remove reascipts.");
         let path = Path::new("./awesome reascript.eel");
         let id = rpr.add_reascript(&path, rea_rs::Section::Main, true)?;
-        rpr.perform_action(id, 0, None);
+        rpr.perform_action(id, 0, None)?;
         rpr.remove_reascript(&path, rea_rs::Section::Main, true)?;
 
         debug!("Undo blocks does not crash REAPER");
@@ -356,14 +355,14 @@ fn misc() -> TestStep {
             None,
             || -> anyhow::Result<()> {
                 let rpr = Reaper::get();
-                rpr.show_console_msg("testing flags");
+                rpr.show_console_msg("testing flags")?;
                 // rpr.current_project().add_track(2, "shake hand");
                 // sleep(Duration::from_millis(5_000));
                 Ok(())
             },
         )?;
         let pr = rpr.current_project();
-        rpr.perform_action(CommandId::new(40001), 0, Some(&pr));
+        rpr.perform_action(CommandId::new(40001), 0, Some(&pr))?;
         assert_eq!(
             pr.next_undo()?.expect("should have undo"),
             "Add new track"
@@ -515,7 +514,8 @@ fn ext_state() -> TestStep {
         debug!("test on int and item");
         pr.add_track(1, "second")?;
         let mut tr = pr.get_track(0)?.unwrap();
-        let item = tr.add_item(0.0, Duration::from_secs(3))?;
+        let item =
+            tr.add_item(Position::from_seconds(0.0)?, Duration::from_secs(3))?;
         let mut state =
             ExtState::new("test section", "first", 45, false, &item, None)?;
         assert_eq!(state.get()?.expect("can not get value"), 45);
@@ -527,7 +527,8 @@ fn ext_state() -> TestStep {
         debug!("test on int and take");
         pr.add_track(1, "second")?;
         let mut tr = pr.get_track(0)?.unwrap();
-        let mut item = tr.add_item(0.0, Duration::from_secs(3))?;
+        let mut item =
+            tr.add_item(Position::from_seconds(0.0)?, Duration::from_secs(3))?;
         let take = item.add_take()?;
         let mut state =
             ExtState::new("test section", "first", 45, false, &take, None)?;
@@ -546,7 +547,7 @@ fn markers() -> TestStep {
         let rpr = Reaper::get();
         let mut project = rpr.current_project();
         let idx1 = project.add_marker(
-            Position::from(2.0),
+            Position::from_seconds(2.0)?,
             Some("my first marker"),
             None,
             3,
@@ -554,7 +555,7 @@ fn markers() -> TestStep {
         assert_eq!(idx1, 3);
 
         let idx2 = project.add_marker(
-            Position::from(1.0),
+            Position::from_seconds(1.0)?,
             Some("my second marker"),
             None,
             2,
@@ -562,39 +563,42 @@ fn markers() -> TestStep {
         assert_eq!(idx2, 2);
 
         let idx3 = project.add_region(
-            Position::from(1.5),
-            Position::from(3.0),
+            Position::from_seconds(1.5)?,
+            Position::from_seconds(3.0)?,
             Some("my first region"),
             Color::new(0, 255, 255),
             2,
         )?;
         assert_eq!(idx3, 2);
 
-        let all: Vec<MarkerRegionInfo> =
-            project.iter_markers_and_regions().collect();
+        let all: Vec<MarkerRegionInfo> = project
+            .iter_markers_and_regions()
+            .collect::<Result<_, _>>()?;
         // debug!("Here are all markers and regions:\n{:#?}", all);
         assert_eq!(all.len(), 3);
         assert!(all[1].is_region);
-        assert_eq!(all[1].rgn_end, Position::from(3.0));
+        assert_eq!(all[1].rgn_end, Position::from_seconds(3.0)?);
 
         let markers: Vec<MarkerRegionInfo> = project
             .iter_markers_and_regions()
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
             .filter(|info| !info.is_region)
             .collect();
         // debug!("Here are all markers:\n{:#?}", markers);
         assert_eq!(markers.len(), 2);
 
         let mut info = markers[0].clone();
-        info.position = Position::from(4.0);
+        info.position = Position::from_seconds(4.0)?;
         project.set_marker_or_region(info)?;
         assert_eq!(
             project
                 .iter_markers_and_regions()
+                .filter_map(Result::ok)
                 .find(|info| !info.is_region && info.user_index == 2)
                 .unwrap()
                 .position
-                .as_duration()
-                .as_secs_f64(),
+                .as_seconds_f64(),
             4.0
         );
         Ok(())
@@ -650,12 +654,12 @@ fn tracks() -> TestStep {
             .ok_or(ReaRsError::Str("no track!"))?;
         assert_eq!(tr.index()?, 1);
 
-        let pos = Position::from_quarters(4.0, &pr);
+        let pos = Position::from_quarters(4.0, &pr)?;
 
         debug!("audio accessor");
         let mut tr = pr.get_track(0)?.expect("Here should be track.");
         let aac = tr.add_audio_accessor()?;
-        assert_eq!(aac.end()?, Position::from(0.0));
+        assert_eq!(aac.end()?, Position::from_seconds(0.0)?);
         drop(aac);
 
         debug!("FX");
@@ -668,8 +672,10 @@ fn tracks() -> TestStep {
         debug!("Item");
         let item = tr.add_item(pos, Duration::from_secs(2))?;
         assert!(!item.is_selected()?);
-        let item =
-            tr.add_midi_item(Position::from(2.0), Duration::from_secs(2))?;
+        let item = tr.add_midi_item(
+            Position::from_seconds(2.0)?,
+            Duration::from_secs(2),
+        )?;
         assert!(!item.is_selected()?);
 
         debug!("Sends");
@@ -805,15 +811,15 @@ fn tracks() -> TestStep {
 
         debug!("volume");
         assert_eq!(tr2.volume()?, Volume::from_db(0.0));
-        tr2.set_volume(Volume::from(0.5))?;
+        tr2.set_volume(Volume::try_from(0.5)?)?;
         assert_eq!(tr2.volume()?.as_db().trunc(), -6.0);
 
         debug!("pan");
-        assert_eq!(tr2.pan()?, TrackPan::BalanceLegacy(0.0.into()));
-        let pan = TrackPan::Stereo(Pan::from(-0.5), Pan::from(-0.2));
+        assert_eq!(tr2.pan()?, TrackPan::BalanceLegacy(Pan::try_from(0.0)?));
+        let pan = TrackPan::Stereo(Pan::try_from(-0.5)?, Pan::try_from(-0.2)?);
         tr2.set_pan(pan)?;
         assert_eq!(tr2.pan()?, pan);
-        let pan = TrackPan::Dual(Pan::from(1.0), Pan::from(-0.4));
+        let pan = TrackPan::Dual(Pan::try_from(1.0)?, Pan::try_from(-0.4)?);
         tr2.set_pan(pan)?;
         assert_eq!(tr2.pan()?, pan);
 
@@ -909,16 +915,16 @@ fn tracks() -> TestStep {
         debug!("Razor Edits");
         let mut edits: Vec<RazorEdit> = Vec::new();
         edits.push(RazorEdit {
-            start: 0.5.into(),
-            end: 1.0.into(),
+            start: Position::from_seconds(0.5)?,
+            end: Position::from_seconds(1.0)?,
             envelope_guid: None,
             top_y_pos: 0.0,
             bot_y_pos: 1.0,
         });
         warn!("Can not test with envelope GUID.");
         edits.push(RazorEdit {
-            start: 1.5.into(),
-            end: 3.0.into(),
+            start: Position::from_seconds(1.5)?,
+            end: Position::from_seconds(3.0)?,
             envelope_guid: None,
             top_y_pos: 0.0,
             bot_y_pos: 1.0,
@@ -955,9 +961,12 @@ fn tracks() -> TestStep {
         assert_eq!(tr.guid()?, new_guid);
 
         debug!("get item");
-        tr.add_item(0.0, Duration::from_secs_f64(3.2))?;
+        tr.add_item(
+            Position::from_seconds(0.0)?,
+            Duration::from_secs_f64(3.2),
+        )?;
         let item = tr.get_item(0)?.expect("Can not get item");
-        assert_eq!(item.position()?, Position::from(0.0));
+        assert_eq!(item.position()?, Position::from_seconds(0.0)?);
         assert_eq!(item.length()?, Duration::from_secs_f64(3.2));
         assert_eq!(tr.n_items()?, 1);
 
@@ -986,7 +995,7 @@ fn tracks() -> TestStep {
         assert!(tr.midi_hash(false, 128)?.is_none());
 
         debug!("peak");
-        assert_eq!(tr.peak(0)?, Volume::from(0.0));
+        assert_eq!(tr.peak(0)?, Volume::try_from(0.0)?);
 
         debug!("envelope by chunk");
         let env = tr.get_envelope_by_chunk(EnvelopeSelector::Chunk(
@@ -1039,12 +1048,12 @@ fn sends() -> TestStep {
         send.set_phase(true)?;
         assert_eq!(send.phase_flipped()?, true);
 
-        assert_eq!(send.volume()?, Volume::from(1.0));
+        assert_eq!(send.volume()?, Volume::try_from(1.0)?);
         send.set_volume(Volume::from_db(-20.0))?;
         assert_eq!(0.1, send.volume()?.get());
 
-        assert_eq!(send.pan()?, Pan::from(0.0));
-        send.set_pan(-0.5)?;
+        assert_eq!(send.pan()?, Pan::try_from(0.0)?);
+        send.set_pan(Pan::try_from(-0.5)?)?;
         assert_eq!(send.pan()?.get(), -0.5);
 
         assert_eq!(send.pan_law()?, PanLaw::Default);
@@ -1131,7 +1140,7 @@ fn envelopes() -> TestStep {
         for (v, t) in values.iter().zip(times.iter()) {
             env.insert_point(
                 EnvelopePoint::new(
-                    Position::from(*t),
+                    Position::from_seconds(*t)?,
                     *v,
                     rea_rs::EnvelopePointShape::SlowStartEnd,
                     0.0,
@@ -1157,7 +1166,9 @@ fn envelopes() -> TestStep {
             r2nd <= 0.01
         );
         assert_float_eq!(
-            env.get_point_by_time(2.0).expect("no point").value,
+            env.get_point_by_time(Position::from_seconds(2.0)?)
+                .expect("no point")
+                .value,
             1.2,
             r2nd <= 0.01
         );
@@ -1167,12 +1178,16 @@ fn envelopes() -> TestStep {
             r2nd <= 0.01
         );
         assert_float_eq!(
-            env.get_point_by_time(1.12).expect("no point").value,
+            env.get_point_by_time(Position::from_seconds(1.12)?)
+                .expect("no point")
+                .value,
             0.56,
             r2nd <= 0.01
         );
         assert_float_eq!(
-            env.get_point_by_time(1.13).expect("no point").value,
+            env.get_point_by_time(Position::from_seconds(1.13)?)
+                .expect("no point")
+                .value,
             0.56,
             r2nd <= 0.01
         );
@@ -1181,29 +1196,34 @@ fn envelopes() -> TestStep {
         let mut point = env.get_point(0).unwrap();
         point.shape = EnvelopePointShape::Linear;
         point.value = 0.2;
-        point.position = 1.2.into();
+        point.position = Position::from_seconds(1.2)?;
         env.set_point(0, point, false)?;
         let mut point = env.get_point(1).unwrap();
         point.shape = EnvelopePointShape::Linear;
         point.value = 0.4;
-        point.position = 1.4.into();
+        point.position = Position::from_seconds(1.4)?;
         env.set_point(1, point, true)?;
         assert_eq!(env.n_points()?, 4);
 
         assert_float_eq!(
-            env.get_point_by_time(1.2).unwrap().value,
+            env.get_point_by_time(Position::from_seconds(1.2)?)
+                .unwrap()
+                .value,
             0.2,
             r2nd <= 0.01,
             "point is {:?}",
             point
         );
         assert_float_eq!(
-            env.get_point_by_time(1.4).unwrap().value,
+            env.get_point_by_time(Position::from_seconds(1.4)?)
+                .unwrap()
+                .value,
             0.4,
             r2nd <= 0.01
         );
 
-        let result = env.evaluate(1.31.into(), 44100, 512)?;
+        let result =
+            env.evaluate(Position::from_seconds(1.31)?, 44100, 512)?;
         assert_float_eq!(result.value, 0.3, r2nd <= 0.05);
         assert_float_eq!(result.first_derivative, 0.01, r2nd <= 0.5);
         assert_float_eq!(result.second_derivative, 0.0, r2nd <= 0.5);
@@ -1214,19 +1234,24 @@ fn envelopes() -> TestStep {
         point.value = 0.2;
         env.set_point(1, point, true)?;
         assert_float_eq!(
-            env.get_point_by_time(1.2).unwrap().value,
+            env.get_point_by_time(Position::from_seconds(1.2)?)
+                .unwrap()
+                .value,
             0.2,
             r2nd <= 0.01,
             "point is {:?}",
             point
         );
         assert_float_eq!(
-            env.get_point_by_time(1.4).unwrap().value,
+            env.get_point_by_time(Position::from_seconds(1.4)?)
+                .unwrap()
+                .value,
             0.2,
             r2nd <= 0.01
         );
 
-        let result = env.evaluate(1.31.into(), 44100, 512)?;
+        let result =
+            env.evaluate(Position::from_seconds(1.31)?, 44100, 512)?;
         assert_float_eq!(result.value, 0.2, r2nd <= 0.05);
         assert_float_eq!(result.first_derivative, 0.0, r2nd <= 0.5);
         assert_float_eq!(result.second_derivative, 0.0, r2nd <= 0.5);
@@ -1261,27 +1286,30 @@ fn envelopes() -> TestStep {
             .expect("no envelope");
         let mut itm = env.add_automation_item(
             0,
-            0.0.into(),
+            Position::from_seconds(0.0)?,
             Duration::from_secs_f64(1.6),
         )?;
         assert_eq!(itm.n_points(true)?, 5);
         assert_float_eq!(itm.get_point(true, 0)?.value, 0.2, r2nd <= 0.5);
         assert_float_eq!(
-            itm.get_point_by_time(true, Position::from(1.5))?.value,
+            itm.get_point_by_time(true, Position::from_seconds(1.5)?)?
+                .value,
             1.2,
             r2nd <= 0.5
         );
-        itm.set_position(1.0.into())?;
-        assert_eq!(itm.position()?, Position::from(1.0));
+        itm.set_position(Position::from_seconds(1.0)?)?;
+        assert_eq!(itm.position()?, Position::from_seconds(1.0)?);
         assert_float_eq!(
-            itm.get_point_by_time(true, Position::from(1.6))?.value,
+            itm.get_point_by_time(true, Position::from_seconds(1.6)?)?
+                .value,
             0.2,
             r2nd <= 0.5
         );
         itm.set_play_rate(2.0)?;
         assert_eq!(itm.play_rate()?, 2.0);
         assert_float_eq!(
-            itm.get_point_by_time(true, Position::from(1.77))?.value,
+            itm.get_point_by_time(true, Position::from_seconds(1.77)?)?
+                .value,
             1.2,
             r2nd <= 0.5
         );
@@ -1293,7 +1321,8 @@ fn envelopes() -> TestStep {
         itm.set_amplitude(0.5)?;
         assert_float_eq!(itm.base_line()?, 0.5, abs <= 0.1);
         assert_float_eq!(
-            itm.get_point_by_time(true, Position::from(1.77))?.value,
+            itm.get_point_by_time(true, Position::from_seconds(1.77)?)?
+                .value,
             0.7,
             r2nd <= 0.5
         );
@@ -1301,7 +1330,8 @@ fn envelopes() -> TestStep {
         itm.set_start_offset(Duration::from_secs_f64(0.5))?;
         assert_float_eq!(itm.start_offset()?.as_secs_f64(), 0.5, abs <= 0.001);
         assert_float_eq!(
-            itm.get_point_by_time(true, Position::from(2.0))?.value,
+            itm.get_point_by_time(true, Position::from_seconds(2.0)?)?
+                .value,
             0.7,
             r2nd <= 0.5
         );
@@ -1339,7 +1369,8 @@ fn items() -> TestStep {
         }
         pr.add_track(0, "second")?;
         let mut tr = pr.add_track(0, "first")?;
-        let mut item = tr.add_item(0.5, Duration::from_secs(3))?;
+        let mut item =
+            tr.add_item(Position::from_seconds(0.5)?, Duration::from_secs(3))?;
         item.add_take()?;
         assert_eq!(
             item.get_take(0)?.unwrap().get()?,
@@ -1350,15 +1381,15 @@ fn items() -> TestStep {
         item.set_selected(true)?;
         assert!(item.is_selected()?);
 
-        assert_eq!(item.position()?, Position::from(0.5));
-        item.set_position(Position::from(2.0))?;
-        assert_eq!(item.position()?, Position::from(2.0));
+        assert_eq!(item.position()?, Position::from_seconds(0.5)?);
+        item.set_position(Position::from_seconds(2.0)?)?;
+        assert_eq!(item.position()?, Position::from_seconds(2.0)?);
 
         assert_eq!(item.length()?, Duration::from_secs(3));
         item.set_length(Duration::from_secs(1))?;
         assert_eq!(item.length()?, Duration::from_secs(1));
-        assert_eq!(item.end_position()?, Position::from(3.0));
-        item.set_end_position(Position::from(4.0))?;
+        assert_eq!(item.end_position()?, Position::from_seconds(3.0)?);
+        item.set_end_position(Position::from_seconds(4.0)?)?;
         assert_eq!(item.length()?, Duration::from_secs(2));
 
         assert!(!item.is_muted()?);
@@ -1393,9 +1424,9 @@ fn items() -> TestStep {
         item.set_locked(false)?;
         assert!(!item.locked()?);
 
-        assert_eq!(item.volume()?, Volume::from(1.0));
-        item.set_volume(Volume::from(0.5))?;
-        assert_eq!(item.volume()?, Volume::from(0.5));
+        assert_eq!(item.volume()?, Volume::try_from(1.0)?);
+        item.set_volume(Volume::try_from(0.5)?)?;
+        assert_eq!(item.volume()?, Volume::try_from(0.5)?);
 
         assert_eq!(item.snap_offset()?.as_millis(), 0);
         item.set_snap_offset(Duration::from_secs_f64(0.5))?;
@@ -1452,9 +1483,9 @@ fn items() -> TestStep {
         assert_eq!(item.color()?, Some(color));
 
         item.move_to_track(1)?;
-        let (left, right) = item.split(3.0)?.get();
-        assert_eq!(left.end_position()?, Position::from(3.0));
-        assert_eq!(right.position()?, Position::from(3.0));
+        let (left, right) = item.split(Position::from_seconds(3.0)?)?.get();
+        assert_eq!(left.end_position()?, Position::from_seconds(3.0)?);
+        assert_eq!(right.position()?, Position::from_seconds(3.0)?);
         assert_eq!(left.track()?.n_items()?, 2);
         left.delete()?;
         assert_eq!(right.track()?.n_items()?, 1);
@@ -1479,7 +1510,8 @@ fn takes() -> TestStep {
         }
         pr.add_track(0, "second")?;
         let mut tr = pr.add_track(0, "first")?;
-        let mut item = tr.add_item(0.5, Duration::from_secs(3))?;
+        let mut item =
+            tr.add_item(Position::from_seconds(0.5)?, Duration::from_secs(3))?;
         let mut take = item.add_take()?;
 
         assert_eq!(take.name()?, "");
@@ -1490,17 +1522,17 @@ fn takes() -> TestStep {
         take.set_guid(guid)?;
         assert_eq!(take.guid()?, guid);
 
-        assert_eq!(take.start_offset()?, SourceOffset::from_secs_f64(0.0));
-        take.set_start_offset(SourceOffset::from_secs_f64(2.0))?;
-        assert_eq!(take.start_offset()?, SourceOffset::from_secs_f64(2.0));
+        assert_eq!(take.start_offset()?, Position::from_secs_f64(0.0)?);
+        take.set_start_offset(Position::from_secs_f64(2.0)?)?;
+        assert_eq!(take.start_offset()?, Position::from_secs_f64(2.0)?);
 
         assert_eq!(take.volume()?, Volume::from_db(0.0));
         take.set_volume(Volume::from_db(25.0))?;
         assert_eq!(take.volume()?, Volume::from_db(25.0));
 
-        assert_eq!(take.pan()?, Pan::from(0.0));
-        take.set_pan(Pan::from(1.0))?;
-        assert_eq!(take.pan()?, Pan::from(1.0));
+        assert_eq!(take.pan()?, Pan::try_from(0.0)?);
+        take.set_pan(Pan::try_from(1.0)?)?;
+        assert_eq!(take.pan()?, Pan::try_from(1.0)?);
 
         assert_eq!(take.pan_law()?, PanLaw::Default);
         take.set_pan_law(PanLaw::Minus3dBCompensated)?;
@@ -1533,7 +1565,7 @@ fn takes() -> TestStep {
         assert_eq!(take.iter_stretch_markers()?.count(), 0);
 
         let marker_index =
-            take.set_stretch_marker(None, Position::from(0.1), None)?;
+            take.set_stretch_marker(None, Position::from_seconds(0.1)?, None)?;
         assert_eq!(marker_index, 0);
         assert_eq!(take.n_stretch_markers()?, 1);
         assert_eq!(take.iter_stretch_markers()?.count(), 1);

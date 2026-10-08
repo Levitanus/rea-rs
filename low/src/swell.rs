@@ -271,6 +271,9 @@ impl Swell {
                         c_str_macro::c_str!(stringify!(WinIntersectRect))
                             .as_ptr(),
                     )),
+                    MoveFile: std::mem::transmute(get_func(
+                        c_str_macro::c_str!(stringify!(MoveFile)).as_ptr(),
+                    )),
                     SetWindowPos: std::mem::transmute(get_func(
                         c_str_macro::c_str!(stringify!(SetWindowPos)).as_ptr(),
                     )),
@@ -1647,6 +1650,9 @@ impl Swell {
                 loaded_count += 1;
             }
             if pointers.WinIntersectRect.is_some() {
+                loaded_count += 1;
+            }
+            if pointers.MoveFile.is_some() {
                 loaded_count += 1;
             }
             if pointers.SetWindowPos.is_some() {
@@ -3541,6 +3547,25 @@ impl Swell {
                 )
             }
             Some(f) => f(out, in1, in2),
+        }
+    }
+    #[cfg(target_family = "unix")]
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn MoveFile(
+        &self,
+        srcfilename: *const ::std::os::raw::c_char,
+        destfilename: *const ::std::os::raw::c_char,
+    ) -> root::BOOL {
+        match self.pointers.MoveFile {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(MoveFile)
+                )
+            }
+            Some(f) => f(srcfilename, destfilename),
         }
     }
     #[cfg(target_family = "unix")]
@@ -6847,7 +6872,7 @@ impl Swell {
     /// REAPER can crash if you pass an invalid pointer.
     pub unsafe fn CreateFontIndirect(
         &self,
-        arg1: *mut root::LOGFONT,
+        arg1: *const root::LOGFONT,
     ) -> root::HFONT {
         match self.pointers.CreateFontIndirect {
             None => {
@@ -7333,8 +7358,8 @@ impl Swell {
     pub unsafe fn PolyPolyline(
         &self,
         ctx: root::HDC,
-        pts: *mut root::POINT,
-        cnts: *mut root::DWORD,
+        pts: *const root::POINT,
+        cnts: *const root::DWORD,
         nseg: ::std::os::raw::c_int,
     ) {
         match self.pointers.PolyPolyline {
@@ -7412,7 +7437,7 @@ impl Swell {
     /// REAPER can crash if you pass an invalid pointer.
     pub unsafe fn CreateIconIndirect(
         &self,
-        iconinfo: *mut root::ICONINFO,
+        iconinfo: *const root::ICONINFO,
     ) -> root::HICON {
         match self.pointers.CreateIconIndirect {
             None => {
@@ -9323,7 +9348,7 @@ impl Swell {
     /// REAPER can crash if you pass an invalid pointer.
     pub unsafe fn CreateIconIndirect(
         &self,
-        iconinfo: *mut root::ICONINFO,
+        iconinfo: *const root::ICONINFO,
     ) -> root::HICON {
         unsafe { windows::CreateIconIndirect(iconinfo) }
     }
@@ -9759,6 +9784,12 @@ pub struct SwellFunctionPointers {
             in1: *const root::RECT,
             in2: *const root::RECT,
         ) -> ::std::os::raw::c_int,
+    >,
+    pub MoveFile: Option<
+        unsafe extern "C" fn(
+            srcfilename: *const ::std::os::raw::c_char,
+            destfilename: *const ::std::os::raw::c_char,
+        ) -> root::BOOL,
     >,
     pub SetWindowPos: Option<
         unsafe extern "C" fn(
@@ -10599,8 +10630,9 @@ pub struct SwellFunctionPointers {
     pub SWELL_SetClipRegion:
         Option<unsafe extern "C" fn(ctx: root::HDC, r: *const root::RECT)>,
     pub SWELL_PopClipRegion: Option<unsafe extern "C" fn(ctx: root::HDC)>,
-    pub CreateFontIndirect:
-        Option<unsafe extern "C" fn(arg1: *mut root::LOGFONT) -> root::HFONT>,
+    pub CreateFontIndirect: Option<
+        unsafe extern "C" fn(arg1: *const root::LOGFONT) -> root::HFONT,
+    >,
     pub CreateFont: Option<
         unsafe extern "C" fn(
             lfHeight: ::std::os::raw::c_int,
@@ -10753,8 +10785,8 @@ pub struct SwellFunctionPointers {
     pub PolyPolyline: Option<
         unsafe extern "C" fn(
             ctx: root::HDC,
-            pts: *mut root::POINT,
-            cnts: *mut root::DWORD,
+            pts: *const root::POINT,
+            cnts: *const root::DWORD,
             nseg: ::std::os::raw::c_int,
         ),
     >,
@@ -10779,7 +10811,7 @@ pub struct SwellFunctionPointers {
         ) -> root::BOOL,
     >,
     pub CreateIconIndirect: Option<
-        unsafe extern "C" fn(iconinfo: *mut root::ICONINFO) -> root::HICON,
+        unsafe extern "C" fn(iconinfo: *const root::ICONINFO) -> root::HICON,
     >,
     pub LoadNamedImage: Option<
         unsafe extern "C" fn(
@@ -11193,7 +11225,7 @@ pub struct SwellFunctionPointers {
         Option<extern "C" fn(mode: ::std::os::raw::c_int) -> bool>,
 }
 impl SwellFunctionPointers {
-    pub(crate) const TOTAL_COUNT: u32 = 337u32;
+    pub(crate) const TOTAL_COUNT: u32 = 338u32;
 }
 #[cfg(target_family = "windows")]
 mod windows {
@@ -11472,7 +11504,7 @@ mod windows {
     }
     extern "system" {
         pub fn CreateIconIndirect(
-            iconinfo: *mut root::ICONINFO,
+            iconinfo: *const root::ICONINFO,
         ) -> root::HICON;
     }
     extern "system" {

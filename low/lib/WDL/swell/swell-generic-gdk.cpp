@@ -56,6 +56,12 @@ extern "C" {
 #include <GL/gl.h>
 #include <GL/glx.h>
 
+#ifdef SWELL_SUPPORT_GTK
+void swell_im_update_candidates_location();
+extern HWND swell_ime_target;
+extern GtkIMContext *swell_ime_context;
+#endif
+
 static void (*_gdk_drag_drop_done)(GdkDragContext *, gboolean); // may not always be available
 
 static guint32 _gdk_x11_window_get_desktop(GdkWindow *window)
@@ -63,16 +69,21 @@ static guint32 _gdk_x11_window_get_desktop(GdkWindow *window)
   Atom type;
   gint format;
   gulong nitems=0, bytes_after; 
-  guchar *data;
+  guchar *data = NULL;
 
   if (!window || !gdk_x11_screen_supports_net_wm_hint(gdk_window_get_screen(window), 
                                            gdk_atom_intern_static_string("_NET_WM_DESKTOP"))) 
     return 0;
 
-  XGetWindowProperty(GDK_WINDOW_XDISPLAY(window), GDK_WINDOW_XID(window), 
+  if (XGetWindowProperty(GDK_WINDOW_XDISPLAY(window), GDK_WINDOW_XID(window),
       gdk_x11_get_xatom_by_name_for_display(gdk_window_get_display(window), "_NET_WM_DESKTOP"),
-                        0, G_MAXLONG, false, XA_CARDINAL, &type, &format, &nitems, &bytes_after, &data);
-  if (type != XA_CARDINAL || nitems<1) return 0;
+                        0, G_MAXLONG, false, XA_CARDINAL, &type, &format, &nitems, &bytes_after, &data) != Success) return 0;
+
+  if (type != XA_CARDINAL || nitems<1)
+  {
+    if (data) XFree(data);
+    return 0;
+  }
   nitems = *(gulong *)data;
   XFree(data);
   return (guint32) nitems;
@@ -106,7 +117,7 @@ static void _gdk_x11_window_move_to_desktop(GdkWindow *window, guint32 desktop)
 #define  SWELL_WINDOWSKEY_GDK_MASK GDK_MOD4_MASK
 #endif
 
-static int SWELL_gdk_active;
+static int SWELL_gdk_active; // -1 fail, 1=GDK, 2=GTK+ loaded, 3=GTK+ falied
 static GdkEvent *s_cur_evt;
 static GList *s_program_icon_list;
 
@@ -124,9 +135,18 @@ static int gdk_options;
 #define OPTION_ALLOW_MAYBE_INACTIVE 16
 #define OPTION_FULLSCREEN_FOR_OWNER_WINDOWS 32
 #define OPTION_FULLSCREEN_DYNAMIC 64
+#define OPTION_IS_WAYLAND 0x20000000
+#define OPTIONS_READ 0x40000000
 
 static HWND s_ddrop_hwnd;
 static POINT s_ddrop_pt;
+
+static HWND s_ddrop_forward_last_hwnd; // last top level window, which receives events from the drag source
+static Window s_ddrop_forward_last_target; // plug-in window we're sending XdndEnter etc to
+static Window s_ddrop_forward_last_container; // bridged container window, we receive notifications back from s_ddrop_forward_last_target
+static Window s_ddrop_forward_last_source; // external source of drag/drop, gets sent XdndStatus/XdndFinished, from s_ddrop_forward_last_hwnd->m_oswindow
+static DWORD s_ddrop_forward_last_source_time; // last time source was known to be valid, treat as invalid after some small interval (10s?)
+static bool s_ddrop_forward_last_has_dropped;
 
 static SWELL_CursorResourceIndex *SWELL_curmodule_cursorresource_head;
 
@@ -283,6 +303,8 @@ void swell_oswindow_update_text(HWND hwnd)
   }
 }
 
+static Window get_x11_first_child(Display *disp, Window xid);
+
 void swell_oswindow_focus(HWND hwnd)
 {
   if (!hwnd)
@@ -295,11 +317,48 @@ void swell_oswindow_focus(HWND hwnd)
   while (hwnd && !hwnd->m_oswindow) hwnd=hwnd->m_parent;
   if (hwnd && !swell_app_is_inactive)
   {
+    bool force = false;
+    if (SWELL_focused_oswindow == hwnd->m_oswindow && !(gdk_options & OPTION_IS_WAYLAND))
+    {
+      // verify we already have focus
+      GdkDisplay *display = gdk_window_get_display(hwnd->m_oswindow);
+      Display *dpy = gdk_x11_display_get_xdisplay(display);
+      Window cf = 0;
+      int cfm = 0;
+      XGetInputFocus(dpy,&cf,&cfm);
+      if (!cf || (cf != GDK_WINDOW_XID(hwnd->m_oswindow) &&
+                  cf != get_x11_first_child(dpy,GDK_WINDOW_XID(hwnd->m_oswindow))))
+      {
+#ifdef _DEBUG
+        printf("swell-generic-gdk: our window (%d) was marked as focused, however another window (%d) was reported focused via XGetInputFocus(), correcting.\n",
+            (int)GDK_WINDOW_XID(hwnd->m_oswindow), (int)cf);
+#endif
+        // some other window actually has focus, we missed a notification, apparently, correct this
+        force = true;
+      }
+    }
+
     gdk_window_raise(hwnd->m_oswindow);
-    if (hwnd->m_oswindow != SWELL_focused_oswindow)
+
+    if (force || hwnd->m_oswindow != SWELL_focused_oswindow)
     {
       SWELL_focused_oswindow = hwnd->m_oswindow;
       gdk_window_focus(hwnd->m_oswindow,GDK_CURRENT_TIME);
+
+      if (force || hwnd->m_style == WS_CHILD || (!(hwnd->m_style & WS_CAPTION) && (gdk_options&OPTION_BORDERLESS_OVERRIDEREDIRECT)))
+      {
+        // WS_CHILD is used by menus to force override redirect
+        // if override redirect, gdk_window_focus() uses_NET_ACTIVE_WINDOW, but xfce4/plasma do not set focus properly
+        if (!(gdk_options & OPTION_IS_WAYLAND) &&
+            gdk_x11_screen_supports_net_wm_hint(gdk_window_get_screen(hwnd->m_oswindow), gdk_atom_intern_static_string("_NET_ACTIVE_WINDOW")))
+        {
+          GdkDisplay *display = gdk_window_get_display(hwnd->m_oswindow);
+          Display *dpy = gdk_x11_display_get_xdisplay(display);
+          gdk_x11_display_error_trap_push (display);
+          XSetInputFocus(dpy,GDK_WINDOW_XID(hwnd->m_oswindow),RevertToNone,CurrentTime);
+          gdk_x11_display_error_trap_pop_ignored (display);
+        }
+      }
       update_menubar_activations();
     }
   }
@@ -335,6 +394,73 @@ void swell_recalcMinMaxInfo(HWND hwnd)
   gdk_window_set_geometry_hints(hwnd->m_oswindow,&h,(GdkWindowHints) ((hwnd->m_has_had_position ? GDK_HINT_POS : 0) | GDK_HINT_MIN_SIZE | GDK_HINT_MAX_SIZE));
 }
 
+#ifdef SWELL_SUPPORT_GTK
+gboolean (*swell_gtk_init_check)(int *argc, char ***argv);
+void (*swell_gtk_main_do_event)(GdkEvent *);
+gboolean (*swell_gtk_im_context_filter_keypress)(GtkIMContext *context, GdkEventKey *event);
+void (*swell_gtk_im_context_set_cursor_location)(GtkIMContext *, const GdkRectangle *);
+GtkIMContext *(*swell_gtk_im_multicontext_new)(void);
+void (*swell_gtk_im_context_set_client_window)(GtkIMContext *context, GdkWindow *window);
+void (*swell_gtk_im_context_get_preedit_string)(GtkIMContext *, gchar **, PangoAttrList **, gint *);
+void (*swell_gtk_im_context_focus_in)(GtkIMContext *);
+void (*swell_gtk_im_context_focus_out)(GtkIMContext *);
+#endif
+
+#ifdef SWELL_SUPPORT_GTK
+bool SWELL_load_gtk(void)
+{
+  if (SWELL_gdk_active != 1) return SWELL_gdk_active == 2;
+
+  if (dlopen("libgtk-3.so.0",RTLD_NOW|RTLD_GLOBAL) || dlopen("libgtk+-3.so.0",RTLD_NOW|RTLD_GLOBAL))
+  {
+    *(void **)&swell_gtk_init_check = dlsym(RTLD_DEFAULT,"gtk_init_check");
+    *(void **)&swell_gtk_main_do_event = dlsym(RTLD_DEFAULT,"gtk_main_do_event");
+    *(void **)&swell_gtk_im_context_filter_keypress = dlsym(RTLD_DEFAULT,"gtk_im_context_filter_keypress");
+    *(void **)&swell_gtk_im_context_set_cursor_location = dlsym(RTLD_DEFAULT, "gtk_im_context_set_cursor_location");
+    *(void **)&swell_gtk_im_multicontext_new = dlsym(RTLD_DEFAULT, "gtk_im_multicontext_new");
+    *(void **)&swell_gtk_im_context_set_client_window = dlsym(RTLD_DEFAULT, "gtk_im_context_set_client_window");
+    *(void **)&swell_gtk_im_context_get_preedit_string = dlsym(RTLD_DEFAULT, "gtk_im_context_get_preedit_string");
+    *(void **)&swell_gtk_im_context_focus_in = dlsym(RTLD_DEFAULT, "gtk_im_context_focus_in");
+    *(void **)&swell_gtk_im_context_focus_out = dlsym(RTLD_DEFAULT, "gtk_im_context_focus_out");
+  }
+
+  if (swell_gtk_init_check && swell_gtk_main_do_event)
+  {
+    int argc = 1;
+    char buf[32];
+    strcpy(buf,"blah");
+    char *argv[1] = { buf };
+    char **argvv = argv;
+
+    void (*disable_setlocale)(void);
+    *(void **)&disable_setlocale = dlsym(RTLD_DEFAULT, "gtk_disable_setlocale");
+    if (disable_setlocale) disable_setlocale();
+
+    SWELL_gdk_active = swell_gtk_init_check(&argc,&argvv) ? 2 : 3;
+    if (SWELL_gdk_active == 3)
+      printf("swell-generic-gdk: GTK+ requested but initialization failed.\n");
+    else
+      printf("swell-generic-gdk: initialized GTK+ on request.\n");
+    gdk_event_handler_set(swell_gdkEventHandler,NULL,NULL);
+  }
+  else
+  {
+    printf("swell-generic-gdk: GTK+ requested but not found\n");
+    swell_gtk_main_do_event = NULL;
+    swell_gtk_init_check = NULL;
+    swell_gtk_im_context_set_cursor_location = NULL;
+    swell_gtk_im_context_filter_keypress = NULL;
+    swell_gtk_im_context_set_client_window = NULL;
+    swell_gtk_im_multicontext_new = NULL;
+    swell_gtk_im_context_get_preedit_string = NULL;
+    swell_gtk_im_context_focus_in = NULL;
+    swell_gtk_im_context_focus_out = NULL;
+    SWELL_gdk_active = 3;
+  }
+  return SWELL_gdk_active == 2;
+}
+#endif
+
 void SWELL_initargs(int *argc, char ***argv) 
 {
   if (!SWELL_gdk_active) 
@@ -350,11 +476,8 @@ void SWELL_initargs(int *argc, char ***argv)
       _gdk_set_allowed_backends("x11");
 #endif
 
-#ifdef SWELL_SUPPORT_GTK
-    SWELL_gdk_active = gtk_init_check(argc,argv) ? 1 : -1;
-#else
-    SWELL_gdk_active = gdk_init_check(argc,argv) ? 1 : -1;
-#endif
+    if (!SWELL_gdk_active)
+      SWELL_gdk_active = gdk_init_check(argc,argv) ? 1 : -1;
     if (SWELL_gdk_active > 0)
     {
       char buf[1024];
@@ -482,7 +605,8 @@ static void init_options()
 {
   if (!gdk_options)
   {
-    gdk_options = 0x40000000;
+    gdk_options = OPTIONS_READ;
+    if (getenv("WAYLAND_DISPLAY")) gdk_options |= OPTION_IS_WAYLAND;
 
     if (swell_gdk_option("gdk_owned_windows_keep_above", "auto (default is 1)",1))
       gdk_options|=OPTION_KEEP_OWNED_ABOVE;
@@ -493,7 +617,7 @@ static void init_options()
     switch (swell_gdk_option("gdk_instant_menubar_inactivation", "auto (default is 1 if on Wayland, otherwise 0)",-1))
     {
       case -1:
-        if (getenv("WAYLAND_DISPLAY") == NULL) break;
+        if (!(gdk_options & OPTION_IS_WAYLAND)) break;
         // fall through
       case 1:
         gdk_options|=OPTION_ALLOW_MAYBE_INACTIVE;
@@ -640,6 +764,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
 
           if (!(hwnd->m_style & WS_CAPTION)) 
           {
+            // WS_CHILD is used by menus to force override redirect
             if (hwnd->m_style != WS_CHILD && !(gdk_options&OPTION_BORDERLESS_OVERRIDEREDIRECT))
             {
               if (transient_for)
@@ -1389,6 +1514,14 @@ static void OnKeyEvent(GdkEventKey *k)
   MSG msg = { hwnd, msgtype, kv, modifiers, };
   INT_PTR extra_flags = 0;
   if (DialogBoxIsActive()) extra_flags |= 1;
+
+#ifdef SWELL_SUPPORT_GTK
+  if (hwnd == swell_ime_target &&
+      swell_ime_context &&
+      swell_gtk_im_context_filter_keypress &&
+      swell_gtk_im_context_filter_keypress(swell_ime_context, k))
+        return;
+#endif
   if (SWELLAppMain(SWELLAPP_PROCESSMESSAGE,(INT_PTR)&msg,extra_flags)<=0)
     SendMessage(hwnd, msg.message, kv, modifiers);
 }
@@ -1788,6 +1921,9 @@ static void swell_gdkEventHandler(GdkEvent *evt, gpointer data)
     case GDK_KEY_PRESS:
     case GDK_KEY_RELEASE:
       swell_dlg_destroyspare();
+#ifdef SWELL_SUPPORT_GTK
+      swell_im_update_candidates_location();
+#endif
       OnKeyEvent((GdkEventKey *)evt);
     break;
 #ifdef GDK_AVAILABLE_IN_3_4
@@ -1893,21 +2029,19 @@ static void swell_gdkEventHandler(GdkEvent *evt, gpointer data)
     break;
   }
 #ifdef SWELL_SUPPORT_GTK
-  gtk_main_do_event(evt);
+  if (swell_gtk_main_do_event)
+    swell_gtk_main_do_event(evt);
 #endif
   s_cur_evt = oldEvt;
 }
+
+static void run_drag_finish_abort();
+static bool validate_top_hwnd(HWND hwnd);
 
 void SWELL_RunEvents()
 {
   if (SWELL_gdk_active>0) 
   {
-#if 0 && defined(SWELL_SUPPORT_GTK)
-    // does not seem to be necessary
-    while (gtk_events_pending())
-      gtk_main_iteration();
-#else
-
 #if SWELL_TARGET_GDK == 2
     gdk_window_process_all_updates();
 #endif
@@ -1922,7 +2056,24 @@ void SWELL_RunEvents()
         gdk_event_free(evt);
       }
     }
+
+    DWORD dt;
+    if (s_ddrop_forward_last_has_dropped &&
+        s_ddrop_forward_last_source &&
+        (dt = GetTickCount() - s_ddrop_forward_last_source_time) > 3000 && // after 3s, timeout
+        dt < 10000 &&
+        validate_top_hwnd(s_ddrop_forward_last_hwnd) &&
+        s_ddrop_forward_last_hwnd->m_oswindow)
+    {
+#ifdef _DEBUG
+      printf("swell-generic-gdk: sending XdndFinished after timeout from stale drag\n");
 #endif
+      run_drag_finish_abort();
+      s_ddrop_forward_last_hwnd = NULL;
+      s_ddrop_forward_last_container = s_ddrop_forward_last_source = 0;
+      s_ddrop_forward_last_target = 0;
+      s_ddrop_forward_last_has_dropped = false;
+    }
   }
 }
 
@@ -2425,6 +2576,7 @@ struct bridgeState {
   Display *native_disp;
   GdkWindow *cur_parent;
   Window cur_parent_xid;
+  Window cur_parent_xid2; // first child in xid, if any, otherwise cur_parent_xid
   HWND hwnd_child;
 
   bool lastvis;
@@ -2450,6 +2602,8 @@ bridgeState::~bridgeState()
     glXDestroyContext(native_disp,gl_ctx);
     gl_ctx = NULL;
   }
+  if (native_w && s_ddrop_forward_last_container == native_w)
+    s_ddrop_forward_last_container = 0;
   filter_windows.DeletePtr(this); 
   if (w) 
   {
@@ -2463,6 +2617,18 @@ bridgeState::~bridgeState()
     XDestroyWindow(native_disp,native_w);
   }
 }
+
+static Window get_x11_first_child(Display *disp, Window xid)
+{
+  Window root, par, *list=NULL;
+  unsigned int nlist=0;
+  if (!disp || !xid || !XQueryTree(disp,xid,&root,&par,&list, &nlist)) return xid;
+  Window ret = xid;
+  if (list && nlist>0) ret = list[0];
+  if (list) XFree(list);
+  return ret;
+}
+
 bridgeState::bridgeState(bool needrep, GdkWindow *_w, Window _nw, Display *_disp, GdkWindow *_curpar, HWND _hwnd_child)
 {
   hwnd_child = _hwnd_child;
@@ -2474,6 +2640,7 @@ bridgeState::bridgeState(bool needrep, GdkWindow *_w, Window _nw, Display *_disp
   need_reparent=needrep;
   cur_parent = _curpar;
   cur_parent_xid = _curpar ? GDK_WINDOW_XID(_curpar) : 0;
+  cur_parent_xid2 = get_x11_first_child(_disp, cur_parent_xid);
   memset(&lastrect,0,sizeof(lastrect));
   filter_windows.Add(this);
 }
@@ -2622,6 +2789,7 @@ static LRESULT xbridgeProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
               bs->cur_parent = h->m_oswindow;
               bs->cur_parent_xid = h->m_oswindow ? GDK_WINDOW_XID(h->m_oswindow) : 0;
+              bs->cur_parent_xid2 = get_x11_first_child(bs->native_disp, bs->cur_parent_xid);
               bs->need_reparent=false;
               if (vis && bs->lastvis) gdk_window_show(bs->w);
             }
@@ -2673,23 +2841,30 @@ static LRESULT xbridgeProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 }
 
 
-static void forward_x11_drag_message(int gdkmsg, GdkEventDND *gdkevent, Window new_target)
+static void forward_x11_drag_message(int gdkmsg, GdkEventDND *gdkevent, Window new_target, Window container)
 {
-  Display *dpy = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkevent->window));
+  GdkDisplay *display = gdk_window_get_display(gdkevent->window);
+  Display *dpy = gdk_x11_display_get_xdisplay(display);
   if (WDL_NOT_NORMALLY(!dpy)) return;
+
+  if (WDL_NOT_NORMALLY(!container)) return;
 
   XClientMessageEvent xev;
   memset(&xev, 0, sizeof(xev));
   xev.type = ClientMessage;
   xev.window = new_target;
   xev.format = 32;
-  GdkWindow *sw = gdk_drag_context_get_source_window(gdkevent->context);
-  Window source_window = GDK_WINDOW_XID(sw);
-  xev.data.l[0] = source_window;
+  xev.data.l[0] = container;
 
   switch (gdkmsg)
   {
     case GDK_DRAG_ENTER:
+      {
+        // make sure our containerwindow is tagged XdndAware, in case the plug-in checks
+        Atom ver = 5;
+        XChangeProperty(dpy, container, XInternAtom(dpy,"XdndAware",false), XA_ATOM, 32, PropModeReplace, (unsigned char*)&ver, 1);
+      }
+
       xev.message_type = XInternAtom(dpy, "XdndEnter", False);
       xev.data.l[1] = (3 << 24); // protocol version 3
       {
@@ -2705,13 +2880,29 @@ static void forward_x11_drag_message(int gdkmsg, GdkEventDND *gdkevent, Window n
             if (n && (!strstr(n,"uri-list")) == pass)
             {
               if (cnt<3)
-                xev.data.l[2+cnt] = gdk_x11_atom_to_xatom( (GdkAtom) l->data);
+                xev.data.l[2+cnt] = gdk_x11_atom_to_xatom_for_display(display, (GdkAtom) l->data);
               cnt++;
             }
             l = l->next;
           }
         }
-        if (cnt > 3) xev.data.l[1] |= 1; // more types available that we couldn't fit
+        if (cnt > 3)
+        {
+          Atom *p = (Atom *)malloc(cnt * sizeof(Atom));
+          if (WDL_NORMALLY(p))
+          {
+            xev.data.l[1] |= 1;
+            GList *l = lb;
+            int i = 0;
+            while (i < cnt && l)
+            {
+              p[i++] = gdk_x11_atom_to_xatom_for_display(display,(GdkAtom)l->data);
+              l = l->next;
+            }
+            XChangeProperty(dpy, container, XInternAtom(dpy,"XdndTypeList",False), XA_ATOM, 32, PropModeReplace, (unsigned char*)p, i);
+            free(p);
+          }
+        }
       }
     break;
     case GDK_DRAG_LEAVE:
@@ -2722,7 +2913,14 @@ static void forward_x11_drag_message(int gdkmsg, GdkEventDND *gdkevent, Window n
       xev.data.l[1] = 0;
       xev.data.l[2] = ((int)gdkevent->x_root << 16) | ((int)gdkevent->y_root & 0xFFFF);
       xev.data.l[3] = gdkevent->time;
-      xev.data.l[4] = XInternAtom(dpy, "XdndActionCopy", False);
+      switch (gdk_drag_context_get_suggested_action(gdkevent->context))
+      {
+        case GDK_ACTION_MOVE: xev.data.l[4] = XInternAtom(dpy, "XdndActionMove", False); break;
+        case GDK_ACTION_LINK: xev.data.l[4] = XInternAtom(dpy, "XdndActionLink", False); break;
+        case GDK_ACTION_PRIVATE: xev.data.l[4] = XInternAtom(dpy, "XdndActionPrivate", False); break;
+        case GDK_ACTION_ASK: xev.data.l[4] = XInternAtom(dpy, "XdndActionAsk", False); break;
+        default: xev.data.l[4] = XInternAtom(dpy, "XdndActionCopy", False); break;
+      }
     break;
     case GDK_DROP_START:
       xev.message_type = XInternAtom(dpy, "XdndDrop", False);
@@ -2767,7 +2965,7 @@ static void notify_drag_enter(int xpos, int ypos)
 static bool validate_top_hwnd(HWND hwnd)
 {
   if (!hwnd) return false;
-  HWND h = SWELL_topwindows; // ensure s_last_hwnd is a valid top level window
+  HWND h = SWELL_topwindows;
   while (h && h != hwnd) h = h->m_next;
   return h != NULL;
 }
@@ -2799,7 +2997,7 @@ static bool validate_bridged_xw_from_tlhwnd(HWND hwnd, Window xw)
   return false;
 }
 
-static Window hit_test_bridged_xw(HWND hwnd, int xpos, int ypos)
+static Window hit_test_bridged_xw(HWND hwnd, int xpos, int ypos, Window *containerOut)
 {
   if (WDL_NOT_NORMALLY(!hwnd || !hwnd->m_oswindow)) return false;
   POINT pt = { xpos, ypos };
@@ -2829,13 +3027,46 @@ static Window hit_test_bridged_xw(HWND hwnd, int xpos, int ypos)
         memset(&xwa,0,sizeof(xwa));
         if (XGetWindowAttributes(dpy, list[i], &xwa) && lx >= xwa.x && ly >= xwa.y && lx < xwa.x+xwa.width && ly < xwa.y+xwa.height)
         {
-          new_target = list[i];
+          // make sure this window can do XdndAware
+          Atom type;
+          gint format;
+          gulong nitems=0, bytes_after;
+          guchar *data = NULL;
+
+          if (XGetWindowProperty(dpy, list[i], XInternAtom(dpy,"XdndAware",False), 0, 1, false, XA_ATOM, &type, &format, &nitems, &bytes_after, &data) == Success && nitems > 0)
+          {
+            if (type == XA_ATOM)
+            {
+              // this would be where to check for XdndProxy and resolve it.
+              new_target = list[i];
+              *containerOut = bs->native_w;
+            }
+            if (data) XFree(data);
+          }
+
         }
       }
       XFree(list);
     }
   }
   return new_target;
+}
+
+
+static void run_drag_finish_abort()
+{
+  Display *disp = gdk_x11_display_get_xdisplay(gdk_window_get_display(s_ddrop_forward_last_hwnd->m_oswindow));
+  XClientMessageEvent xclient;
+  memset(&xclient,0,sizeof(xclient));
+  xclient.type = ClientMessage;
+  xclient.window = s_ddrop_forward_last_source;
+  xclient.send_event = True;
+  xclient.message_type = XInternAtom(disp, "XdndFinished", False);
+  xclient.format = 32;
+  xclient.data.l[0] = GDK_WINDOW_XID(s_ddrop_forward_last_hwnd->m_oswindow);
+
+  XSendEvent(disp, s_ddrop_forward_last_source, False, NoEventMask, (XEvent*)&xclient);
+  XFlush(disp);
 }
 
 static bool OnDragEventDelegate(GdkEvent *evt)
@@ -2851,50 +3082,62 @@ static bool OnDragEventDelegate(GdkEvent *evt)
   // GDK_DROP_FINISHED
   // GDK_DROP_START
 
-  static HWND s_last_hwnd;
-  static Window s_last_child_xw;
   HWND hwnd = swell_oswindow_to_hwnd(((GdkEventAny*)evt)->window);
   GdkEventDND *e = (GdkEventDND *)evt;
 
   switch (evt->type)
   {
     case GDK_DRAG_LEAVE:
-      if (s_last_hwnd && s_last_hwnd == hwnd)
+      if (s_ddrop_forward_last_hwnd && s_ddrop_forward_last_hwnd == hwnd)
       {
-        if (s_last_child_xw)
+        if (s_ddrop_forward_last_target)
         {
-          if (validate_bridged_xw_from_tlhwnd(s_last_hwnd,s_last_child_xw))
-            forward_x11_drag_message(GDK_DRAG_LEAVE,e,s_last_child_xw);
+          if (validate_bridged_xw_from_tlhwnd(s_ddrop_forward_last_hwnd,s_ddrop_forward_last_target))
+            forward_x11_drag_message(GDK_DRAG_LEAVE, e, s_ddrop_forward_last_target, s_ddrop_forward_last_container);
         }
         else if (SWELL_DDrop_onDragLeave) SWELL_DDrop_onDragLeave();
-        s_last_child_xw = 0;
-        s_last_hwnd = NULL;
+        s_ddrop_forward_last_target = 0;
+        s_ddrop_forward_last_container = s_ddrop_forward_last_source = 0;
+        s_ddrop_forward_last_hwnd = NULL;
       }
     break;
     case GDK_DROP_FINISHED:
-      if (s_last_child_xw && validate_top_hwnd(s_last_hwnd))
+      // todo this handler probably needs revisiting
+      if (s_ddrop_forward_last_target && validate_top_hwnd(s_ddrop_forward_last_hwnd))
       {
-        if (validate_bridged_xw_from_tlhwnd(s_last_hwnd,s_last_child_xw))
-          forward_x11_drag_message(GDK_DRAG_LEAVE,e,s_last_child_xw);
+        if (validate_bridged_xw_from_tlhwnd(s_ddrop_forward_last_hwnd,s_ddrop_forward_last_target))
+          forward_x11_drag_message(GDK_DRAG_LEAVE, e, s_ddrop_forward_last_target, s_ddrop_forward_last_container);
       }
-      s_last_child_xw = 0;
-      s_last_hwnd = NULL;
+      s_ddrop_forward_last_target = 0;
+      s_ddrop_forward_last_container = s_ddrop_forward_last_source = 0;
+      s_ddrop_forward_last_hwnd = NULL;
       if (SWELL_DDrop_onDragLeave) SWELL_DDrop_onDragLeave();
     break;
     case GDK_DRAG_ENTER:
-      if (s_last_hwnd != hwnd && validate_top_hwnd(s_last_hwnd))
+      if (s_ddrop_forward_last_has_dropped &&
+          s_ddrop_forward_last_source &&
+          validate_top_hwnd(s_ddrop_forward_last_hwnd) &&
+          s_ddrop_forward_last_hwnd->m_oswindow)
       {
-        if (s_last_child_xw)
+#ifdef _DEBUG
+        printf("swell-generic-gdk: sending XdndFinished in response to GDK_DRAG_ENTER after previous stale drag\n");
+#endif
+        run_drag_finish_abort();
+      }
+      s_ddrop_forward_last_has_dropped = false;
+
+      if (s_ddrop_forward_last_hwnd != hwnd && validate_top_hwnd(s_ddrop_forward_last_hwnd))
+      {
+        if (s_ddrop_forward_last_target)
         {
-          if (validate_bridged_xw_from_tlhwnd(s_last_hwnd,s_last_child_xw))
-            forward_x11_drag_message(GDK_DRAG_LEAVE,e,s_last_child_xw);
+          if (validate_bridged_xw_from_tlhwnd(s_ddrop_forward_last_hwnd,s_ddrop_forward_last_target))
+            forward_x11_drag_message(GDK_DRAG_LEAVE, e, s_ddrop_forward_last_target, s_ddrop_forward_last_container);
         }
         else if (SWELL_DDrop_onDragLeave) SWELL_DDrop_onDragLeave();
-        s_last_child_xw = 0;
-        s_last_hwnd = NULL;
       }
-      s_last_hwnd = hwnd;
-      s_last_child_xw = 0;
+      s_ddrop_forward_last_hwnd = hwnd;
+      s_ddrop_forward_last_container = s_ddrop_forward_last_source = 0;
+      s_ddrop_forward_last_target = 0;
       // position info is not yet available, assume top level window will get it
       if (WDL_NORMALLY(hwnd) && WDL_NORMALLY(e->context))
       {
@@ -2904,40 +3147,50 @@ static bool OnDragEventDelegate(GdkEvent *evt)
     return true;
     case GDK_DRAG_MOTION:
       {
-        Window xw = hit_test_bridged_xw(hwnd, e->x_root, e->y_root);
+        s_ddrop_forward_last_has_dropped = false;
+
+        Window newcontainer = 0;
+        Window xw = hit_test_bridged_xw(hwnd, e->x_root, e->y_root, &newcontainer);
         if (xw)
         {
-          if (!s_last_child_xw)
+          if (!s_ddrop_forward_last_target)
           {
             if (SWELL_DDrop_onDragLeave) SWELL_DDrop_onDragLeave();
           }
 
-          if (xw != s_last_child_xw)
+          if (xw != s_ddrop_forward_last_target)
           {
-            if (s_last_child_xw && validate_top_hwnd(s_last_hwnd) && validate_bridged_xw_from_tlhwnd(s_last_hwnd,s_last_child_xw))
-              forward_x11_drag_message(GDK_DRAG_LEAVE,e,s_last_child_xw);
-            forward_x11_drag_message(GDK_DRAG_ENTER,e,xw);
+            if (s_ddrop_forward_last_target && validate_top_hwnd(s_ddrop_forward_last_hwnd) && validate_bridged_xw_from_tlhwnd(s_ddrop_forward_last_hwnd,s_ddrop_forward_last_target))
+              forward_x11_drag_message(GDK_DRAG_LEAVE, e, s_ddrop_forward_last_target, s_ddrop_forward_last_container);
+
+            forward_x11_drag_message(GDK_DRAG_ENTER, e, xw, newcontainer);
           }
-          s_last_child_xw = xw;
+          s_ddrop_forward_last_target = xw;
+          s_ddrop_forward_last_container = newcontainer;
+
+          s_ddrop_forward_last_source = GDK_WINDOW_XID(gdk_drag_context_get_source_window(e->context));
+          s_ddrop_forward_last_source_time = GetTickCount();
         }
         else
         {
-          if (s_last_child_xw)
+          if (s_ddrop_forward_last_target)
           {
-            if (validate_top_hwnd(s_last_hwnd) && validate_bridged_xw_from_tlhwnd(s_last_hwnd,s_last_child_xw))
-              forward_x11_drag_message(GDK_DRAG_LEAVE,e,s_last_child_xw);
-            s_last_child_xw = 0;
+            if (validate_top_hwnd(s_ddrop_forward_last_hwnd) && validate_bridged_xw_from_tlhwnd(s_ddrop_forward_last_hwnd,s_ddrop_forward_last_target))
+              forward_x11_drag_message(GDK_DRAG_LEAVE, e, s_ddrop_forward_last_target, s_ddrop_forward_last_container);
+            s_ddrop_forward_last_target = 0;
+            s_ddrop_forward_last_container = 0;
+            s_ddrop_forward_last_source = 0;
             notify_drag_enter((int)e->x_root, (int)e->y_root);
           }
         }
-        s_last_hwnd = hwnd;
-        gdk_drag_status(e->context,GDK_ACTION_COPY,e->time);
+        s_ddrop_forward_last_hwnd = hwnd;
         if (xw)
         {
-          forward_x11_drag_message(GDK_DRAG_MOTION,e,xw);
+          forward_x11_drag_message(GDK_DRAG_MOTION, e, xw, newcontainer);
         }
         else
         {
+          gdk_drag_status(e->context,GDK_ACTION_COPY,e->time);
           if (SWELL_DDrop_onDragOver)
           {
             POINT pt = { (int)e->x_root, (int)e->y_root };
@@ -2948,13 +3201,14 @@ static bool OnDragEventDelegate(GdkEvent *evt)
     break;
     case GDK_DROP_START:
       {
-        if (hwnd && hwnd == s_last_hwnd && s_last_child_xw)
+        if (hwnd && hwnd == s_ddrop_forward_last_hwnd && s_ddrop_forward_last_target)
         {
-          if (WDL_NORMALLY(validate_bridged_xw_from_tlhwnd(hwnd,s_last_child_xw)))
+          if (WDL_NORMALLY(validate_bridged_xw_from_tlhwnd(hwnd,s_ddrop_forward_last_target)))
           {
-            forward_x11_drag_message(GDK_DROP_START,e,s_last_child_xw);
-            s_last_hwnd = NULL;
-            s_last_child_xw = 0;
+            s_ddrop_forward_last_source_time = GetTickCount();
+            s_ddrop_forward_last_has_dropped = true;
+            forward_x11_drag_message(GDK_DROP_START, e, s_ddrop_forward_last_target, s_ddrop_forward_last_container);
+            // do not clear forwarding state until a XdndFinished was sent, or timed out on motion
           }
         }
         else
@@ -2988,7 +3242,7 @@ static bool want_key_embed_redirect(Display *disp, Window scan_id, Window *new_d
   {
     bridgeState *bs = filter_windows.Get(x);
     if (bs && bs->cur_parent &&
-        bs->cur_parent_xid == scan_id &&
+        (bs->cur_parent_xid == scan_id || bs->cur_parent_xid2 == scan_id) &&
         bs->native_disp == disp)
     {
       HWND foc = GetFocus();
@@ -3018,7 +3272,7 @@ static bool want_key_embed_redirect(Display *disp, Window scan_id, Window *new_d
 
 static GdkFilterReturn filterCreateShowProc(GdkXEvent *xev, GdkEvent *event, gpointer data)
 {
-  const XEvent *xevent = (XEvent *)xev;
+  XEvent *xevent = (XEvent *)xev;
   if (WDL_NOT_NORMALLY(!xev)) return GDK_FILTER_CONTINUE;
 
   switch (xevent->type)
@@ -3030,7 +3284,7 @@ static GdkFilterReturn filterCreateShowProc(GdkXEvent *xev, GdkEvent *event, gpo
         Window dest;
         Display *disp = xevent->xany.display;
         if (!xevent->xany.send_event &&
-            want_key_embed_redirect(disp,xevent->xkey.window - 1, &dest, xevent->xkey.keycode, xevent->xkey.state))
+            want_key_embed_redirect(disp,xevent->xkey.window, &dest, xevent->xkey.keycode, xevent->xkey.state))
         {
           XEvent k;
           memset(&k,0,sizeof(k));
@@ -3039,18 +3293,32 @@ static GdkFilterReturn filterCreateShowProc(GdkXEvent *xev, GdkEvent *event, gpo
           XSendEvent(disp, dest, False, NoEventMask, &k);
           return GDK_FILTER_REMOVE;
         }
+        else if (xevent->xany.send_event)
+        {
+          Window scan_id = xevent->xkey.window;
+          for (int x=0;x<filter_windows.GetSize(); x++)
+          {
+            bridgeState *bs = filter_windows.Get(x);
+            if (bs && bs->native_disp == disp && bs->cur_parent_xid && bs->native_w == scan_id)
+            {
+              // redirect to the parent window for processing
+              xevent->xkey.window = bs->cur_parent_xid;
+              return GDK_FILTER_CONTINUE;
+            }
+          }
+        }
       }
     break;
     case FocusIn:
       {
         // only used if gdk_disable_multidevice() was called prior to gdk_init_ (maybe some env var too?)
         Display *disp = xevent->xany.display;
-        Window scan_id = xevent->xfocus.window - 1;
+        Window scan_id = xevent->xfocus.window;
         for (int x=0;x<filter_windows.GetSize(); x++)
         {
           bridgeState *bs = filter_windows.Get(x);
           if (bs && bs->cur_parent &&
-              bs->cur_parent_xid == scan_id &&
+              (bs->cur_parent_xid == scan_id || bs->cur_parent_xid2 == scan_id) &&
               bs->native_disp == disp)
           {
             POINT pt;
@@ -3076,7 +3344,7 @@ static GdkFilterReturn filterCreateShowProc(GdkXEvent *xev, GdkEvent *event, gpo
         {
           Window dest;
           Display *disp = xevent->xany.display;
-          if (want_key_embed_redirect(disp,xievent->event-1, &dest, xievent->detail, xievent->mods.effective))
+          if (want_key_embed_redirect(disp,xievent->event, &dest, xievent->detail, xievent->mods.effective))
           {
             XEvent k;
             if (xievent->evtype == XI_KeyPress) k.xkey.type = KeyPress;
@@ -3103,12 +3371,12 @@ static GdkFilterReturn filterCreateShowProc(GdkXEvent *xev, GdkEvent *event, gpo
         {
           Display *disp = xevent->xany.display;
           XIFocusInEvent *foc = (XIFocusInEvent *)xievent;
-          Window scan_id = foc->event - 1;
+          Window scan_id = foc->event;
           for (int x=0;x<filter_windows.GetSize(); x++)
           {
             bridgeState *bs = filter_windows.Get(x);
             if (bs && bs->cur_parent &&
-                bs->cur_parent_xid == scan_id &&
+                (bs->cur_parent_xid == scan_id || bs->cur_parent_xid2 == scan_id) &&
                 bs->native_disp == disp)
             {
               POINT pt = { (int) foc->root_x, (int) foc->root_y };
@@ -3138,6 +3406,41 @@ static GdkFilterReturn filterCreateShowProc(GdkXEvent *xev, GdkEvent *event, gpo
             return GDK_FILTER_REMOVE;
           }
         }
+      }
+    break;
+    case ClientMessage:
+      if (s_ddrop_forward_last_container &&
+          xevent->xany.window == s_ddrop_forward_last_container &&
+          s_ddrop_forward_last_hwnd &&
+          s_ddrop_forward_last_source &&
+          (GetTickCount()-s_ddrop_forward_last_source_time) < 10000)
+      {
+        Display *disp = xevent->xany.display;
+        const bool fin = xevent->xclient.message_type == XInternAtom(disp, "XdndFinished", False);
+        bool eat = false;
+        if ((fin || xevent->xclient.message_type == XInternAtom(disp, "XdndStatus", False)) &&
+            validate_top_hwnd(s_ddrop_forward_last_hwnd) && s_ddrop_forward_last_hwnd->m_oswindow)
+        {
+          // these messages need to get passed back to the drag source with our top-level window as the target
+          XClientMessageEvent xclient;
+          memcpy(&xclient,xevent,sizeof(xclient));
+          xclient.serial = 0;
+          xclient.send_event = True;
+          xclient.window = s_ddrop_forward_last_source;
+          xclient.data.l[0] = GDK_WINDOW_XID(s_ddrop_forward_last_hwnd->m_oswindow);
+
+          XSendEvent(disp, s_ddrop_forward_last_source, False, NoEventMask, (XEvent*)&xclient);
+          XFlush(disp);
+          eat = true;
+        }
+        if (fin)
+        {
+          // drag complete, clear relay container state
+          s_ddrop_forward_last_target = 0;
+          s_ddrop_forward_last_container = s_ddrop_forward_last_source = 0;
+          s_ddrop_forward_last_hwnd = NULL;
+        }
+        if (eat) return GDK_FILTER_REMOVE;
       }
     break;
   }
@@ -3181,7 +3484,7 @@ HWND SWELL_CreateXBridgeWindow(HWND viewpar, void **wref, const RECT *r)
   {
     *wref = (void *) w;
 
-    XSelectInput(disp, w, StructureNotifyMask | SubstructureNotifyMask);
+    XSelectInput(disp, w, KeyPress | KeyRelease | StructureNotifyMask | SubstructureNotifyMask);
 
     static bool filt_add;
     if (!filt_add)
@@ -3766,6 +4069,66 @@ void *SWELL_GetOSWindow(HWND hwnd, const char *type)
 void *SWELL_GetOSEvent(const char *type)
 {
   return !strcmp(type,"GdkEvent") ? s_cur_evt : NULL;
+}
+
+void swell_gdk_prevent_screensaver(bool prev, const char *desc)
+{
+  static GDBusProxy *s_ss_prox;
+  static char s_ss_mode;
+  enum { SS_MODE_FD=0, SS_MODE_XFCE, NUM_SS_MODES } ;
+
+  if (s_ss_mode < NUM_SS_MODES && !!s_ss_prox != prev)
+  {
+    static unsigned int s_ss_cookie;
+again:
+    const char *ident = s_ss_mode==SS_MODE_XFCE ? "org.xfce.ScreenSaver" : "org.freedesktop.ScreenSaver";
+    if (!s_ss_prox && prev)
+    {
+      s_ss_prox = g_dbus_proxy_new_for_bus_sync(G_BUS_TYPE_SESSION,
+          G_DBUS_PROXY_FLAGS_NONE, NULL,
+          ident,
+          s_ss_mode==SS_MODE_XFCE ? "/org/xfce/ScreenSaver" : "/org/freedesktop/ScreenSaver",
+          ident,
+          NULL, NULL);
+      if (!s_ss_prox && ++s_ss_mode < NUM_SS_MODES) goto again; // g_dbus_proxy_new_for_bus_sync() should always succeed, though, even if not supported interface
+    }
+
+    if (s_ss_prox)
+    {
+      GVariant *result = g_dbus_proxy_call_sync(s_ss_prox,
+                            prev ? "Inhibit" : "UnInhibit",
+                            prev ? g_variant_new("(ss)", desc?desc:"swell app", "running") : g_variant_new("(u)", s_ss_cookie),
+                            G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL);
+
+      if (prev)
+      {
+        if (!result)
+        {
+#ifdef _DEBUG
+          printf("swell-generic-gdk: dbus call of %s.Inhibit failed\n", ident);
+#endif
+          if (++s_ss_mode < NUM_SS_MODES)
+          {
+            g_object_unref(s_ss_prox);
+            s_ss_prox = NULL;
+            goto again;
+          }
+        }
+        else
+        {
+          g_variant_get(result, "(u)", &s_ss_cookie);
+        }
+      }
+      else
+      {
+        s_ss_cookie = 0;
+        g_object_unref(s_ss_prox);
+        s_ss_prox = NULL;
+      }
+
+      if (result) g_variant_unref(result);
+    }
+  }
 }
 
 

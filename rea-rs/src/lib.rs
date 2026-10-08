@@ -20,9 +20,9 @@
 //! These are the dependencies:
 //! ```toml
 //! [dependencies]
-//! rea-rs = "0.2.0"
-//! rea-rs-low = "0.2.0" # optional
-//! rea-rs-macros = "0.2.0"
+//! rea-rs = "1.0.0"
+//! rea-rs-low = "1.0.0" # optional
+//! rea-rs-macros = "1.0.0"
 //! ```
 //!
 //! But, actually, all medium- and low-level functionality is still existing in
@@ -41,7 +41,7 @@
 //!     Reaper::init_global(context);
 //!     let reaper = Reaper::get_mut();
 //!     let message = "Hello from small extension";
-//!     reaper.show_console_msg(message);
+//!     reaper.show_console_msg(message)?;
 //!     let _ = ActionRegistrationOptions::new(Section::Main);
 //!     Ok(())
 //! }
@@ -73,7 +73,7 @@
 //! }
 //!
 //! fn my_action_func(_hook: &mut ActionHook) -> Result<(), anyhow::Error> {
-//!     Reaper::get().show_console_msg("running");
+//!     Reaper::get().show_console_msg("running")?;
 //!     Ok(())
 //! }
 //!

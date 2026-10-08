@@ -36,12 +36,25 @@ public:
 /*
  To use IREAPERVideoProcessor in a VST:
 
+  VST2:
 
     void *ctx=(void*)hostcb(&m_effect,0xdeadbeef,0xdeadf00e,4,NULL,0.0f);
     if (ctx)
     {
       IREAPERVideoProcessor *(*video_CreateVideoProcessor)(void *fxctx, int version);
       *(void **)&video_CreateVideoProcessor = (void *)hostcb(&m_effect,0xdeadbeef,0xdeadf00d,0,"video_CreateVideoProcessor",0.0f);
+    }
+
+  VST3:
+
+    IReaperHostApplication *host = ...; // get via queryInterface of IHostApplication
+    void *ctx = host->getReaperParent(4);
+    if (ctx)
+    {
+      *(void **)&video_CreateVideoProcessor = host->getReaperApi("video_CreateVideoProcessor");
+    }
+
+then:
       if (video_CreateVideoProcessor)
       {
         m_videoproc = video_CreateVideoProcessor(ctx,IREAPERVideoProcessor::REAPER_VIDEO_PROCESSOR_VERSION);
@@ -52,8 +65,6 @@ public:
           m_videoproc->get_parameter_value = staticGetVideoParam;
         }
       }
-    }
-
 
   static IVideoFrame *staticProcessVideoFrame(IREAPERVideoProcessor *vproc, const double *parmlist, int nparms, double project_time, double frate,  int force_format)
   {

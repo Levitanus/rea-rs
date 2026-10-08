@@ -4,15 +4,10 @@ use crate::{
     KnowsProject, Position, Project, ProjectContext, ReaRsError, Reaper,
     ReaperResult, Take, Volume, WithReaperPtr,
 };
-use chrono::TimeDelta;
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
 use std::{
-    ffi::CString,
-    mem::MaybeUninit,
-    ops::{Add, Sub},
-    path::PathBuf,
-    ptr::NonNull,
+    ffi::CString, mem::MaybeUninit, path::PathBuf, ptr::NonNull,
     time::Duration,
 };
 
@@ -146,32 +141,55 @@ impl Source {
                 let item_start = item.position()?;
                 let start_offset = take.start_offset()?;
                 let project = item.project();
-                let start = Position::from(item_start - start_offset.into());
-                let start_in_qn = start.as_quarters(&project);
+                let start = Position::from_host_seconds(
+                    item_start.as_seconds_f64() - start_offset.as_secs_f64(),
+                )?;
+                let start_in_qn = start.as_quarters(&project)?;
                 let end_in_qn = start_in_qn + result;
-                let end = Position::from_quarters(end_in_qn, &project);
-                let length = end - start;
-                Ok(length.as_duration())
+                let end = Position::from_quarters(end_in_qn, &project)?;
+                let length = end.as_seconds_f64() - start.as_seconds_f64();
+                if !length.is_finite() || length < 0.0 {
+                    return Err(ReaRsError::UnsuccessfulOperation(
+                        "Invalid QN-based source length",
+                    ));
+                }
+                Ok(Duration::from_secs_f64(length))
             }
-            false => Ok(Duration::from_secs_f64(result)),
+            false => {
+                if !result.is_finite() || result < 0.0 {
+                    return Err(ReaRsError::UnsuccessfulOperation(
+                        "Invalid source length returned by REAPER",
+                    ));
+                }
+                Ok(Duration::from_secs_f64(result))
+            }
         }
     }
 
     pub fn n_channels(&self) -> ReaperResult<usize> {
-        Ok(unsafe {
+        let channels = unsafe {
             Reaper::get()
                 .low()
                 .GetMediaSourceNumChannels(self.get()?.as_ptr())
-                as usize
+        };
+        usize::try_from(channels).map_err(|_| {
+            ReaRsError::UnsuccessfulOperation("Invalid source channel count")
         })
     }
 
     pub fn sample_rate(&self) -> ReaperResult<usize> {
-        Ok(unsafe {
+        let sample_rate = unsafe {
             Reaper::get()
                 .low()
                 .GetMediaSourceSampleRate(self.get()?.as_ptr())
-                as usize
+        };
+        if sample_rate <= 0 {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "Invalid source sample rate",
+            ));
+        }
+        usize::try_from(sample_rate).map_err(|_| {
+            ReaRsError::UnsuccessfulOperation("Invalid source sample rate")
         })
     }
 
@@ -230,8 +248,8 @@ impl Source {
         &self,
         units: SourceNoramlizeUnit,
         target: Volume,
-        start: SourceOffset,
-        end: SourceOffset,
+        start: Position,
+        end: Position,
     ) -> ReaperResult<Volume> {
         let result = unsafe {
             Reaper::get().low().CalculateNormalization(
@@ -242,114 +260,12 @@ impl Source {
                 end.as_secs_f64(),
             )
         };
-        Ok(Volume::from(result))
+        Volume::try_from(result)
     }
 
     pub fn delete(&mut self) -> ReaperResult<()> {
         unsafe { Reaper::get().low().PCM_Source_Destroy(self.get()?.as_ptr()) }
         Ok(())
-    }
-}
-
-#[test]
-fn test_source_offset() {
-    let offset = SourceOffset::from_secs_f64(2.0);
-    assert_eq!(offset.as_secs_f64(), 2.0);
-    let offset = SourceOffset::from_secs_f64(-2.0);
-    assert_eq!(offset.as_secs_f64(), -2.0);
-    let offset = SourceOffset::from_secs_f64(-2.543);
-    assert_eq!(offset.as_secs_f64(), -2.543);
-}
-
-#[derive(
-    Debug,
-    PartialEq,
-    PartialOrd,
-    Ord,
-    Eq,
-    Hash,
-    Copy,
-    Clone,
-    Serialize,
-    Deserialize,
-)]
-pub struct SourceOffset {
-    offset: TimeDelta,
-}
-impl SourceOffset {
-    pub fn from_secs_f64(secs: f64) -> Self {
-        let duration = Duration::from_secs_f64(secs.abs());
-        let offset = TimeDelta::from_std(duration).unwrap();
-        if secs.is_sign_negative() {
-            Self { offset: -offset }
-        } else {
-            Self { offset }
-        }
-    }
-    pub fn get(&self) -> TimeDelta {
-        self.offset
-    }
-    pub fn as_secs_f64(&self) -> f64 {
-        let seconds = self.offset.num_seconds();
-        let nanoseconds = self.offset.num_microseconds().unwrap();
-        seconds as f64 + (nanoseconds - seconds * 1000000) as f64 / 1000000.0
-    }
-}
-impl From<TimeDelta> for SourceOffset {
-    fn from(value: TimeDelta) -> Self {
-        Self { offset: value }
-    }
-}
-impl From<Position> for SourceOffset {
-    fn from(value: Position) -> Self {
-        Self {
-            offset: TimeDelta::from_std(value.as_duration()).unwrap(),
-        }
-    }
-}
-impl Into<Position> for SourceOffset {
-    fn into(self) -> Position {
-        self.offset.abs().to_std().unwrap().into()
-    }
-}
-impl From<Duration> for SourceOffset {
-    fn from(value: Duration) -> Self {
-        Self {
-            offset: TimeDelta::from_std(value).unwrap(),
-        }
-    }
-}
-impl Into<Duration> for SourceOffset {
-    fn into(self) -> Duration {
-        self.offset.abs().to_std().unwrap()
-    }
-}
-impl Add<SourceOffset> for SourceOffset {
-    type Output = SourceOffset;
-
-    fn add(self, rhs: SourceOffset) -> Self::Output {
-        SourceOffset::from(self.offset + rhs.offset)
-    }
-}
-impl Add<Duration> for SourceOffset {
-    type Output = SourceOffset;
-
-    fn add(self, rhs: Duration) -> Self::Output {
-        SourceOffset::from(self.offset + TimeDelta::from_std(rhs).unwrap())
-    }
-}
-impl Sub<SourceOffset> for SourceOffset {
-    type Output = SourceOffset;
-
-    fn sub(self, rhs: SourceOffset) -> Self::Output {
-        SourceOffset::from(self.offset - rhs.offset)
-    }
-}
-impl Sub<Duration> for SourceOffset {
-    type Output = SourceOffset;
-
-    fn sub(self, rhs: Duration) -> Self::Output {
-        SourceOffset::from(self.offset - TimeDelta::from_std(rhs).unwrap())
     }
 }
 

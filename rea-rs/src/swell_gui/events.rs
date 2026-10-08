@@ -417,7 +417,7 @@ fn report_callback_failure(context: &str, error: &anyhow::Error) {
     if crate::Reaper::is_available() {
         let message = format!("GUI callback failed ({context}): {error}\n");
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::Reaper::get().show_console_msg(message);
+            let _ = crate::Reaper::get().show_console_msg(message);
         }));
     }
 }

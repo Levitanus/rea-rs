@@ -280,6 +280,7 @@ public:
     int last_fontflag;
 
     int use_fonth;
+    int actual_metrics[3]; // ascent, descent, internal leading
   }; 
   WDL_TypedBuf<gfxFontStruct> m_gfx_fonts;
   enum {
@@ -378,7 +379,7 @@ public:
   HCURSOR m_cursor;
   int m_cursor_resid;
 #ifdef EEL_LICE_LOADTHEMECURSOR
-  char m_cursor_name[128];
+  WDL_FastString m_cursor_name;
 #endif
 
 #ifndef EEL_LICE_STANDALONE_NOINITQUIT
@@ -414,9 +415,6 @@ eel_lice_state::eel_lice_state(NSEEL_VMCTX vm, void *ctx, int image_slots, int f
   memset(&m_last_undocked_r,0,sizeof(m_last_undocked_r));
 #endif
 
-#ifdef EEL_LICE_LOADTHEMECURSOR
-  m_cursor_name[0]=0;
-#endif
 #endif
   m_user_ctx=ctx;
   m_vmref= vm;
@@ -751,6 +749,9 @@ static EEL_F NSEEL_CGEN_CALL _gfx_getfont(void *opaque, INT_PTR np, EEL_F **parm
       EEL_STRING_GET_FOR_WRITE(parms[0][0],&fs);
       if (fs) fs->Set(f->actual_fontname);
 #endif
+      if (np > 1) parms[1][0] = f->actual_metrics[0];
+      if (np > 2) parms[2][0] = f->actual_metrics[1];
+      if (np > 3) parms[3][0] = f->actual_metrics[2];
     }
     return idx;
   }
@@ -1226,7 +1227,11 @@ EEL_F eel_lice_state::gfx_setfont(void *opaque, int np, EEL_F **parms)
       
       bool doCreate=false;
       int fontflag=0;
-      if (!s->font) s->actual_fontname[0]=0;
+      if (!s->font)
+      {
+        s->actual_fontname[0]=0;
+        memset(s->actual_metrics,0,sizeof(s->actual_metrics));
+      }
 
       {
         EEL_STRING_MUTEXLOCK_SCOPE
@@ -1271,6 +1276,7 @@ EEL_F eel_lice_state::gfx_setfont(void *opaque, int np, EEL_F **parms)
       if (doCreate)
       {
         s->actual_fontname[0]=0;
+        memset(s->actual_metrics,0,sizeof(s->actual_metrics));
         if (!s->font) s->font=LICE_CreateFont();
         if (s->font)
         {
@@ -1319,6 +1325,10 @@ EEL_F eel_lice_state::gfx_setfont(void *opaque, int np, EEL_F **parms)
                 else
 #endif
                   GetTextFace(hdc, sizeof(s->actual_fontname), s->actual_fontname);
+
+                s->actual_metrics[0] = tm.tmAscent;
+                s->actual_metrics[1] = tm.tmDescent;
+                s->actual_metrics[2] = tm.tmInternalLeading;
                 SelectObject(hdc,oldFont);
               }
             }
@@ -1556,7 +1566,7 @@ static int __drawTextWithFont(LICE_IBitmap *dest, const RECT *rect, LICE_IFont *
 #ifdef DYNAMIC_LICE
         (LICE_IBitmap_disabledAPI*)
 #endif
-        dest,rect->left,rect->top,rect->right-rect->left,rect->bottom-rect->top);
+        dest,rect->left,rect->top,(flags & DT_NOCLIP)?0:(rect->right-rect->left),(flags & DT_NOCLIP)?0:(rect->bottom-rect->top));
 
     if (!measureOnly)
     {
@@ -1737,9 +1747,9 @@ EEL_F eel_lice_state::gfx_setcursor(void* opaque, EEL_F** parms, int nparms)
 #ifdef EEL_LICE_LOADTHEMECURSOR
   if (nparms > 1) p=EEL_STRING_GET_FOR_INDEX(parms[1][0], NULL);
 
-  if (strncmp(p?p:"",m_cursor_name,sizeof(m_cursor_name)-1))
+  if (strcmp(p?p:"",m_cursor_name.Get()))
   {
-    lstrcpyn(m_cursor_name, p?p:"", sizeof(m_cursor_name));
+    m_cursor_name.Set(p?p:"");
     chg = true;
   }
 #endif
@@ -2088,10 +2098,10 @@ static EEL_F * NSEEL_CGEN_CALL _gfx_update(void *opaque, EEL_F *n)
 
 #ifdef _WIN32
       MSG msg;
-      while (PeekMessage(&msg,NULL,0,0,PM_REMOVE)) 
+      while (PeekMessageW(&msg,NULL,0,0,PM_REMOVE)) 
       {
         TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        DispatchMessageW(&msg);
       }
 #else
       void SWELL_RunEvents();
@@ -2176,6 +2186,16 @@ static EEL_F NSEEL_CGEN_CALL _gfx_getchar(void *opaque, INT_PTR np, EEL_F **plis
           plist[1][0] = (a2&0xffffff);
         }
         return a;
+      }
+      else if (ctx->m_kb_queue_valid > 0 && a >= 0x7500D800 && a <= 0x7500D800 + 0x3FF) // 'u' = 0x75
+      {
+        int a2 = ctx->m_kb_queue[ctx->m_kb_queue_pos & (qsize-1)];
+        if (a2 >= 0x7500DC00 && a2 <= 0x7500DC00 + 0x3FF) // surrogate pair
+        {
+          a = 0x75010000 + (((a&0xffff)-0xD800)<<10) + ((a2&0xffff) - 0xDC00);
+          ctx->m_kb_queue_pos++;
+          ctx->m_kb_queue_valid--;
+        }
       }
 #else
       if (a > 32 && a < 256 && np > 1)
@@ -2607,6 +2627,9 @@ LRESULT WINAPI eel_lice_wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 #endif
         ctx->m_kb_queue_valid=0;
         ctx->hwnd_standalone=hwnd;
+#if !defined(_WIN32) && !defined(__APPLE__)
+        SetProp(hwnd,"SWELL_IME_ENABLE",(HANDLE)(INT_PTR)1);
+#endif
       }
     return 0;
 #ifndef _WIN32
@@ -3172,7 +3195,7 @@ static const char *eel_lice_function_reference =
   "gfx_measurestr\t\"str\",&w,&h\tMeasures the drawing dimensions of a string with the current font (as set by gfx_setfont). \0"
   "gfx_measurechar\tcodepoint,&w,&h\tMeasures the drawing dimensions of a character (for example, ascii code point 97 is 'a') with the current font (as set by gfx_setfont).\0"
   "gfx_setfont\tidx[,\"fontface\", sz, flags]\tCan select a font and optionally configure it. idx=0 for default bitmapped font, no configuration is possible for this font. idx=1..16 for a configurable font, specify fontface such as \"Arial\", sz of 8-100, and optionally specify flags, which is a multibyte character, which can include 'i' for italics, 'u' for underline, or 'b' for bold. These flags may or may not be supported depending on the font and OS. After calling gfx_setfont(), gfx_texth may be updated to reflect the new average line height.\0"
-  "gfx_getfont\t[#str]\tReturns current font index. If a string is passed, it will receive the actual font face used by this font, if available.\0"
+  "gfx_getfont\t[#str, ascent, descent, internal_leading]\tReturns current font index. If a string is passed, it will receive the actual font face used by this font, if available.\0"
   "gfx_printf\t\"format\"[, ...]\tFormats and draws a string at gfx_x, gfx_y, and updates gfx_x/gfx_y accordingly (the latter only if the formatted string contains newline). For more information on format strings, see sprintf()\0"
   "gfx_blurto\tx,y\tBlurs the region of the screen between gfx_x,gfx_y and x,y, and updates gfx_x,gfx_y to x,y.\0"
   "gfx_blit\tsource[, scale, rotation, srcx, srcy, srcw, srch, destx, desty, destw, desth, rotxoffs, rotyoffs]\t"

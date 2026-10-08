@@ -177,14 +177,16 @@ impl FullRenderSettings {
         }
         if let Some(primary_format_config) = &self.primary_format_config {
             debug!("set_render_format_config");
-            project.set_render_format_settings(primary_format_config, false)?;
+            project
+                .set_render_format_settings(primary_format_config, false)?;
         } else if let Some(primary_format) = &self.primary_format {
             debug!("set_render_format");
             project.set_render_format(primary_format.clone(), false)?;
         }
         if let Some(secondary_format_config) = &self.secondary_format_config {
             debug!("set_render_format_config2");
-            project.set_render_format_settings(secondary_format_config, true)?;
+            project
+                .set_render_format_settings(secondary_format_config, true)?;
         } else if let Some(secondary_format) = &self.secondary_format {
             debug!("set_render_format2");
             project.set_render_format(secondary_format.clone(), true)?;
@@ -314,10 +316,19 @@ impl<'a> Project {
         if ret {
             return f();
         }
-        let _ = self.make_current_project();
-        f()?;
-        let _ = current.make_current_project();
-        Ok(())
+        self.make_current_project()?;
+        let operation_result = f();
+        let restoration_result = current.make_current_project();
+        match (operation_result, restoration_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(operation_error), Ok(())) => Err(operation_error),
+            (Ok(()), Err(restoration_error)) => Err(restoration_error.into()),
+            (Err(operation_error), Err(restoration_error)) => Err(
+                anyhow::anyhow!(
+                    "operation failed: {operation_error:#}; restoring the previous project also failed: {restoration_error}"
+                ),
+            ),
+        }
     }
 
     /// Whether project is dirty (i.e. needing save).
@@ -391,12 +402,15 @@ impl<'a> Project {
     /// # Note
     ///
     /// This is sugar on top of the cation invocation.
-    pub fn record(&mut self) {
+    pub fn record(&mut self) -> anyhow::Result<()> {
         self.with_current_project(|| -> anyhow::Result<()> {
-            Reaper::get().perform_action(CommandId::new(1013), 0, Some(self));
+            Reaper::get().perform_action(
+                CommandId::new(1013),
+                0,
+                Some(self),
+            )?;
             Ok(())
         })
-        .unwrap()
     }
     pub fn is_recording(&self) -> Result<bool, ReaRsError> {
         unsafe {
@@ -465,13 +479,22 @@ impl<'a> Project {
         let rpr = Reaper::get();
         let current = rpr.current_project();
         if current.get()? == self.get()? {
-            rpr.perform_action(CommandId::new(40860), 0, None);
-            Ok(())
+            rpr.perform_action(CommandId::new(40860), 0, None)
         } else {
-            let _ = self.make_current_project();
-            rpr.perform_action(CommandId::new(40860), 0, None);
-            let _ = current.make_current_project();
-            Ok(())
+            self.make_current_project()?;
+            let close_result =
+                rpr.perform_action(CommandId::new(40860), 0, None);
+            let restore_result = current.make_current_project();
+            match (close_result, restore_result) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), Ok(())) => Err(error),
+                (Ok(()), Err(error)) => Err(error),
+                (Err(close_error), Err(restore_error)) => Err(
+                    ReaRsError::UnderlyingError(anyhow::anyhow!(
+                        "closing project failed: {close_error}; restoring previous project failed: {restore_error}"
+                    )),
+                ),
+            }
         }
     }
 
@@ -488,7 +511,7 @@ impl<'a> Project {
             );
             Reaper::get().low().TimeMap_GetTimeSigAtTime(
                 self.get()?.as_ptr(),
-                position.into(),
+                position.as_seconds_f64(),
                 num.as_mut_ptr(),
                 denom.as_mut_ptr(),
                 tempo.as_mut_ptr(),
@@ -527,7 +550,7 @@ impl<'a> Project {
             color,
             desired_index,
             position,
-            Position::from(0.0),
+            Position::default(),
         )
     }
 
@@ -581,8 +604,8 @@ impl<'a> Project {
             let result = rpr.low().AddProjectMarker2(
                 self.get()?.as_ptr(),
                 is_region,
-                start.into(),
-                end.into(),
+                start.as_seconds_f64(),
+                end.as_seconds_f64(),
                 CString::new(name)?.as_ptr(),
                 desired_index,
                 color,
@@ -604,8 +627,8 @@ impl<'a> Project {
                 self.get()?.as_ptr(),
                 info.user_index as i32,
                 info.is_region,
-                info.position.into(),
-                info.rgn_end.into(),
+                info.position.as_seconds_f64(),
+                info.rgn_end.as_seconds_f64(),
                 CString::new(info.name.to_string())?.as_ptr(),
                 info.color.to_native(),
             ) {
@@ -648,17 +671,20 @@ impl<'a> Project {
     /// # Example
     /// ```no_run
     /// # use rea_rs::{Project, ProjectContext};
-    /// let project = Project::new(ProjectContext::CurrentProject);
-    /// assert_eq!(
-    ///     project
+    /// # fn example() -> anyhow::Result<()> {
+    /// let project = Project::new(ProjectContext::CurrentProject)?;
+    /// let marker = project
     ///     .iter_markers_and_regions()
-    ///     .find(|info| !info.is_region && info.user_index == 2)
-    ///     .unwrap()
-    ///     .position
-    ///     .as_duration()
-    ///     .as_secs_f64(),
-    /// 4.0
-    /// );
+    ///     .find_map(|info| match info {
+    ///         Ok(info) if !info.is_region && info.user_index == 2 => Some(Ok(info)),
+    ///         Ok(_) => None,
+    ///         Err(error) => Some(Err(error)),
+    ///     })
+    ///     .transpose()?
+    ///     .expect("marker with user index 2");
+    /// assert_eq!(marker.position.try_as_duration()?.as_secs_f64(), 4.0);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn iter_markers_and_regions(&self) -> MarkerRegionIterator<'_> {
         MarkerRegionIterator::new(self)
@@ -746,10 +772,15 @@ impl<'a> Project {
                 }
             }
         };
-        let _ = self.with_current_project(|| {
+        self.with_current_project(|| {
             Reaper::get().low().InsertTrackAtIndex(index as i32, true);
             Ok(())
-        });
+        })
+        .map_err(|_| {
+            ReaRsError::InvalidObject(
+                "could not activate project for track insertion",
+            )
+        })?;
         let mut track = self
             .get_track(index)?
             .ok_or(ReaRsError::Str("Can not add track at given index"))?;
@@ -851,7 +882,10 @@ impl<'a> Project {
     }
 
     /// Glue items (action shortcut).
-    pub fn glue_selected_items(&mut self, within_time_selection: bool) {
+    pub fn glue_selected_items(
+        &mut self,
+        within_time_selection: bool,
+    ) -> ReaperResult<()> {
         let action_id = match within_time_selection {
             true => CommandId::new(41588),
             false => CommandId::new(40362),
@@ -938,9 +972,9 @@ impl<'a> Project {
     /// [Project::play_position]
     pub fn next_buffer_position(&self) -> Result<Position, ReaRsError> {
         unsafe {
-            Ok(Position::from(
+            Position::from_host_seconds(
                 Reaper::get().low().GetPlayPosition2Ex(self.get()?.as_ptr()),
-            ))
+            )
         }
     }
 
@@ -949,9 +983,9 @@ impl<'a> Project {
     /// [Project::next_buffer_position]
     pub fn play_position(&self) -> Result<Position, ReaRsError> {
         unsafe {
-            Ok(Position::from(
+            Position::from_host_seconds(
                 Reaper::get().low().GetPlayPositionEx(self.get()?.as_ptr()),
-            ))
+            )
         }
     }
 
@@ -993,9 +1027,9 @@ impl<'a> Project {
     pub fn get_cursor_position(&self) -> Result<Position, ReaRsError> {
         let project = self.get()?;
         unsafe {
-            Ok(Position::from(
+            Position::from_host_seconds(
                 Reaper::get().low().GetCursorPositionEx(project.as_ptr()),
-            ))
+            )
         }
     }
 
@@ -1010,7 +1044,7 @@ impl<'a> Project {
         unsafe {
             Reaper::get().low().SetEditCurPos2(
                 project.as_ptr(),
-                position.into(),
+                position.as_seconds_f64(),
                 move_view,
                 seek_play,
             )
@@ -1400,9 +1434,10 @@ impl<'a> Project {
         position: impl Into<Position>,
     ) -> ReaperResult<PlayRate> {
         let project = self.get()?;
+        let position = position.into();
         Ok(unsafe {
             PlayRate::from(Reaper::get().low().Master_GetPlayRateAtTime(
-                position.into().into(),
+                position.as_seconds_f64(),
                 project.as_ptr(),
             ))
         })
@@ -1440,7 +1475,7 @@ impl<'a> Project {
                 true => CommandId::new(40297),
                 false => CommandId::new(40296),
             };
-            Reaper::get().perform_action(id, 0, Some(self));
+            Reaper::get().perform_action(id, 0, Some(self))?;
             Ok(())
         })
         .map_err(|_| ReaRsError::InvalidObject("Project"))
@@ -1814,7 +1849,10 @@ impl<'a> Project {
     pub fn get_render_bounds(&self) -> ReaperResult<(Position, Position)> {
         let start = self.get_info_value("RENDER_STARTPOS")?;
         let end = self.get_info_value("RENDER_ENDPOS")?;
-        Ok((Position::from(start), Position::from(end)))
+        Ok((
+            Position::from_host_seconds(start)?,
+            Position::from_host_seconds(end)?,
+        ))
     }
     /// Valid only when [Project::get_render_bounds_mode] is
     /// [BoundsMode::Custom]
@@ -1823,8 +1861,10 @@ impl<'a> Project {
         start: impl Into<Position>,
         end: impl Into<Position>,
     ) -> ReaperResult<()> {
-        self.set_info_value("RENDER_STARTPOS", start.into().into())?;
-        self.set_info_value("RENDER_ENDPOS", end.into().into())
+        let start = start.into();
+        let end = end.into();
+        self.set_info_value("RENDER_STARTPOS", start.as_seconds_f64())?;
+        self.set_info_value("RENDER_ENDPOS", end.as_seconds_f64())
     }
 
     pub fn get_render_tail(&self) -> ReaperResult<RenderTail> {
@@ -2490,10 +2530,9 @@ impl From<&str> for RenderFormat {
 #[cfg(test)]
 mod tests {
     use super::{
-        BoundsMode, RenderDitherFlags, RenderLimitMode, RenderMode,
-        RenderFormat, RenderFormatSettings, RenderMonoAdjustment,
-        RenderNormalize, RenderNormalizeMode, RenderNormalizeTargetMode,
-        RenderSettings,
+        BoundsMode, RenderDitherFlags, RenderFormat, RenderFormatSettings,
+        RenderLimitMode, RenderMode, RenderMonoAdjustment, RenderNormalize,
+        RenderNormalizeMode, RenderNormalizeTargetMode, RenderSettings,
     };
     use super::{FullRenderSettings, Position};
     use std::path::PathBuf;
@@ -2579,7 +2618,10 @@ mod tests {
     fn full_render_settings_serialization_round_trip() {
         let settings = FullRenderSettings {
             settings: Some(RenderSettings::new(super::RenderMode::MasterMix)),
-            bounds: Some((Position::from(1.0), Position::from(2.0))),
+            bounds: Some((
+                Position::try_from_seconds(1.0).unwrap(),
+                Position::try_from_seconds(2.0).unwrap(),
+            )),
             bounds_mode: Some(BoundsMode::TimeSelection),
             channels_amount: Some(2),
             directory: Some(PathBuf::from("/tmp/render")),

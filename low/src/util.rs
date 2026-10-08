@@ -73,6 +73,7 @@ pub unsafe fn bootstrap_extension_plugin(
 /// # Safety
 ///
 /// Must only be called in main thread.
+#[allow(static_mut_refs)]
 pub unsafe fn execute_plugin_destroy_hooks() {
     for f in PLUGIN_DESTROY_HOOKS.drain(..) {
         f();
@@ -89,6 +90,7 @@ pub unsafe fn execute_plugin_destroy_hooks() {
 /// # Safety
 ///
 /// Must only be called in main thread.
+#[allow(static_mut_refs)]
 pub unsafe fn register_plugin_destroy_hook(f: fn()) {
     PLUGIN_DESTROY_HOOKS.push(f);
 }

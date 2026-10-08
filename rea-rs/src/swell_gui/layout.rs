@@ -119,6 +119,31 @@ pub struct Rect {
     pub height: u32,
 }
 
+/// Signed-origin rectangle for native screen coordinates, in pixels.
+///
+/// Unlike [`Rect`], negative origins are preserved for windows on monitors
+/// positioned left of or above the primary display.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+pub struct SignedRect {
+    /// Horizontal coordinate of the top-left corner.
+    pub x: i32,
+    /// Vertical coordinate of the top-left corner.
+    pub y: i32,
+    /// Rectangle width.
+    pub width: u32,
+    /// Rectangle height.
+    pub height: u32,
+}
+
 fn native_coordinate(value: u32) -> i32 {
     i32::try_from(value).unwrap_or(i32::MAX)
 }
@@ -152,6 +177,30 @@ impl From<raw::RECT> for Rect {
             y: rect.top.max(0) as u32,
             width,
             height,
+        }
+    }
+}
+
+impl From<raw::RECT> for SignedRect {
+    fn from(rect: raw::RECT) -> Self {
+        Self {
+            x: rect.left,
+            y: rect.top,
+            width: (i64::from(rect.right) - i64::from(rect.left)).max(0)
+                as u32,
+            height: (i64::from(rect.bottom) - i64::from(rect.top)).max(0)
+                as u32,
+        }
+    }
+}
+
+impl From<SignedRect> for raw::RECT {
+    fn from(rect: SignedRect) -> Self {
+        Self {
+            left: rect.x,
+            top: rect.y,
+            right: rect.x.saturating_add(native_coordinate(rect.width)),
+            bottom: rect.y.saturating_add(native_coordinate(rect.height)),
         }
     }
 }

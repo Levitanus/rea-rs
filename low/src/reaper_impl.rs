@@ -41,6 +41,7 @@ impl Reaper {
     /// before.
     ///
     /// [`make_available_globally()`]: fn.make_available_globally.html
+    #[allow(static_mut_refs)]
     pub fn get() -> &'static Reaper {
         unsafe {
             INSTANCE.as_ref().expect(

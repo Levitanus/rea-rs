@@ -29,21 +29,21 @@
 //!         └── integration_test.rs
 //! ```
 //!
-//! `test` crate will not be delivered to the end-user, but will be used for
-//! testing your library. Since there is a need for patching of reaper-low and
-//! reaper-medium, contents of `test/Cargo.toml`:
+//! `test` crate will not be delivered to end-users; it is a non-published
+//! extension plug-in used only for host-driven testing. An example package
+//! manifest is:
 //!
 //! ```toml
 //! [package]
 //! edition = "2021"
 //! name = "reaper-test-extension-plugin"
 //! publish = false
-//! version = "0.2.0"
+//! version = "1.0.0"
 //!
 //! [dependencies]
-//! rea-rs = "0.2.0"
-//! rea-rs-macros = "0.2.0"
-//! rea-rs-test = "0.2.0"
+//! rea-rs = "1.0.0"
+//! rea-rs-macros = "1.0.0"
+//! rea-rs-test = "1.0.0"
 //! my_lib = {path = "../my_lib"}
 //!
 //! [lib]
@@ -67,9 +67,8 @@
 //! use rea_rs_macros::reaper_extension_plugin;
 //! use rea_rs_test::*;
 //! use rea_rs::{Reaper, PluginContext};
-//! use std::error::Error;
 //! fn hello_world(reaper: &mut Reaper) -> TestStepResult {
-//!     reaper.show_console_msg("Hello world!");
+//!     reaper.show_console_msg("Hello world!")?;
 //!     Ok(())
 //! }
 //! #[reaper_extension_plugin]
@@ -82,13 +81,13 @@
 //! }
 //! ```
 //!
-//! to run integration tests, go to the test folder and type:
-//! `cargo build --workspace; cargo test`
+//! Run the integration test from the workspace root with
+//! `cargo test -p reaper-test-extension-plugin --test integration_test`.
 //!
 //! ## Hint
 //!
-//! Use crates `log` and `env_logger` for printing to stdio. integration test
-//! turns env logger on by itself.
+//! Plug-in test steps can use `log` for structured diagnostics. The runner
+//! captures REAPER stdout and stderr and prints the capture when a test fails.
 
 use rea_rs::{
     ActionHook, ActionKind, ActionRegistrationOptions, PluginContext, Reaper,
@@ -105,6 +104,9 @@ use std::{
 
 pub mod integration_test;
 pub use integration_test::*;
+
+const INTEGRATION_RESULT_PATH_ENV: &str =
+    integration_test::INTEGRATION_RESULT_PATH_ENV;
 
 static mut INSTANCE: Option<ReaperTest> = None;
 
@@ -247,6 +249,12 @@ impl ReaperTest {
             false => {
                 println!("From REAPER: reaper-rs integration test executed successfully");
                 if self.is_integration_test {
+                    if let Err(error) = write_integration_test_result("PASS") {
+                        eprintln!(
+                            "Could not report integration-test success: {error}"
+                        );
+                        process::exit(173)
+                    }
                     process::exit(0)
                 }
             }
@@ -259,6 +267,13 @@ impl ReaperTest {
                         eprintln!(
                             "From REAPER: reaper-rs integration test failed"
                         );
+                        if let Err(error) =
+                            write_integration_test_result("FAIL")
+                        {
+                            eprintln!(
+                                "Could not report integration-test failure: {error}"
+                            );
+                        }
                         process::exit(172)
                     }
                     false => panic!(
@@ -272,4 +287,18 @@ impl ReaperTest {
     pub fn push_test_step(&mut self, step: TestStep) {
         self.steps.push(step);
     }
+}
+
+fn write_integration_test_result(result: &str) -> std::io::Result<()> {
+    let result_path = std::env::var_os(INTEGRATION_RESULT_PATH_ENV)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "integration result path environment variable is not set",
+            )
+        })?;
+    let result_path = std::path::PathBuf::from(result_path);
+    let temporary_path = result_path.with_extension("result.tmp");
+    std::fs::write(&temporary_path, format!("{result}\n"))?;
+    std::fs::rename(&temporary_path, &result_path)
 }

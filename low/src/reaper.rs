@@ -74,6 +74,12 @@ impl Reaper {
                             .as_ptr(),
                     ),
                 ),
+                AddRegionOrMarker: std::mem::transmute(
+                    plugin_context.GetFunc(
+                        c_str_macro::c_str!(stringify!(AddRegionOrMarker))
+                            .as_ptr(),
+                    ),
+                ),
                 AddRemoveReaScript: std::mem::transmute(
                     plugin_context.GetFunc(
                         c_str_macro::c_str!(stringify!(AddRemoveReaScript))
@@ -879,6 +885,9 @@ impl Reaper {
                         .as_ptr(),
                     ),
                 ),
+                EnumThemeColors: std::mem::transmute(plugin_context.GetFunc(
+                    c_str_macro::c_str!(stringify!(EnumThemeColors)).as_ptr(),
+                )),
                 EnumTrackMIDIProgramNames: std::mem::transmute(
                     plugin_context.GetFunc(
                         c_str_macro::c_str!(stringify!(
@@ -1864,6 +1873,14 @@ impl Reaper {
                 GetSetRepeatEx: std::mem::transmute(plugin_context.GetFunc(
                     c_str_macro::c_str!(stringify!(GetSetRepeatEx)).as_ptr(),
                 )),
+                GetSetTempoTimeSigMarkerBasis: std::mem::transmute(
+                    plugin_context.GetFunc(
+                        c_str_macro::c_str!(stringify!(
+                            GetSetTempoTimeSigMarkerBasis
+                        ))
+                        .as_ptr(),
+                    ),
+                ),
                 GetSetTempoTimeSigMarkerFlag: std::mem::transmute(
                     plugin_context.GetFunc(
                         c_str_macro::c_str!(stringify!(
@@ -2194,6 +2211,9 @@ impl Reaper {
                 GetUnderrunTime: std::mem::transmute(plugin_context.GetFunc(
                     c_str_macro::c_str!(stringify!(GetUnderrunTime)).as_ptr(),
                 )),
+                GetUserFileName: std::mem::transmute(plugin_context.GetFunc(
+                    c_str_macro::c_str!(stringify!(GetUserFileName)).as_ptr(),
+                )),
                 GetUserFileNameForRead: std::mem::transmute(
                     plugin_context.GetFunc(
                         c_str_macro::c_str!(stringify!(
@@ -2288,6 +2308,9 @@ impl Reaper {
                             .as_ptr(),
                     ),
                 ),
+                IsDarkMode: std::mem::transmute(plugin_context.GetFunc(
+                    c_str_macro::c_str!(stringify!(IsDarkMode)).as_ptr(),
+                )),
                 IsInRealTimeAudio: std::mem::transmute(
                     plugin_context.GetFunc(
                         c_str_macro::c_str!(stringify!(IsInRealTimeAudio))
@@ -3448,6 +3471,12 @@ impl Reaper {
                         .as_ptr(),
                     ),
                 ),
+                set_config_var_string: std::mem::transmute(
+                    plugin_context.GetFunc(
+                        c_str_macro::c_str!(stringify!(set_config_var_string))
+                            .as_ptr(),
+                    ),
+                ),
                 SetActiveTake: std::mem::transmute(plugin_context.GetFunc(
                     c_str_macro::c_str!(stringify!(SetActiveTake)).as_ptr(),
                 )),
@@ -3968,6 +3997,14 @@ impl Reaper {
                         .as_ptr(),
                     ),
                 ),
+                TakeFX_GetParamSectionName: std::mem::transmute(
+                    plugin_context.GetFunc(
+                        c_str_macro::c_str!(stringify!(
+                            TakeFX_GetParamSectionName
+                        ))
+                        .as_ptr(),
+                    ),
+                ),
                 TakeFX_GetPinMappings: std::mem::transmute(
                     plugin_context.GetFunc(
                         c_str_macro::c_str!(stringify!(TakeFX_GetPinMappings))
@@ -4412,6 +4449,14 @@ impl Reaper {
                         .as_ptr(),
                     ),
                 ),
+                TrackFX_GetParamSectionName: std::mem::transmute(
+                    plugin_context.GetFunc(
+                        c_str_macro::c_str!(stringify!(
+                            TrackFX_GetParamSectionName
+                        ))
+                        .as_ptr(),
+                    ),
+                ),
                 TrackFX_GetPinMappings: std::mem::transmute(
                     plugin_context.GetFunc(
                         c_str_macro::c_str!(stringify!(
@@ -4577,6 +4622,33 @@ impl Reaper {
                 Undo_EndBlock2: std::mem::transmute(plugin_context.GetFunc(
                     c_str_macro::c_str!(stringify!(Undo_EndBlock2)).as_ptr(),
                 )),
+                Undo_GetCurEntry: std::mem::transmute(plugin_context.GetFunc(
+                    c_str_macro::c_str!(stringify!(Undo_GetCurEntry)).as_ptr(),
+                )),
+                Undo_GetEntryDesc: std::mem::transmute(
+                    plugin_context.GetFunc(
+                        c_str_macro::c_str!(stringify!(Undo_GetEntryDesc))
+                            .as_ptr(),
+                    ),
+                ),
+                Undo_GetEntryTime: std::mem::transmute(
+                    plugin_context.GetFunc(
+                        c_str_macro::c_str!(stringify!(Undo_GetEntryTime))
+                            .as_ptr(),
+                    ),
+                ),
+                Undo_GetNumEntries: std::mem::transmute(
+                    plugin_context.GetFunc(
+                        c_str_macro::c_str!(stringify!(Undo_GetNumEntries))
+                            .as_ptr(),
+                    ),
+                ),
+                Undo_IsEntryAltTree: std::mem::transmute(
+                    plugin_context.GetFunc(
+                        c_str_macro::c_str!(stringify!(Undo_IsEntryAltTree))
+                            .as_ptr(),
+                    ),
+                ),
                 Undo_OnStateChange: std::mem::transmute(
                     plugin_context.GetFunc(
                         c_str_macro::c_str!(stringify!(Undo_OnStateChange))
@@ -4609,6 +4681,9 @@ impl Reaper {
                             .as_ptr(),
                     ),
                 ),
+                Undo_SetCurPos: std::mem::transmute(plugin_context.GetFunc(
+                    c_str_macro::c_str!(stringify!(Undo_SetCurPos)).as_ptr(),
+                )),
                 update_disk_counters: std::mem::transmute(
                     plugin_context.GetFunc(
                         c_str_macro::c_str!(stringify!(update_disk_counters))
@@ -4732,6 +4807,9 @@ impl Reaper {
             loaded_count += 1;
         }
         if pointers.AddProjectMarker2.is_some() {
+            loaded_count += 1;
+        }
+        if pointers.AddRegionOrMarker.is_some() {
             loaded_count += 1;
         }
         if pointers.AddRemoveReaScript.is_some() {
@@ -5170,6 +5248,9 @@ impl Reaper {
             loaded_count += 1;
         }
         if pointers.EnumRegionRenderMatrix.is_some() {
+            loaded_count += 1;
+        }
+        if pointers.EnumThemeColors.is_some() {
             loaded_count += 1;
         }
         if pointers.EnumTrackMIDIProgramNames.is_some() {
@@ -5694,6 +5775,9 @@ impl Reaper {
         if pointers.GetSetRepeatEx.is_some() {
             loaded_count += 1;
         }
+        if pointers.GetSetTempoTimeSigMarkerBasis.is_some() {
+            loaded_count += 1;
+        }
         if pointers.GetSetTempoTimeSigMarkerFlag.is_some() {
             loaded_count += 1;
         }
@@ -5874,6 +5958,9 @@ impl Reaper {
         if pointers.GetUnderrunTime.is_some() {
             loaded_count += 1;
         }
+        if pointers.GetUserFileName.is_some() {
+            loaded_count += 1;
+        }
         if pointers.GetUserFileNameForRead.is_some() {
             loaded_count += 1;
         }
@@ -5932,6 +6019,9 @@ impl Reaper {
             loaded_count += 1;
         }
         if pointers.InsertTrackInProject.is_some() {
+            loaded_count += 1;
+        }
+        if pointers.IsDarkMode.is_some() {
             loaded_count += 1;
         }
         if pointers.IsInRealTimeAudio.is_some() {
@@ -6654,6 +6744,9 @@ impl Reaper {
         if pointers.SendMIDIMessageToHardware.is_some() {
             loaded_count += 1;
         }
+        if pointers.set_config_var_string.is_some() {
+            loaded_count += 1;
+        }
         if pointers.SetActiveTake.is_some() {
             loaded_count += 1;
         }
@@ -6957,6 +7050,9 @@ impl Reaper {
         if pointers.TakeFX_GetParamNormalized.is_some() {
             loaded_count += 1;
         }
+        if pointers.TakeFX_GetParamSectionName.is_some() {
+            loaded_count += 1;
+        }
         if pointers.TakeFX_GetPinMappings.is_some() {
             loaded_count += 1;
         }
@@ -7176,6 +7272,9 @@ impl Reaper {
         if pointers.TrackFX_GetParamNormalized.is_some() {
             loaded_count += 1;
         }
+        if pointers.TrackFX_GetParamSectionName.is_some() {
+            loaded_count += 1;
+        }
         if pointers.TrackFX_GetPinMappings.is_some() {
             loaded_count += 1;
         }
@@ -7263,6 +7362,21 @@ impl Reaper {
         if pointers.Undo_EndBlock2.is_some() {
             loaded_count += 1;
         }
+        if pointers.Undo_GetCurEntry.is_some() {
+            loaded_count += 1;
+        }
+        if pointers.Undo_GetEntryDesc.is_some() {
+            loaded_count += 1;
+        }
+        if pointers.Undo_GetEntryTime.is_some() {
+            loaded_count += 1;
+        }
+        if pointers.Undo_GetNumEntries.is_some() {
+            loaded_count += 1;
+        }
+        if pointers.Undo_IsEntryAltTree.is_some() {
+            loaded_count += 1;
+        }
         if pointers.Undo_OnStateChange.is_some() {
             loaded_count += 1;
         }
@@ -7276,6 +7390,9 @@ impl Reaper {
             loaded_count += 1;
         }
         if pointers.Undo_OnStateChangeEx2.is_some() {
+            loaded_count += 1;
+        }
+        if pointers.Undo_SetCurPos.is_some() {
             loaded_count += 1;
         }
         if pointers.update_disk_counters.is_some() {
@@ -7461,6 +7578,29 @@ impl Reaper {
                 panic!(
                     "Attempt to use a function that has not been loaded: {}",
                     stringify!(AddProjectMarker2)
+                )
+            }
+            Some(f) => f(proj, isrgn, pos, rgnend, name, wantidx, color),
+        }
+    }
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn AddRegionOrMarker(
+        &self,
+        proj: *mut root::ReaProject,
+        isrgn: bool,
+        pos: f64,
+        rgnend: f64,
+        name: *const ::std::os::raw::c_char,
+        wantidx: ::std::os::raw::c_int,
+        color: ::std::os::raw::c_int,
+    ) -> *mut root::reaper_functions::ProjectMarker {
+        match self.pointers.AddRegionOrMarker {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(AddRegionOrMarker)
                 )
             }
             Some(f) => f(proj, isrgn, pos, rgnend, name, wantidx, color),
@@ -9964,6 +10104,25 @@ impl Reaper {
                 )
             }
             Some(f) => f(proj, regionindex, rendertrack),
+        }
+    }
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn EnumThemeColors(
+        &self,
+        idx: ::std::os::raw::c_int,
+        typeOutOptional: *mut ::std::os::raw::c_int,
+        nameOutOptional: *mut *const ::std::os::raw::c_char,
+    ) -> *const ::std::os::raw::c_char {
+        match self.pointers.EnumThemeColors {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(EnumThemeColors)
+                )
+            }
+            Some(f) => f(idx, typeOutOptional, nameOutOptional),
         }
     }
     /// # Safety
@@ -13043,6 +13202,26 @@ impl Reaper {
     /// # Safety
     ///
     /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn GetSetTempoTimeSigMarkerBasis(
+        &self,
+        project: *mut root::ReaProject,
+        point_index: ::std::os::raw::c_int,
+        beatbase: f64,
+        is_set: bool,
+    ) -> f64 {
+        match self.pointers.GetSetTempoTimeSigMarkerBasis {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(GetSetTempoTimeSigMarkerBasis)
+                )
+            }
+            Some(f) => f(project, point_index, beatbase, is_set),
+        }
+    }
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
     pub unsafe fn GetSetTempoTimeSigMarkerFlag(
         &self,
         project: *mut root::ReaProject,
@@ -14187,6 +14366,35 @@ impl Reaper {
     /// # Safety
     ///
     /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn GetUserFileName(
+        &self,
+        mode: ::std::os::raw::c_int,
+        caption: *const ::std::os::raw::c_char,
+        initial_file_or_path: *const ::std::os::raw::c_char,
+        extension_list: *const ::std::os::raw::c_char,
+        fnOutNeedBig: *mut ::std::os::raw::c_char,
+        fnOutNeedBig_sz: ::std::os::raw::c_int,
+    ) -> bool {
+        match self.pointers.GetUserFileName {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(GetUserFileName)
+                )
+            }
+            Some(f) => f(
+                mode,
+                caption,
+                initial_file_or_path,
+                extension_list,
+                fnOutNeedBig,
+                fnOutNeedBig_sz,
+            ),
+        }
+    }
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
     pub unsafe fn GetUserFileNameForRead(
         &self,
         filenameNeed4096: *mut ::std::os::raw::c_char,
@@ -14574,6 +14782,17 @@ impl Reaper {
                 )
             }
             Some(f) => f(proj, idx, flags),
+        }
+    }
+    pub fn IsDarkMode(&self) -> bool {
+        match self.pointers.IsDarkMode {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(IsDarkMode)
+                )
+            }
+            Some(f) => f(),
         }
     }
     pub fn IsInRealTimeAudio(&self) -> ::std::os::raw::c_int {
@@ -19216,6 +19435,25 @@ impl Reaper {
     /// # Safety
     ///
     /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn set_config_var_string(
+        &self,
+        name: *const ::std::os::raw::c_char,
+        value: *const ::std::os::raw::c_char,
+        persist: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        match self.pointers.set_config_var_string {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(set_config_var_string)
+                )
+            }
+            Some(f) => f(name, value, persist),
+        }
+    }
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
     pub unsafe fn SetActiveTake(&self, take: *mut root::MediaItem_Take) {
         match self.pointers.SetActiveTake {
             None => {
@@ -20779,8 +21017,8 @@ impl Reaper {
         fx: ::std::os::raw::c_int,
         param: ::std::os::raw::c_int,
         value: f64,
-        buf: *mut ::std::os::raw::c_char,
-        buf_sz: ::std::os::raw::c_int,
+        bufOut: *mut ::std::os::raw::c_char,
+        bufOut_sz: ::std::os::raw::c_int,
     ) -> bool {
         match self.pointers.TakeFX_FormatParamValueNormalized {
             None => {
@@ -20789,7 +21027,7 @@ impl Reaper {
                     stringify!(TakeFX_FormatParamValueNormalized)
                 )
             }
-            Some(f) => f(take, fx, param, value, buf, buf_sz),
+            Some(f) => f(take, fx, param, value, bufOut, bufOut_sz),
         }
     }
     /// # Safety
@@ -21188,6 +21426,27 @@ impl Reaper {
                 )
             }
             Some(f) => f(take, fx, param),
+        }
+    }
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn TakeFX_GetParamSectionName(
+        &self,
+        take: *mut root::MediaItem_Take,
+        fx: ::std::os::raw::c_int,
+        param: ::std::os::raw::c_int,
+        bufOut: *mut ::std::os::raw::c_char,
+        bufOut_sz: ::std::os::raw::c_int,
+    ) {
+        match self.pointers.TakeFX_GetParamSectionName {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(TakeFX_GetParamSectionName)
+                )
+            }
+            Some(f) => f(take, fx, param, bufOut, bufOut_sz),
         }
     }
     /// # Safety
@@ -22112,8 +22371,8 @@ impl Reaper {
         fx: ::std::os::raw::c_int,
         param: ::std::os::raw::c_int,
         value: f64,
-        buf: *mut ::std::os::raw::c_char,
-        buf_sz: ::std::os::raw::c_int,
+        bufOut: *mut ::std::os::raw::c_char,
+        bufOut_sz: ::std::os::raw::c_int,
     ) -> bool {
         match self.pointers.TrackFX_FormatParamValueNormalized {
             None => {
@@ -22122,7 +22381,7 @@ impl Reaper {
                     stringify!(TrackFX_FormatParamValueNormalized)
                 )
             }
-            Some(f) => f(track, fx, param, value, buf, buf_sz),
+            Some(f) => f(track, fx, param, value, bufOut, bufOut_sz),
         }
     }
     /// # Safety
@@ -22606,6 +22865,27 @@ impl Reaper {
                 )
             }
             Some(f) => f(track, fx, param),
+        }
+    }
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn TrackFX_GetParamSectionName(
+        &self,
+        track: *mut root::MediaTrack,
+        fx: ::std::os::raw::c_int,
+        param: ::std::os::raw::c_int,
+        bufOut: *mut ::std::os::raw::c_char,
+        bufOut_sz: ::std::os::raw::c_int,
+    ) {
+        match self.pointers.TrackFX_GetParamSectionName {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(TrackFX_GetParamSectionName)
+                )
+            }
+            Some(f) => f(track, fx, param, bufOut, bufOut_sz),
         }
     }
     /// # Safety
@@ -23138,6 +23418,94 @@ impl Reaper {
     /// # Safety
     ///
     /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn Undo_GetCurEntry(
+        &self,
+        proj: *mut root::ReaProject,
+    ) -> ::std::os::raw::c_int {
+        match self.pointers.Undo_GetCurEntry {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(Undo_GetCurEntry)
+                )
+            }
+            Some(f) => f(proj),
+        }
+    }
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn Undo_GetEntryDesc(
+        &self,
+        proj: *mut root::ReaProject,
+        index: ::std::os::raw::c_int,
+    ) -> *const ::std::os::raw::c_char {
+        match self.pointers.Undo_GetEntryDesc {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(Undo_GetEntryDesc)
+                )
+            }
+            Some(f) => f(proj, index),
+        }
+    }
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn Undo_GetEntryTime(
+        &self,
+        proj: *mut root::ReaProject,
+        index: ::std::os::raw::c_int,
+    ) -> f64 {
+        match self.pointers.Undo_GetEntryTime {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(Undo_GetEntryTime)
+                )
+            }
+            Some(f) => f(proj, index),
+        }
+    }
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn Undo_GetNumEntries(
+        &self,
+        proj: *mut root::ReaProject,
+    ) -> ::std::os::raw::c_int {
+        match self.pointers.Undo_GetNumEntries {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(Undo_GetNumEntries)
+                )
+            }
+            Some(f) => f(proj),
+        }
+    }
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn Undo_IsEntryAltTree(
+        &self,
+        proj: *mut root::ReaProject,
+        index: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        match self.pointers.Undo_IsEntryAltTree {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(Undo_IsEntryAltTree)
+                )
+            }
+            Some(f) => f(proj, index),
+        }
+    }
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
     pub unsafe fn Undo_OnStateChange(
         &self,
         descchange: *const ::std::os::raw::c_char,
@@ -23226,6 +23594,25 @@ impl Reaper {
                 )
             }
             Some(f) => f(proj, descchange, whichStates, trackparm),
+        }
+    }
+    /// # Safety
+    ///
+    /// REAPER can crash if you pass an invalid pointer.
+    pub unsafe fn Undo_SetCurPos(
+        &self,
+        proj: *mut root::ReaProject,
+        index: ::std::os::raw::c_int,
+        loadAltTreeOptional: ::std::os::raw::c_int,
+    ) {
+        match self.pointers.Undo_SetCurPos {
+            None => {
+                panic!(
+                    "Attempt to use a function that has not been loaded: {}",
+                    stringify!(Undo_SetCurPos)
+                )
+            }
+            Some(f) => f(proj, index, loadAltTreeOptional),
         }
     }
     pub fn update_disk_counters(
@@ -23645,6 +24032,18 @@ pub struct ReaperFunctionPointers {
             wantidx: ::std::os::raw::c_int,
             color: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int,
+    >,
+    pub AddRegionOrMarker: Option<
+        unsafe extern "C" fn(
+            proj: *mut root::ReaProject,
+            isrgn: bool,
+            pos: f64,
+            rgnend: f64,
+            name: *const ::std::os::raw::c_char,
+            wantidx: ::std::os::raw::c_int,
+            color: ::std::os::raw::c_int,
+        )
+            -> *mut root::reaper_functions::ProjectMarker,
     >,
     pub AddRemoveReaScript: Option<
         unsafe extern "C" fn(
@@ -24419,6 +24818,13 @@ pub struct ReaperFunctionPointers {
             regionindex: ::std::os::raw::c_int,
             rendertrack: ::std::os::raw::c_int,
         ) -> *mut root::MediaTrack,
+    >,
+    pub EnumThemeColors: Option<
+        unsafe extern "C" fn(
+            idx: ::std::os::raw::c_int,
+            typeOutOptional: *mut ::std::os::raw::c_int,
+            nameOutOptional: *mut *const ::std::os::raw::c_char,
+        ) -> *const ::std::os::raw::c_char,
     >,
     pub EnumTrackMIDIProgramNames: Option<
         unsafe extern "C" fn(
@@ -25399,6 +25805,14 @@ pub struct ReaperFunctionPointers {
             val: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int,
     >,
+    pub GetSetTempoTimeSigMarkerBasis: Option<
+        unsafe extern "C" fn(
+            project: *mut root::ReaProject,
+            point_index: ::std::os::raw::c_int,
+            beatbase: f64,
+            is_set: bool,
+        ) -> f64,
+    >,
     pub GetSetTempoTimeSigMarkerFlag: Option<
         unsafe extern "C" fn(
             project: *mut root::ReaProject,
@@ -25816,6 +26230,16 @@ pub struct ReaperFunctionPointers {
             curtimeOut: *mut ::std::os::raw::c_uint,
         ),
     >,
+    pub GetUserFileName: Option<
+        unsafe extern "C" fn(
+            mode: ::std::os::raw::c_int,
+            caption: *const ::std::os::raw::c_char,
+            initial_file_or_path: *const ::std::os::raw::c_char,
+            extension_list: *const ::std::os::raw::c_char,
+            fnOutNeedBig: *mut ::std::os::raw::c_char,
+            fnOutNeedBig_sz: ::std::os::raw::c_int,
+        ) -> bool,
+    >,
     pub GetUserFileNameForRead: Option<
         unsafe extern "C" fn(
             filenameNeed4096: *mut ::std::os::raw::c_char,
@@ -25952,6 +26376,7 @@ pub struct ReaperFunctionPointers {
             flags: ::std::os::raw::c_int,
         ),
     >,
+    pub IsDarkMode: Option<extern "C" fn() -> bool>,
     pub IsInRealTimeAudio: Option<extern "C" fn() -> ::std::os::raw::c_int>,
     pub IsItemTakeActiveForPlayback: Option<
         unsafe extern "C" fn(
@@ -27576,6 +28001,13 @@ pub struct ReaperFunctionPointers {
             msg_sz: ::std::os::raw::c_int,
         ),
     >,
+    pub set_config_var_string: Option<
+        unsafe extern "C" fn(
+            name: *const ::std::os::raw::c_char,
+            value: *const ::std::os::raw::c_char,
+            persist: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int,
+    >,
     pub SetActiveTake:
         Option<unsafe extern "C" fn(take: *mut root::MediaItem_Take)>,
     pub SetAutomationMode:
@@ -28129,8 +28561,8 @@ pub struct ReaperFunctionPointers {
             fx: ::std::os::raw::c_int,
             param: ::std::os::raw::c_int,
             value: f64,
-            buf: *mut ::std::os::raw::c_char,
-            buf_sz: ::std::os::raw::c_int,
+            bufOut: *mut ::std::os::raw::c_char,
+            bufOut_sz: ::std::os::raw::c_int,
         ) -> bool,
     >,
     pub TakeFX_GetChainVisible: Option<
@@ -28282,6 +28714,15 @@ pub struct ReaperFunctionPointers {
             fx: ::std::os::raw::c_int,
             param: ::std::os::raw::c_int,
         ) -> f64,
+    >,
+    pub TakeFX_GetParamSectionName: Option<
+        unsafe extern "C" fn(
+            take: *mut root::MediaItem_Take,
+            fx: ::std::os::raw::c_int,
+            param: ::std::os::raw::c_int,
+            bufOut: *mut ::std::os::raw::c_char,
+            bufOut_sz: ::std::os::raw::c_int,
+        ),
     >,
     pub TakeFX_GetPinMappings: Option<
         unsafe extern "C" fn(
@@ -28595,8 +29036,8 @@ pub struct ReaperFunctionPointers {
             fx: ::std::os::raw::c_int,
             param: ::std::os::raw::c_int,
             value: f64,
-            buf: *mut ::std::os::raw::c_char,
-            buf_sz: ::std::os::raw::c_int,
+            bufOut: *mut ::std::os::raw::c_char,
+            bufOut_sz: ::std::os::raw::c_int,
         ) -> bool,
     >,
     pub TrackFX_GetByName: Option<
@@ -28777,6 +29218,15 @@ pub struct ReaperFunctionPointers {
             fx: ::std::os::raw::c_int,
             param: ::std::os::raw::c_int,
         ) -> f64,
+    >,
+    pub TrackFX_GetParamSectionName: Option<
+        unsafe extern "C" fn(
+            track: *mut root::MediaTrack,
+            fx: ::std::os::raw::c_int,
+            param: ::std::os::raw::c_int,
+            bufOut: *mut ::std::os::raw::c_char,
+            bufOut_sz: ::std::os::raw::c_int,
+        ),
     >,
     pub TrackFX_GetPinMappings: Option<
         unsafe extern "C" fn(
@@ -28961,6 +29411,34 @@ pub struct ReaperFunctionPointers {
             extraflags: ::std::os::raw::c_int,
         ),
     >,
+    pub Undo_GetCurEntry: Option<
+        unsafe extern "C" fn(
+            proj: *mut root::ReaProject,
+        ) -> ::std::os::raw::c_int,
+    >,
+    pub Undo_GetEntryDesc: Option<
+        unsafe extern "C" fn(
+            proj: *mut root::ReaProject,
+            index: ::std::os::raw::c_int,
+        ) -> *const ::std::os::raw::c_char,
+    >,
+    pub Undo_GetEntryTime: Option<
+        unsafe extern "C" fn(
+            proj: *mut root::ReaProject,
+            index: ::std::os::raw::c_int,
+        ) -> f64,
+    >,
+    pub Undo_GetNumEntries: Option<
+        unsafe extern "C" fn(
+            proj: *mut root::ReaProject,
+        ) -> ::std::os::raw::c_int,
+    >,
+    pub Undo_IsEntryAltTree: Option<
+        unsafe extern "C" fn(
+            proj: *mut root::ReaProject,
+            index: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int,
+    >,
     pub Undo_OnStateChange: Option<
         unsafe extern "C" fn(descchange: *const ::std::os::raw::c_char),
     >,
@@ -28990,6 +29468,13 @@ pub struct ReaperFunctionPointers {
             descchange: *const ::std::os::raw::c_char,
             whichStates: ::std::os::raw::c_int,
             trackparm: ::std::os::raw::c_int,
+        ),
+    >,
+    pub Undo_SetCurPos: Option<
+        unsafe extern "C" fn(
+            proj: *mut root::ReaProject,
+            index: ::std::os::raw::c_int,
+            loadAltTreeOptional: ::std::os::raw::c_int,
         ),
     >,
     pub update_disk_counters: Option<
@@ -29109,5 +29594,5 @@ pub struct ReaperFunctionPointers {
     >,
 }
 impl ReaperFunctionPointers {
-    pub(crate) const TOTAL_COUNT: u32 = 875u32;
+    pub(crate) const TOTAL_COUNT: u32 = 889u32;
 }

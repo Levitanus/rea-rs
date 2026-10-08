@@ -533,6 +533,7 @@ impl Swell {
     /// before.
     ///
     /// [`make_available_globally()`]: fn.make_available_globally.html
+    #[allow(static_mut_refs)]
     pub fn get() -> &'static Swell {
         unsafe {
             INSTANCE.as_ref().expect(

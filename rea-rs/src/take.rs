@@ -11,8 +11,8 @@ use crate::{
     },
     utils::{string_from_buf, string_from_const_i8},
     AudioAccessor, Color, Envelope, FXParent, Item, KnowsProject,
-    MidiEventBuilder, Pan, PanLaw, Pitch, PlayRate, Project, ProjectContext,
-    ReaRsError, Reaper, ReaperResult, Source, SourceOffset, TakeFX, Track,
+    MidiEventBuilder, Pan, PanLaw, Pitch, PlayRate, Position, Project,
+    ProjectContext, ReaRsError, Reaper, ReaperResult, Source, TakeFX, Track,
     Volume, WithReaperPtr, FX, GUID,
 };
 use int_enum::IntEnum;
@@ -155,8 +155,7 @@ impl Take {
     pub fn name(&self) -> ReaperResult<String> {
         let result =
             unsafe { Reaper::get().low().GetTakeName(self.get()?.as_ptr()) };
-        Ok(string_from_const_i8(result)
-            .expect("Can not convert name to string"))
+        unsafe { string_from_const_i8(result) }
     }
 
     pub fn source(&self) -> ReaperResult<Option<Source>> {
@@ -204,7 +203,17 @@ impl Take {
             )
         };
         let size = unsafe { size.assume_init() };
-        buf.truncate(size as usize);
+        let actual_size = usize::try_from(size).map_err(|_| {
+            ReaRsError::UnsuccessfulOperation(
+                "Invalid MIDI buffer size returned",
+            )
+        })?;
+        if actual_size > buf.len() {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "REAPER returned a MIDI size larger than the provided buffer",
+            ));
+        }
+        buf.truncate(actual_size);
         match result {
             false => {
                 Err(ReaRsError::UnsuccessfulOperation("Can not get midi"))
@@ -220,13 +229,16 @@ impl Take {
         size: impl Into<Option<usize>>,
     ) -> ReaperResult<Option<String>> {
         let size = size.into().unwrap_or(128);
+        let native_size = i32::try_from(size).map_err(|_| {
+            ReaRsError::InvalidObject("MIDI hash buffer is too large")
+        })?;
         let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().MIDI_GetHash(
                 self.get()?.as_ptr(),
                 notes_only,
                 buf.as_mut_ptr(),
-                size as i32,
+                native_size,
             )
         };
         match result {
@@ -266,8 +278,8 @@ impl Take {
 
     pub fn guid(&self) -> ReaperResult<GUID> {
         let guid_str = self.get_info_string("GUID", 50)?;
-        Ok(GUID::from_string(guid_str)
-            .expect("can not convert string to GUID"))
+        GUID::from_string(guid_str)
+            .map_err(|_| ReaRsError::InvalidObject("invalid take GUID"))
     }
 
     fn get_info_value(
@@ -298,22 +310,20 @@ impl Take {
         }
     }
 
-    pub fn start_offset(&self) -> ReaperResult<SourceOffset> {
-        Ok(SourceOffset::from_secs_f64(
-            self.get_info_value("D_STARTOFFS")?,
-        ))
+    pub fn start_offset(&self) -> ReaperResult<Position> {
+        Position::from_secs_f64(self.get_info_value("D_STARTOFFS")?)
     }
 
     pub fn volume(&self) -> ReaperResult<Volume> {
-        Ok(Volume::from(self.get_info_value("D_VOL")?))
+        Volume::try_from(self.get_info_value("D_VOL")?)
     }
 
     pub fn pan(&self) -> ReaperResult<Pan> {
-        Ok(Pan::from(self.get_info_value("D_PAN")?))
+        Pan::try_from(self.get_info_value("D_PAN")?)
     }
 
     pub fn pan_law(&self) -> ReaperResult<PanLaw> {
-        Ok(PanLaw::from(self.get_info_value("D_PANLAW")?))
+        PanLaw::try_from(self.get_info_value("D_PANLAW")?)
     }
 
     pub fn play_rate(&self) -> ReaperResult<PlayRate> {
@@ -342,12 +352,10 @@ impl Take {
     }
 
     pub fn channel_mode(&self) -> ReaperResult<TakeChannelMode> {
-        Ok(
-            TakeChannelMode::from_int(
-                self.get_info_value("I_CHANMODE")? as i32
-            )
-            .expect("can not convert value to channel mode"),
-        )
+        TakeChannelMode::from_int(self.get_info_value("I_CHANMODE")? as i32)
+            .map_err(|_| {
+                ReaRsError::InvalidObject("unknown take channel mode")
+            })
     }
 
     pub fn pitch_mode(&self) -> ReaperResult<Option<TakePitchMode>> {
@@ -500,7 +508,11 @@ impl Take {
         &mut self,
         select: bool,
     ) -> ReaperResult<()> {
-        assert!(self.is_midi()?);
+        if !self.is_midi()? {
+            return Err(ReaRsError::InvalidObject(
+                "MIDI event selection requires a MIDI take",
+            ));
+        }
         unsafe {
             Reaper::get()
                 .low()
@@ -510,7 +522,11 @@ impl Take {
     }
 
     pub fn sort_midi(&mut self) -> ReaperResult<()> {
-        assert!(self.is_midi()?);
+        if !self.is_midi()? {
+            return Err(ReaRsError::InvalidObject(
+                "sorting MIDI requires a MIDI take",
+            ));
+        }
         unsafe { Reaper::get().low().MIDI_Sort(self.get()?.as_ptr()) }
         Ok(())
     }
@@ -579,7 +595,7 @@ impl Take {
         self.set_info_string("P_NAME", name)
     }
     pub fn set_guid(&mut self, guid: GUID) -> ReaperResult<()> {
-        self.set_info_string("GUID", guid.to_string())
+        self.set_info_string("GUID", guid.to_string()?)
     }
     fn set_info_value(
         &mut self,
@@ -601,10 +617,7 @@ impl Take {
         }
     }
 
-    pub fn set_start_offset(
-        &mut self,
-        offset: SourceOffset,
-    ) -> ReaperResult<()> {
+    pub fn set_start_offset(&mut self, offset: Position) -> ReaperResult<()> {
         self.set_info_value("D_STARTOFFS", offset.as_secs_f64())
     }
 

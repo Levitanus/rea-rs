@@ -82,8 +82,10 @@ impl Default for Color {
     }
 }
 
-impl From<ThemeColor> for Color {
-    fn from(value: ThemeColor) -> Self {
+impl TryFrom<ThemeColor> for Color {
+    type Error = crate::ReaRsError;
+
+    fn try_from(value: ThemeColor) -> Result<Self, Self::Error> {
         Reaper::get().get_theme_color(value, false)
     }
 }

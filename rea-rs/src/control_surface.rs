@@ -130,7 +130,7 @@ pub trait ControlSurface: Debug {
         let id_string = self.get_type_string();
         if let Err(e) = Reaper::get_mut().unregister_control_surface(id_string)
         {
-            Reaper::get().show_console_msg(format!(
+            let _ = Reaper::get().show_console_msg(format!(
                 "Error stopping control surface: {e}"
             ));
         };
@@ -308,7 +308,7 @@ impl ControlSurfaceWrap {
     fn error(&self, error: Error) {
         let formatted = format!("Error in control surface:\n{:#?}", error);
         log::error!("{:?}", error);
-        Reaper::get().show_console_msg(formatted)
+        let _ = Reaper::get().show_console_msg(formatted);
     }
 
     fn check_for_error(

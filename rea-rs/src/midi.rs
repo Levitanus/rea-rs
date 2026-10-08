@@ -171,7 +171,9 @@ pub trait MidiMessage: Display + Clone {
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8>;
     /// Return raw representation of self.
     fn as_raw_message(&self) -> RawMidiMessage {
-        RawMidiMessage::from_raw(self.get_raw()).unwrap()
+        RawMidiMessage {
+            buf: self.get_raw(),
+        }
     }
 }
 
@@ -201,7 +203,9 @@ impl RawMidiMessage {
     ///
     /// Equivalent of from(), but generic
     pub fn from_msg<T: MidiMessage>(value: T) -> Self {
-        Self::from_raw(value.get_raw()).expect("ICan not convert message.")
+        Self {
+            buf: value.get_raw(),
+        }
     }
 }
 impl Display for RawMidiMessage {
@@ -214,7 +218,10 @@ trait ShortMessage: MidiMessage {
     fn message() -> u8;
 
     fn channel_private(&self) -> u8 {
-        self.borrow_raw()[0] - Self::message() + 1
+        self.borrow_raw()
+            .first()
+            .map(|status| (status & 0x0f) + 1)
+            .unwrap_or(1)
     }
     fn msg2(&self) -> u8 {
         self.borrow_raw()[1]
@@ -233,17 +240,17 @@ trait ShortMessage: MidiMessage {
     }
     /// Check whether message is shorter than 4 bytes.
     fn is_short(buf: &Vec<u8>) -> Option<()> {
-        match buf.len() <= 3 {
-            true => Some(()),
-            false => None,
-        }
+        (buf.len() == 3).then_some(())
     }
     /// Checks if the first byte contains channel message.
     ///
     /// Ignores channel.
     fn starts_with_message(buf: &Vec<u8>) -> Option<()> {
+        if buf.is_empty() {
+            return None;
+        }
         let msg = Self::message();
-        match (msg..msg + 15).contains(&buf[0]) {
+        match (msg..msg + 16).contains(&buf[0]) {
             true => Some(()),
             false => None,
         }
@@ -262,15 +269,19 @@ pub trait HasBeizer: MidiMessage {
     fn set_beizer_buf(&mut self, buf: Vec<u8>);
     /// convert raw beizer data to f64
     fn beizer_tension(&self) -> Option<f64> {
-        if self.beizer_buf().len() == 0 {
+        if self.beizer_buf().len() < 12 {
             return None;
         }
-        let s = &self.beizer_buf().clone()[8..];
+        let s = &self.beizer_buf()[8..12];
         let buf = [s[0], s[1], s[2], s[3]];
         Some(f32::from_le_bytes(buf) as f64)
     }
     /// Set beizer tension by float value,
     fn set_beizer_tension(&mut self, value: f32) {
+        if !value.is_finite() {
+            eprintln!("beizer tension is not finite");
+            return;
+        }
         let data = (value as f32).to_le_bytes();
         let mut tension: Vec<u8> = vec![255, 15, 67, 67, 66, 90, 32, 0];
         tension.append(&mut data.to_vec());
@@ -300,7 +311,10 @@ impl HasBeizer for CCMessage {
 }
 impl MidiMessage for CCMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        if !(0xb0..0xc0).contains(&buf[0]) {
+        if buf.len() < 3 || !(0xb0..0xc0).contains(&buf[0]) {
+            return None;
+        }
+        if buf[1] > 127 || buf[2] > 127 {
             return None;
         }
         let beizer_buf = match buf.len() {
@@ -335,6 +349,7 @@ impl CCMessage {
     pub fn channel(&self) -> u8 {
         self.channel_private()
     }
+    /// Set the 1-based MIDI channel (1–16).
     pub fn set_channel(&mut self, channel: u8) {
         self.set_channel_private(channel)
     }
@@ -378,12 +393,13 @@ pub struct NoteOnMessage {
 impl NoteOnMessage {
     pub fn new(channel: u8, note: u8, velocity: u8) -> Self {
         Self {
-            buf: vec![0x90 + channel - 1, note, velocity],
+            buf: vec![0x90 + (channel - 1), note, velocity],
         }
     }
     pub fn channel(&self) -> u8 {
         self.channel_private()
     }
+    /// Set the 1-based MIDI channel (1–16).
     pub fn set_channel(&mut self, channel: u8) {
         self.set_channel_private(channel)
     }
@@ -409,6 +425,9 @@ impl MidiMessage for NoteOnMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
         Self::is_short(&buf)?;
         Self::starts_with_message(&buf)?;
+        if buf[1] > 127 || buf[2] > 127 {
+            return None;
+        }
         Some(Self { buf })
     }
     fn get_raw(&self) -> Vec<u8> {
@@ -477,6 +496,9 @@ impl MidiMessage for NoteOffMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
         Self::is_short(&buf)?;
         Self::starts_with_message(&buf)?;
+        if buf[1] > 127 || buf[2] > 127 {
+            return None;
+        }
         Some(Self { buf })
     }
     fn get_raw(&self) -> Vec<u8> {
@@ -533,7 +555,11 @@ impl PitchBendMessage {
     }
     /// Set value as raw.
     pub fn set_normalized_value(&mut self, value: f64) {
-        assert!((-1.0..1.0).contains(&value));
+        let value = if value.is_finite() {
+            value.clamp(-1.0, 1.0 - f64::EPSILON)
+        } else {
+            0.0
+        };
         self.set_raw_value((value * 8192.0 + 8192.0) as u16)
     }
 }
@@ -564,6 +590,9 @@ impl MidiMessage for PitchBendMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
         Self::is_short(&buf)?;
         Self::starts_with_message(&buf)?;
+        if buf[1] > 127 || buf[2] > 127 {
+            return None;
+        }
         Some(Self { buf })
     }
     fn get_raw(&self) -> Vec<u8> {
@@ -627,6 +656,9 @@ impl MidiMessage for AfterTouchMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
         Self::is_short(&buf)?;
         Self::starts_with_message(&buf)?;
+        if buf[1] > 127 || buf[2] > 127 {
+            return None;
+        }
         Some(Self { buf })
     }
     fn get_raw(&self) -> Vec<u8> {
@@ -684,6 +716,9 @@ impl MidiMessage for ProgramChangeMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
         Self::is_short(&buf)?;
         Self::starts_with_message(&buf)?;
+        if buf[1] > 127 {
+            return None;
+        }
         Some(Self { buf })
     }
     fn get_raw(&self) -> Vec<u8> {
@@ -751,8 +786,10 @@ pub struct TextMessage {
 }
 impl TextMessage {
     pub fn text(&self) -> String {
-        String::from_utf8(self.get_raw()[2..].to_vec())
-            .expect("Cannot decode text message to utf-8")
+        String::from_utf8(self.buf.get(2..).unwrap_or_default().to_vec())
+            .unwrap_or_else(|error| {
+                String::from_utf8_lossy(error.as_bytes()).into_owned()
+            })
     }
     pub fn set_text(&mut self, text: impl Into<String>) {
         let mut text: String = text.into();
@@ -763,7 +800,7 @@ impl TextMessage {
 }
 impl MidiMessage for TextMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        if buf[0] < 0xf0 {
+        if buf.len() < 2 || buf[0] < 0xf0 {
             return None;
         }
         if buf[1] == 0x01 {
@@ -819,7 +856,7 @@ impl Notation {
             } => {
                 let mut v = vec![
                     String::from("NOTE"),
-                    format!("{}", channel - 1),
+                    format!("{}", channel.saturating_sub(1)),
                     format!("{}", note),
                 ];
                 v.append(&mut tokens);
@@ -842,28 +879,46 @@ impl From<Notation> for NotationMessage {
     }
 }
 impl NotationMessage {
-    pub fn notation(&self) -> Notation {
-        let text = self.text();
-        let tokens: Vec<&str> = text.split(" ").collect();
-        match tokens[0] {
-            "NOTE" => Notation::Note {
-                channel: tokens[1]
-                    .parse::<u8>()
-                    .expect("Should be channel number")
-                    + 1,
-                note: tokens[2].parse::<u8>().expect("Should be note number"),
-                tokens: tokens[3..]
-                    .into_iter()
-                    .map(|s| String::from(*s))
+    pub fn try_notation(&self) -> anyhow::Result<Notation> {
+        let text =
+            std::str::from_utf8(self.buf.get(2..).ok_or_else(|| {
+                anyhow::anyhow!("truncated MIDI notation message")
+            })?)?;
+        let tokens = text.split_whitespace().collect::<Vec<_>>();
+        match tokens.first().copied() {
+            Some("NOTE") if tokens.len() >= 3 => {
+                let channel = tokens[1].parse::<u8>()?;
+                let note = tokens[2].parse::<u8>()?;
+                anyhow::ensure!(
+                    channel < 16,
+                    "notation channel is out of range"
+                );
+                anyhow::ensure!(note < 128, "notation note is out of range");
+                Ok(Notation::Note {
+                    channel: channel + 1,
+                    note,
+                    tokens: tokens[3..]
+                        .iter()
+                        .map(|token| (*token).to_owned())
+                        .collect(),
+                })
+            }
+            Some("TRAC") => Ok(Notation::Track(
+                tokens[1..]
+                    .iter()
+                    .map(|token| (*token).to_owned())
                     .collect(),
-            },
-            "TRAC" => Notation::Track(
-                tokens[1..].into_iter().map(|s| String::from(*s)).collect(),
-            ),
-            _ => Notation::Unknown(
-                tokens.into_iter().map(|s| String::from(s)).collect(),
-            ),
+            )),
+            Some(_) => Ok(Notation::Unknown(
+                tokens.iter().map(|token| (*token).to_owned()).collect(),
+            )),
+            None => anyhow::bail!("empty MIDI notation message"),
         }
+    }
+
+    pub fn notation(&self) -> Notation {
+        self.try_notation()
+            .unwrap_or_else(|_| Notation::Unknown(vec![self.text()]))
     }
     pub fn set_notation(&mut self, notation: Notation) {
         let tokens = notation.as_tokens_string();
@@ -876,8 +931,10 @@ impl NotationMessage {
         buf
     }
     fn text(&self) -> String {
-        String::from_utf8(self.get_raw()[2..].to_vec())
-            .expect("Cannot decode text message to utf-8")
+        String::from_utf8(self.buf.get(2..).unwrap_or_default().to_vec())
+            .unwrap_or_else(|error| {
+                String::from_utf8_lossy(error.as_bytes()).into_owned()
+            })
     }
     fn set_text(&mut self, text: impl Into<String>) {
         self.buf = Self::text_to_buf(text);
@@ -923,7 +980,7 @@ impl NotationMessage {
 }
 impl MidiMessage for NotationMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        if buf[0] < 0xff {
+        if buf.len() < 2 || buf[0] < 0xff {
             return None;
         }
         if buf[1] == 0x0f {
@@ -990,7 +1047,13 @@ impl HasBeizer for ChannelPressureMessage {
 }
 impl MidiMessage for ChannelPressureMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
+        if buf.len() < 2 {
+            return None;
+        }
         Self::starts_with_message(&buf)?;
+        if buf[1] > 127 {
+            return None;
+        }
         let beizer_buf = match buf.len() {
             2 => vec![],
             _ => Vec::from(&buf[2..]),
@@ -1023,6 +1086,7 @@ impl ChannelPressureMessage {
     pub fn channel(&self) -> u8 {
         self.channel_private()
     }
+    /// Set the 1-based MIDI channel (1–16).
     pub fn set_channel(&mut self, channel: u8) {
         self.set_channel_private(channel)
     }
@@ -2054,9 +2118,50 @@ pub fn flatten_events_with_beizer_curve(
 mod tests {
     use crate::{
         flatten_events_with_beizer_curve, flatten_midi_notes, sorted_by_ppq,
-        to_raw_midi_events, CCMessage, ChannelPressureMessage, MidiEvent,
-        MidiEventBuilder, MidiEventConsumer, MidiNoteEvent,
+        to_raw_midi_events, AllSysMessage, CCMessage, ChannelPressureMessage,
+        MidiEvent, MidiEventBuilder, MidiEventConsumer, MidiMessage,
+        MidiNoteEvent, Notation, NotationMessage, NoteOffMessage,
+        NoteOnMessage, TextMessage,
     };
+
+    #[test]
+    fn malformed_midi_buffers_do_not_panic() {
+        assert!(CCMessage::from_raw(Vec::new()).is_none());
+        assert!(NoteOnMessage::from_raw(vec![0x90]).is_none());
+        assert!(NoteOffMessage::from_raw(vec![0x80, 60]).is_none());
+        assert!(AllSysMessage::from_raw(Vec::new()).is_none());
+        assert!(TextMessage::from_raw(vec![0xf0]).is_none());
+        assert!(NotationMessage::from_raw(vec![0xff]).is_none());
+        assert!(ChannelPressureMessage::from_raw(Vec::new()).is_none());
+        assert_eq!(NoteOnMessage::new(16, 60, 100).channel(), 16);
+        assert_eq!(NoteOffMessage::new(16, 60, 100).channel(), 16);
+
+        let mut note = NoteOnMessage::new(1, 60, 100);
+        assert_eq!(note.channel(), 1);
+        note.set_channel(16);
+        assert_eq!(note.borrow_raw()[0], 0x9f);
+        assert_eq!(note.channel(), 16);
+
+        let mut empty = NoteOnMessage::default();
+        assert_eq!(empty.channel(), 1);
+
+        let text = TextMessage {
+            buf: vec![0xf0, 0x01, 0xff],
+        };
+        assert!(!text.text().is_empty());
+        let notation = NotationMessage {
+            buf: vec![0xff, 0x0f],
+        };
+        assert!(notation.try_notation().is_err());
+        assert!(matches!(notation.notation(), Notation::Unknown(_)));
+    }
+
+    #[test]
+    fn truncated_packed_event_stops_without_panicking() {
+        let truncated =
+            MidiEventBuilder::new(vec![1, 0, 0, 0, 0, 3, 0].into_iter());
+        assert!(truncated.collect::<Vec<_>>().is_empty());
+    }
 
     #[test]
     fn test_flatten_notes() {

@@ -4,7 +4,9 @@ use bitflags::bitflags;
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
 
-use crate::{ptr_wrappers::ReaProject, HardwareSocket, ReaRsError, Reaper};
+use crate::{
+    ptr_wrappers::ReaProject, HardwareSocket, ReaRsError, Reaper, ReaperResult,
+};
 
 /// Determines the project in which a function should be executed.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -253,22 +255,22 @@ pub enum VUMode {
     LUFS_OnChannels_1_2,
 }
 impl VUMode {
-    pub fn from_raw(raw: u32) -> Self {
+    pub fn from_raw(raw: u32) -> ReaperResult<Self> {
         if raw & 1 == 1 {
-            return Self::Disabled;
+            return Ok(Self::Disabled);
         }
         if raw & 32 == 32 {
-            return Self::LUFS_OnChannels_1_2;
+            return Ok(Self::LUFS_OnChannels_1_2);
         }
         match raw & 30 {
-            0 => Self::StereoPeaks,
-            2 => Self::MultichannelPeaks,
-            4 => Self::StereoRMS,
-            8 => Self::CombinedRMS,
-            12 => Self::LUFS_M,
-            16 => Self::LUFS_S_ReadoutMax,
-            20 => Self::LUFS_S_ReadoutCurrent,
-            x => panic!("Can not convert value {} to VUMode!", x),
+            0 => Ok(Self::StereoPeaks),
+            2 => Ok(Self::MultichannelPeaks),
+            4 => Ok(Self::StereoRMS),
+            8 => Ok(Self::CombinedRMS),
+            12 => Ok(Self::LUFS_M),
+            16 => Ok(Self::LUFS_S_ReadoutMax),
+            20 => Ok(Self::LUFS_S_ReadoutCurrent),
+            _ => Err(ReaRsError::InvalidObject("unknown track VU mode")),
         }
     }
     pub fn to_raw(&self) -> u32 {
@@ -302,17 +304,23 @@ pub enum TrackFolderState {
     Last(u32),
 }
 impl TrackFolderState {
-    pub fn from_raw(depth: i32, compact: u32) -> Self {
+    pub fn from_raw(depth: i32, compact: u32) -> ReaperResult<Self> {
         if depth == 0 {
-            return Self::Normal;
+            return Ok(Self::Normal);
         }
         if depth == 1 {
-            return Self::IsFolder(compact);
+            return Ok(Self::IsFolder(compact));
         }
         if depth > 1 {
-            panic!("Can not convert value {} to TrackFolderState", depth);
+            return Err(ReaRsError::InvalidObject(
+                "invalid track folder depth",
+            ));
         }
-        Self::Last(depth.abs() as u32)
+        let levels_up = depth
+            .checked_abs()
+            .and_then(|depth| u32::try_from(depth).ok())
+            .ok_or(ReaRsError::InvalidObject("invalid track folder depth"))?;
+        Ok(Self::Last(levels_up))
     }
     /// get depth and compact
     pub fn to_raw(self) -> (i32, Option<u32>) {

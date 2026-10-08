@@ -253,8 +253,7 @@ impl FX for TrackFX {
             )
         };
         match result {
-            true => Ok(string_from_buf(&buf)
-                .expect("Can not convert result to string.")),
+            true => string_from_buf(&buf),
             false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not get preset name",
             )),

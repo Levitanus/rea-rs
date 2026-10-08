@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0 - Unreleased
+
+### Changed
+
+* Refreshed checked-in REAPER SDK and Cockos WDL snapshots from upstream and
+	regenerated bindings. Normal builds continue to use the vendored snapshots.
+
 ## Unreleased
 
 ### Added

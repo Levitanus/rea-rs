@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 // #[cfg(feature = "generate-stage-one")]
+#[cfg(feature = "update-sources")]
 use std::process::Command;
 
+#[cfg(feature = "update-sources")]
 const WDL_REPO_URL: &str = "https://github.com/justinfrankel/WDL.git";
 #[cfg(feature = "update-sources")]
 const REAPER_SDK_REPO_URL: &str =
@@ -52,15 +54,9 @@ fn main() {
 fn ensure_wdl_exists(manifest_dir: &Path) {
     let wdl_dir = manifest_dir.join("lib/WDL");
     if !wdl_dir.exists() {
-        println!("cargo:warning=lib/WDL is missing, cloning Cockos WDL...");
-        run_or_panic(
-            Command::new("git")
-                .arg("clone")
-                .arg("--depth")
-                .arg("1")
-                .arg(WDL_REPO_URL)
-                .arg(&wdl_dir),
-            "clone Cockos WDL",
+        panic!(
+            "vendored WDL is missing at {}; restore the checked-in source snapshot or refresh it explicitly with the update-sources feature",
+            wdl_dir.display()
         );
     }
     normalize_wdl_layout(&wdl_dir);
@@ -247,6 +243,7 @@ fn update_reaper_sdk(manifest_dir: &Path) {
     }
 }
 
+#[cfg(feature = "update-sources")]
 fn run_or_panic(command: &mut Command, action: &str) {
     let output = command
         .output()

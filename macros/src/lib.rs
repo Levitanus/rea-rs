@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/rea-rs-macros/0.2.0")]
+#![doc(html_root_url = "https://docs.rs/rea-rs-macros/1.0.0")]
 #![allow(renamed_and_removed_lints)]
 #![deny(broken_intra_doc_links)]
 
@@ -21,7 +21,7 @@ use quote::quote;
 /// #[reaper_extension_plugin]
 /// fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
 ///     let reaper = Reaper::init_global(context);
-///     reaper.show_console_msg("Hello world from rea-rs API!");
+///     reaper.show_console_msg("Hello world from rea-rs API!")?;
 ///     Ok(())
 /// }
 /// ```

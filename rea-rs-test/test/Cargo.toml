@@ -2,15 +2,15 @@
 edition = "2021"
 name = "reaper-test-extension-plugin"
 publish = false
-version = "0.2.0"
+version = "1.0.0"
 
 [dependencies]
 env_logger = "0.10"
 log = "0.4"
-rea-rs = { version = "=0.2.0", path = "../rea-rs", features = ["egui-baseview"] }
-rea-rs-low = { version = "=0.2.0", path = "../low" }
-rea-rs-macros = { version = "=0.2.0", path = "../macros" }
-rea-rs-test = { version = "=0.2.0", path = "../rea-rs-test" }
+rea-rs = { version = "=1.0.0", path = "../rea-rs", features = ["egui-baseview"] }
+rea-rs-low = { version = "=1.0.0", path = "../low" }
+rea-rs-macros = { version = "=1.0.0", path = "../macros" }
+rea-rs-test = { version = "=1.0.0", path = "../rea-rs-test" }
 
 anyhow = {workspace = true}
 

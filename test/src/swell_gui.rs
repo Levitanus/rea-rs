@@ -88,7 +88,7 @@ use rea_rs::{
 };
 use rea_rs_low::raw;
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, error, sync::Arc, time::Duration};
+use std::{cell::RefCell, sync::Arc, time::Duration};
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
 const DOCK_STATE_KEY: &str = "rea_rs_widget_gallery.dock";
@@ -226,7 +226,7 @@ impl DemoCSurf {
         track: &mut Track,
         build: impl FnOnce(String) -> DemoEvent,
     ) -> anyhow::Result<()> {
-        append_events(vec![build(track.guid()?.to_string())]);
+        append_events(vec![build(track.guid()?.to_string()?)]);
         Ok(())
     }
 
@@ -832,7 +832,9 @@ impl DemoWindow {
         for track in project.iter_tracks() {
             if let (Ok(name), Ok(guid)) = (track.name(), track.guid()) {
                 let _ = self.tracklist.add_item(&name);
-                self.tracks.push(guid.to_string());
+                if let Ok(guid) = guid.to_string() {
+                    self.tracks.push(guid);
+                }
             }
         }
         let selected = old_guid.and_then(|guid| {
@@ -847,10 +849,9 @@ impl DemoWindow {
 
     fn selected_track_guid(&self) -> Option<String> {
         let project = Reaper::get().current_project();
-        project
-            .iter_selected_tracks()
-            .next()
-            .and_then(|track| track.guid().ok().map(|guid| guid.to_string()))
+        project.iter_selected_tracks().next().and_then(|track| {
+            track.guid().ok().and_then(|guid| guid.to_string().ok())
+        })
     }
 
     fn with_selected_track(&self, f: impl FnOnce(&mut Track)) {
@@ -859,7 +860,12 @@ impl DemoWindow {
         };
         let project = Reaper::get().current_project();
         if let Some(mut track) = project.iter_tracks().find(|track| {
-            track.guid().ok().map(|id| id.to_string()).as_deref() == Some(guid)
+            track
+                .guid()
+                .ok()
+                .and_then(|id| id.to_string().ok())
+                .as_deref()
+                == Some(guid)
         }) {
             f(&mut track);
         }
@@ -870,7 +876,11 @@ impl DemoWindow {
         let selected = self.selected_guid.clone();
         let track = selected.as_deref().and_then(|guid| {
             Reaper::get().current_project().iter_tracks().find(|track| {
-                track.guid().ok().map(|id| id.to_string()).as_deref()
+                track
+                    .guid()
+                    .ok()
+                    .and_then(|id| id.to_string().ok())
+                    .as_deref()
                     == Some(guid)
             })
         });
@@ -982,8 +992,9 @@ impl DemoWindow {
         self.selected_guid = guid;
         let project = Reaper::get().current_project();
         for mut track in project.iter_tracks() {
-            let selected = track.guid().ok().map(|id| id.to_string())
-                == self.selected_guid;
+            let selected =
+                track.guid().ok().and_then(|id| id.to_string().ok())
+                    == self.selected_guid;
             let _ = track.set_selected(selected);
         }
         let index = self.selected_guid.as_ref().and_then(|guid| {
@@ -1074,7 +1085,11 @@ impl DemoWindow {
         );
         match Reaper::get().get_action_id(command_name) {
             Ok(Some(command_id)) => {
-                Reaper::get().perform_action(command_id, 0, None);
+                if let Err(error) =
+                    Reaper::get().perform_action(command_id, 0, None)
+                {
+                    warn!("could not invoke paint-over action: {error}");
+                }
             }
             Ok(None) => warn!("paint-over action is not registered in REAPER"),
             Err(error) => {
@@ -1259,7 +1274,9 @@ impl WindowHandler for DemoWindow {
                 let linear =
                     db_to_linear(Reaper::get().slider_to_db(position));
                 self.with_selected_track(|track| {
-                    let _ = track.set_volume(Volume::from(linear));
+                    if let Ok(volume) = Volume::try_from(linear) {
+                        let _ = track.set_volume(volume);
+                    }
                 });
                 self.sync_volume(linear, false);
             }
@@ -1271,7 +1288,9 @@ impl WindowHandler for DemoWindow {
                 if let Some(db) = parse_db_value(&text) {
                     let linear = db_to_linear(db);
                     self.with_selected_track(|track| {
-                        let _ = track.set_volume(Volume::from(linear));
+                        if let Ok(volume) = Volume::try_from(linear) {
+                            let _ = track.set_volume(volume);
+                        }
                     });
                     let slider = Reaper::get().db_to_slider(db);
                     self.programmatic_update = true;
@@ -1437,7 +1456,7 @@ pub fn register_actions(reaper: &mut Reaper) -> anyhow::Result<()> {
         )));
     }
     let toggle_state = lifecycle.clone();
-    let paint_action = reaper.register_action(
+    reaper.register_action(
         PAINT_OVER_ACTION,
         PAINT_OVER_DESCRIPTION,
         ActionKind::Toggleable(paint_over),

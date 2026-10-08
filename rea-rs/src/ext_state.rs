@@ -282,7 +282,7 @@ impl HasExtState for Reaper {
                         CString::new(key)?.as_ptr(),
                     )
                 };
-                Ok(Some(string_from_const_i8(value)?))
+                Ok(Some(unsafe { string_from_const_i8(value)? }))
             }
         }
     }
