@@ -1,7 +1,7 @@
-# 1.0.0 - Unreleased
+# 1.0.0 - 2026-10-08
 
-This is the first stable release and contains breaking API changes. See
-`RELEASE_1.0.0_API_AUDIT.md` for the migration ledger. In particular, fallible
+This is the first stable release and contains breaking API changes. In
+particular, fallible
 host operations and conversions now return `ReaperResult`/`TryFrom`; project
 positions are signed and use `SourceOffset` precision; measure indices use
 REAPER's signed `i32` numbering directly (including zero); MIDI channel and

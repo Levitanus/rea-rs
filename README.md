@@ -16,7 +16,6 @@ and SWELL GUI.
 
 [API documentation](https://levitanus.github.io/rea-rs-doc/rea_rs/index.html)
 · [Crate on crates.io](https://crates.io/crates/rea-rs)
-· [1.0.0 API audit and migration notes](RELEASE_1.0.0_API_AUDIT.md)
 
 It's a pleasure to see people building things with this crate. If you're new
 to it, start with the examples below and the API docs; please open an issue

@@ -8,9 +8,8 @@ lifetimes to manage host objects, typed values, and fallible calls when a
 native operation can fail.
 
 - [Published API documentation](https://levitanus.github.io/rea-rs-doc/rea_rs/index.html)
-- [Workspace README and examples](../README.md)
-- [1.0.0 API audit and migration notes](../RELEASE_1.0.0_API_AUDIT.md)
-- [SWELL GUI extension example](../test/src/swell_gui.rs)
+- [Workspace README and examples](https://github.com/Levitanus/rea-rs#readme)
+- [SWELL GUI extension example](https://github.com/Levitanus/rea-rs/blob/main/test/src/swell_gui.rs)
 
 ## Finding your way around
 
@@ -33,15 +32,15 @@ accesses that pointer. Because checking has some cost, use
 object when appropriate; it validates once and temporarily skips repeat
 checks for the closure. The object must remain valid throughout that closure.
 
-The [workspace README](../README.md) walks through the API with examples: it
+The [workspace README](https://github.com/Levitanus/rea-rs#readme) walks through the API with examples: it
 renames the active take of a selected item and shows how to register an
 Action, `Timer`, `ControlSurface`, and `WindowHandler`. For a full GUI
 extension, have a look at the
-[SWELL GUI test](../test/src/swell_gui.rs): it builds a dockable widget
+[SWELL GUI test](https://github.com/Levitanus/rea-rs/blob/main/test/src/swell_gui.rs): it builds a dockable widget
 gallery and a MIDI editor overlay.
 
 If you would like to run your own host-based tests, the
-[`rea-rs-test` crate](../rea-rs-test/README.md) explains how to set up a
+[`rea-rs-test` crate](https://github.com/Levitanus/rea-rs/tree/main/rea-rs-test) explains how to set up a
 non-published `cdylib` test extension, register test steps behind a REAPER
 Action, and run those steps on different REAPER versions. The workspace
 README also describes the Sublime Text and VS Code build systems/tasks for
@@ -51,9 +50,8 @@ building the test plug-in and starting the integration test.
 
 Version 1.0.0 is the canonical, breaking API, so names from before 1.0 are
 not kept as compatibility aliases. The API is ready to use, though coverage
-isn't uniform across all of REAPER and there is still audit and release work
-to finish. The [1.0.0 API audit](../RELEASE_1.0.0_API_AUDIT.md) has the
-details, including migration notes and remaining publication checks.
+isn't uniform across all of REAPER. See the `rea-rs` changelog for the 1.0.0
+migration summary.
 
 The manifest declares Rust 1.82 as its minimum version. This crate is aimed
 at REAPER extension plug-ins, so host-dependent work generally belongs on
