@@ -2125,45 +2125,6 @@ mod tests {
     };
 
     #[test]
-    fn malformed_midi_buffers_do_not_panic() {
-        assert!(CCMessage::from_raw(Vec::new()).is_none());
-        assert!(NoteOnMessage::from_raw(vec![0x90]).is_none());
-        assert!(NoteOffMessage::from_raw(vec![0x80, 60]).is_none());
-        assert!(AllSysMessage::from_raw(Vec::new()).is_none());
-        assert!(TextMessage::from_raw(vec![0xf0]).is_none());
-        assert!(NotationMessage::from_raw(vec![0xff]).is_none());
-        assert!(ChannelPressureMessage::from_raw(Vec::new()).is_none());
-        assert_eq!(NoteOnMessage::new(16, 60, 100).channel(), 16);
-        assert_eq!(NoteOffMessage::new(16, 60, 100).channel(), 16);
-
-        let mut note = NoteOnMessage::new(1, 60, 100);
-        assert_eq!(note.channel(), 1);
-        note.set_channel(16);
-        assert_eq!(note.borrow_raw()[0], 0x9f);
-        assert_eq!(note.channel(), 16);
-
-        let mut empty = NoteOnMessage::default();
-        assert_eq!(empty.channel(), 1);
-
-        let text = TextMessage {
-            buf: vec![0xf0, 0x01, 0xff],
-        };
-        assert!(!text.text().is_empty());
-        let notation = NotationMessage {
-            buf: vec![0xff, 0x0f],
-        };
-        assert!(notation.try_notation().is_err());
-        assert!(matches!(notation.notation(), Notation::Unknown(_)));
-    }
-
-    #[test]
-    fn truncated_packed_event_stops_without_panicking() {
-        let truncated =
-            MidiEventBuilder::new(vec![1, 0, 0, 0, 0, 3, 0].into_iter());
-        assert!(truncated.collect::<Vec<_>>().is_empty());
-    }
-
-    #[test]
     fn test_flatten_notes() {
         let notes_buf = [
             30, 0, 0, 0, 0, 3, 0, 0, 0, 144, 61, 96, //

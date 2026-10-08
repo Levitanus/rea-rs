@@ -1,158 +1,265 @@
-//! Easy to use ReaScript API.
+//! # rea-rs
 //!
-//! While [reaper-rs](https://github.com/helgoboss/reaper-rs) is
-//! full-implemented at low-level, and, partially implemented at medium-level,
-//! on top of it (mostly, on top of low-level) this crate builds API that is
-//! pleasure to use.
+//! ![linux](https://github.com/Levitanus/rea-rs/actions/workflows/build-linux.yml/badge.svg)
+//! ![windows](https://github.com/Levitanus/rea-rs/actions/workflows/build-windows.yml/badge.svg)
+//! ![macos](https://github.com/Levitanus/rea-rs/actions/workflows/build-macos.yml/badge.svg)
 //!
-//! Actually, for the moment it is the better version of
-//! [Reapy](https://github.com/Levitanus/reapy-boost) project.
-//! The main skeleton of this API is cloned from the Reapy, but reimplemented
-//! in a more "rusty" way. Also, a bunch of new functions are added to [Track],
-//! [Item] and [Take], as well as a good new implementation for [ExtState] and
-//! [midi] was made. I would say, that currently wrapped ~95% of Track, Take,
-//! Item, [AudioAccessor] and [FX] original functions; about of 70% for
-//! [Envelope] and [Source]. And the rest is probably, less, then 50%.
+//! `rea-rs` is a high-level Rust API for working with REAPER from an
+//! extension. It builds on [reaper-rs](https://github.com/helgoboss/reaper-rs)
+//! and the REAPER SDK, and its design was inspired by
+//! [ReaPy](https://github.com/Levitanus/reapy-boost). I wanted the everyday
+//! parts of that API to feel at home in Rust, so `rea-rs` uses ownership and
+//! lifetimes to manage host objects, typed values to make common operations
+//! clearer, and fallible methods when REAPER can report an error. It covers
+//! projects, tracks, media items and takes, MIDI, effects, envelopes, sources,
+//! and SWELL GUI.
 //!
-//! It should also be possible to use from VST Plugin, but this has not yet
-//! been tested at all.
+//! [API documentation](https://levitanus.github.io/rea-rs-doc/rea_rs/index.html)
+//! · [Crate on crates.io](https://crates.io/crates/rea-rs)
+//! · [1.0.0 API audit and migration notes](https://github.com/Levitanus/rea-rs/blob/main/RELEASE_1.0.0_API_AUDIT.md)
 //!
-//! These are the dependencies:
+//! It's a pleasure to see people building things with this crate. If you're
+//! new to it, start with the examples below and the API docs; please open an
+//! issue when something is unclear or you run into a missing wrapper.
+//!
+//! `rea-rs` is the high-level crate in this workspace. For most extensions,
+//! start with `rea-rs` and the macros; add the low-level crate only when you
+//! need direct access to the REAPER SDK bindings:
+//!
 //! ```toml
 //! [dependencies]
 //! rea-rs = "1.0.0"
-//! rea-rs-low = "1.0.0" # optional
 //! rea-rs-macros = "1.0.0"
+//! rea-rs-low = "1.0.0" # optional: raw REAPER/SDK bindings
 //! ```
 //!
-//! But, actually, all medium- and low-level functionality is still existing in
-//! the [Reaper] object. Just use [Reaper::low], [Reaper::medium] and
-//! [Reaper::medium_session].
 //!
-//! The Common entry point should look like this:
+//! ## API status
 //!
-//! ```no_run
-//! use rea_rs::{ActionKind, ActionRegistrationOptions, Section, Reaper, PluginContext};
-//! use rea_rs_macros::reaper_extension_plugin;
-//! use std::error::Error;
+//! The breaking 1.0 API is the one to build against; old pre-1.0 names are
+//! not kept as compatibility aliases. Not every function in REAPER's native API is wrapped, and
+//! coverage varies by area. The
 //!
-//! #[reaper_extension_plugin]
-//! fn plugin_main(context: PluginContext) -> Result<(), anyhow::Error> {
-//!     Reaper::init_global(context);
-//!     let reaper = Reaper::get_mut();
-//!     let message = "Hello from small extension";
-//!     reaper.show_console_msg(message)?;
-//!     let _ = ActionRegistrationOptions::new(Section::Main);
-//!     Ok(())
-//! }
-//! ```
+//! ## API structure
 //!
-//! Since, there are not many things to be done at the start time of Reaper,
-//! there are two common ways to invoke the code: Actions and [ControlSurface].
+//! The easiest way to find your way around is to start at [`Reaper`].
+//! Initialize it with the plug-in's [`PluginContext`] and use it for host
+//! services, the current project, and registering actions, timers, control
+//! surfaces, and windows. From a [`Project`], work with [`Track`]s and
+//! [`Item`]s; an [`Item`] gives you its active [`Take`]. For more focused
+//! tasks, there are also [`Midi`](midi), [`FX`], [`Envelope`], [`Source`],
+//! [`AudioAccessor`], and [`ExtState`] APIs. The [`swell_gui`] module is where
+//! the windowing, drawing, and widget types live.
 //!
-//! ```no_run
-//! use rea_rs::{
-//!     ActionHook, ActionKind, ActionRegistrationOptions, PluginContext, Reaper, RegisteredAction, Timer,
-//! };
-//! use rea_rs_macros::reaper_extension_plugin;
-//! use std::error::Error;
-//! use std::{cell::RefCell, sync::Arc};
+//! Most host operations return [`ReaperResult<T>`]; callback interfaces
+//! commonly use `anyhow::Result`. These errors are there to help you handle
+//! the cases where a native REAPER operation cannot complete, so propagate
+//! or handle them instead of silently ignoring them.
 //!
-//! #[derive(Debug)]
-//! struct Listener {
-//!     action: RegisteredAction,
-//! }
+//! One important thing to know: REAPER objects do not always share the
+//! lifetime of the Rust handle or of the project/item that produced them. A
+//! host object can be removed while a Rust wrapper still exists, leaving its
+//! native pointer stale. `rea-rs` checks pointer validity through the
+//! [`WithReaperPtr`] trait; ordinary object methods go through `get()` and
+//! perform that check internally, so you usually don't need to call the
+//! validation yourself.
 //!
-//! // Full list of function larger.
-//! impl Timer for Listener {
-//!     fn run(&mut self) -> Result<(), anyhow::Error> {
-//!         Reaper::get().perform_action(self.action.command_id, 0, None);
-//!         Ok(())
-//!     }
-//!     fn id_string(&self) -> String {"test listener".to_string()}
-//! }
+//! Pointer validation has a cost. If you're doing a batch of work with one
+//! object, [`WithReaperPtr::with_valid_ptr`] checks it once, then temporarily
+//! disables the repeated checks while your closure runs, and restores
+//! checking afterward (including if the closure panics). Use this only when
+//! the object is expected to remain valid for the whole closure; don't
+//! remove, replace, or otherwise invalidate it during that batch.
 //!
-//! fn my_action_func(_hook: &mut ActionHook) -> Result<(), anyhow::Error> {
-//!     Reaper::get().show_console_msg("running")?;
-//!     Ok(())
-//! }
+//! ## Basic use: read and set the selected item name
 //!
-//! #[reaper_extension_plugin]
-//! fn plugin_main(context: PluginContext) -> Result<(), anyhow::Error> {
-//!     Reaper::init_global(context);
-//!     let reaper = Reaper::get_mut();
-//!
-//!     let action = reaper.register_action(
-//!         // This will be capitalized and used as action ID in action window
-//!         "command_name",
-//!         // This is the line user searches action for
-//!         "description",
-//!         ActionKind::NotToggleable,
-//!         my_action_func,
-//!         // Register this action in REAPER's global section.
-//!         ActionRegistrationOptions::new(rea_rs::Section::Main)
-//!     )?;
-//!
-//!     reaper.register_timer(Arc::new(RefCell::new(Listener{action})));
-//!     Ok(())
-//! }
-//! ```
-//!
-//! There are float values in API. I recommend to use `float_eq` crate.
-//!
-//! # API structure.
-//!
-//! Most of the time, API is used hierarchically: [Reaper] holds top-level
-//! functions and can return [Project], [Item] etc. While [Project] can
-//! manipulate by [Track], [Item], [Take]. The key point of the hierarchical
-//! structure — to be sure safe as long as possible. Since Project is alive, it
-//! is safe to refer from track to it. The same with other children. By the
-//! same reason, it's almost impossible to mutate two object at a time. If one
-//! track is mutable, it responses for the whole underlying objects. And we can
-//! be almost sure, that the rest of tracks consist of objects, we left them
-//! before.
-//!
-//! The most part of API is covered by
-//! [tests](https://github.com/Levitanus/rea-rs/blob/main/test/test/src/tests.rs),
-//! and they are a good set of usage examples.
+//! To rename a selected media item, you work with its active take: that's
+//! where REAPER stores the displayed name. Here's a small example that reads
+//! the first selected item's current name and adds a suffix. It does nothing
+//! if no item is selected:
 //!
 //! ```no_run
 //! use rea_rs::Reaper;
-//! use std::collections::HashMap;
 //!
-//! let rpr = Reaper::get();
-//! let captions =
-//! vec!["age(18)", "name(user)", "leave blank", "fate(atheist)"];
-//! let mut answers = HashMap::new();
-//! answers.insert(String::from("age(18)"), String::from("18"));
-//! answers.insert(String::from("name(user)"), String::from("user"));
-//! answers.insert(String::from("leave blank"), String::from(""));
-//! answers.insert(String::from("fate(atheist)"), String::from("atheist"));
-//!
-//! let result = rpr.get_user_inputs(
-//!     "Fill values as asked in fields",
-//!     captions,
-//!     None,
-//! ).unwrap();
-//! assert_eq!(result, answers);
+//! fn rename_first_selected_item() -> anyhow::Result<()> {
+//!     let project = Reaper::get().current_project();
+//!     if let Some(item) = project.get_selected_item(0)? {
+//!         let mut take = item.active_take()?;
+//!         let current_name = take.name()?;
+//!         take.set_name(format!("{current_name} (edited)"))?;
+//!     }
+//!     Ok(())
+//! }
 //! ```
 //!
-//! # Better to know about
+//! ## Extension entry point and callbacks
 //!
-//! For the moment, downsides of API are:
-//! - top-level functionality: I'm not sure, that at least a half of little
-//!   reaper functions is wrapped. Like all windowing and theming stuff.
-//! - GUI. As well as with `reapy`, GUI is an issue. I've started
-//!   `reaper-imgui` crate, that makes possible to use ReaImGui extension from
-//!   rust. But it waits for being properly wrapped by `rea-rs`.
-//! - Thread-safety. It's important to know, that almost nothing of [Reaper]
-//!   should left the main thread. There are some functions, that are designed
-//!   for audio thread, and some, that are safe to execute from any thread.
-//!   But, basically, here is a rule: if you make a listener, gui or socket
-//!   communication — `Reaper` lives in main thread, and else made by
-//!   [std::sync::mpsc].
+//! When REAPER loads an extension, the macro below exposes `plugin_main` as
+//! its entry point. This is a compact tour of the usual registrations: an
+//! Action for something the user can trigger, a [`Timer`] for periodic work,
+//! a [`ControlSurface`] for REAPER's control-surface callbacks, and a
+//! [`WindowHandler`] for your SWELL window. REAPER calls each callback when
+//! it is needed, after initialization has finished.
 //!
-//! Enjoy the coding!
+//! ```no_run
+//! use rea_rs::{
+//!     ActionHook, ActionKind, ActionRegistrationOptions, ControlSurface,
+//!     PluginContext, Reaper, ReaperWindow, Section, SwellId, Timer,
+//!     WindowHandler, WindowSpec,
+//! };
+//! use rea_rs_macros::reaper_extension_plugin;
+//! use std::{cell::RefCell, sync::Arc, time::Duration};
+//!
+//! #[derive(Debug)]
+//! struct DemoSurface;
+//!
+//! impl ControlSurface for DemoSurface {
+//!     fn get_type_string(&self) -> String { "REARSRUSTDEMO".into() }
+//!     fn get_desc_string(&self) -> String { "rea-rs example surface".into() }
+//! }
+//!
+//! struct DemoTimer;
+//!
+//! impl Timer for DemoTimer {
+//!     fn run(&mut self) -> anyhow::Result<()> {
+//!         Reaper::get().show_console_msg("rea-rs timer tick")?;
+//!         Ok(())
+//!     }
+//!     fn id_string(&self) -> String { "rea-rs-example-timer".into() }
+//!     fn interval(&self) -> Duration { Duration::from_secs(1) }
+//! }
+//!
+//! struct DemoWindow { window: ReaperWindow }
+//!
+//! impl WindowHandler for DemoWindow {
+//!     fn window_id(&self) -> rea_rs::WindowId { "rea-rs-example-window".into() }
+//!     fn window(&self) -> &ReaperWindow { &self.window }
+//!     fn on_timer(&mut self, _id: SwellId) -> anyhow::Result<()> {
+//!         // Handle a window timer here if one was started with start_timer().
+//!         Ok(())
+//!     }
+//! }
+//!
+//! #[reaper_extension_plugin]
+//! fn plugin_main(context: PluginContext) -> anyhow::Result<()> {
+//!     Reaper::init_global(context);
+//!     let reaper = Reaper::get_mut();
+//!
+//!     reaper.register_action(
+//!         "ReaRsExampleAction",
+//!         "rea-rs: example action",
+//!         ActionKind::NotToggleable,
+//!         |_hook: &mut ActionHook| {
+//!             Reaper::get().show_console_msg("action invoked")?;
+//!             Ok(())
+//!         },
+//!         ActionRegistrationOptions::new(Section::Main),
+//!     )?;
+//!     reaper.register_timer(Arc::new(RefCell::new(DemoTimer)));
+//!     reaper.register_control_surface(Arc::new(RefCell::new(DemoSurface)));
+//!
+//!     let window = reaper.create_window(&WindowSpec::new("rea-rs example"))?;
+//!     reaper.register_window_handler(Box::new(DemoWindow { window }))?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! REAPER drives `ControlSurface::run` and your plug-in `Timer`; use a timer
+//! for periodic work instead of polling from another thread. The registered
+//! `WindowHandler` receives window events and any SWELL window-timer messages
+//! you start. One important rule: keep most REAPER and GUI calls on REAPER's
+//! UI/main thread. If worker threads need to communicate with host code, pass
+//! messages back to that thread.
+//!
+//! ## GUI example
+//!
+//! For a larger example, take a look at the
+//! [SWELL GUI test](https://github.com/Levitanus/rea-rs/blob/main/test/src/swell_gui.rs).
+//! It registers an action that opens a dockable widget gallery, implements
+//! both `ControlSurface` and `WindowHandler`, and keeps the UI in sync with
+//! project state. It also shows a MIDI-editor paint-over action. The example's
+//! opening comments explain how to run it and where to start when adapting it
+//! for your own extension.
+//!
+//! The host test extension in
+//! [test/src/lib.rs](https://github.com/Levitanus/rea-rs/blob/main/test/src/lib.rs)
+//! has more examples, and the
+//! [`rea-rs-test` guide](https://github.com/Levitanus/rea-rs/blob/main/rea-rs-test/README.md)
+//! explains how to run the host-based integration suite. For comparing
+//! floating-point values, I recommend taking a look at
+//! [float_eq](https://crates.io/crates/float_eq).
+//!
+//! ## Testing with `rea-rs-test`
+//!
+//! `rea-rs-test` runs an extension test plug-in inside a real REAPER process.
+//! The basic setup is to keep your normal library/plugin separate from a
+//! small, non-published `cdylib` test plug-in, then add a host-side Cargo
+//! integration test. In the test plug-in's entry point, call
+//! `ReaperTest::setup` and add named `TestStep`s. Each step receives the
+//! initialized `Reaper`; return an error when an assertion or host operation
+//! fails:
+//!
+//! ```ignore
+//! use rea_rs::{PluginContext, Reaper};
+//! use rea_rs_macros::reaper_extension_plugin;
+//! use rea_rs_test::{ReaperTest, TestStep, TestStepResult};
+//!
+//! fn check_something(reaper: &mut Reaper) -> TestStepResult {
+//!     reaper.show_console_msg("Running an integration-test step")?;
+//!     // Add assertions and calls into your library here.
+//!     Ok(())
+//! }
+//!
+//! #[reaper_extension_plugin]
+//! fn test_extension(context: PluginContext) -> TestStepResult {
+//!     let tests = ReaperTest::setup(context, "my test action");
+//!     tests.push_test_step(TestStep::new("Check something", check_something));
+//!     Ok(())
+//! }
+//! ```
+//!
+//! The setup registers the named REAPER Action as the manual entry point for
+//! your test steps. When the runner launches REAPER, it sets
+//! `RUN_REAPER_INTEGRATION_TEST`; `ReaperTest::setup` notices this and
+//! schedules the steps to run automatically. Outside the runner, open
+//! REAPER's Actions list and invoke the registered test action yourself. The
+//! runner checks both the plug-in's PASS/FAIL result and REAPER's process
+//! termination, so a host crash is not mistaken for a passing test.
+//!
+//! The host-side integration test selects which REAPER build to use. The
+//! runner currently provides `ReaperVersion::V6_71`, `V6_73`, `V7_78`, and
+//! `V7_82`; `ReaperVersion::latest()` currently means 7.82. To check another
+//! host version, use that variant in `run_integration_test` and run the
+//! integration test again. This lets the same test steps exercise your
+//! extension against different supported REAPER versions.
+//!
+//! For example, this workspace uses `test/` for the test plug-in and runner
+//! invocation. From the repository root, run
+//! `cargo test -p reaper-test-extension-plugin --test integration_test`.
+//! The first run downloads the selected REAPER build into `target/reaper` and
+//! needs network access. Linux needs REAPER's GUI/runtime dependencies; macOS
+//! uses the configured disk image and `hdiutil`. The runner currently skips
+//! Windows because hosted integration testing there is not implemented.
+//!
+//! There are also editor shortcuts for the same workflow. The Sublime Text
+//! project (`rea-rs.sublime-project`) defines build systems to build/copy the
+//! test plug-in, launch the downloaded REAPER manually, and run the host-driven
+//! integration test. VS Code's `.vscode/tasks.json` provides the
+//! corresponding tasks; open the repository root and choose
+//! **Terminal → Run Task**. These convenience build/copy and launch tasks are
+//! Linux-specific; the Cargo runner handles the supported Linux/macOS
+//! hosted-test setup. See the
+//! [`rea-rs-test` guide](https://github.com/Levitanus/rea-rs/blob/main/rea-rs-test/README.md)
+//! for the workspace layout and more details.
+//!
+//! ## Compatibility and limitations
+//!
+//! The crate manifest currently declares Rust 1.82 as its minimum. REAPER
+//! host operations and most `Reaper` state are not thread-safe, so follow
+//! each API's threading contract and keep UI work on the host thread. There
+//! are still less common REAPER functions and GUI details that aren't
+//! covered yet; the API docs and audit are the best places to check what is
+//! available today.
 
 use std::{ffi::NulError, str::Utf8Error, string::FromUtf8Error};
 

@@ -1,23 +1,34 @@
 # rea-rs-test
 
-Makes testing of REAPER extension plugins easy.
+`rea-rs-test` makes it easier to test a REAPER extension plug-in in the real
+host. The idea is to keep a small, non-published test extension next to your
+library, register named test steps from its entry point, and let a Cargo
+integration test build and run it inside REAPER.
 
 This integration test suite was originally written by Benjamin Klum <benjamin.klum@helgoboss.org> for `reaper-rs`. But it was dependent on the `reaper-high` crate, which was not and would not be soon published. And, also, it was deeply integrated into the library.
 
-This version incapsulates as much as possible, leaving simple interface to making tests.
+This version keeps the runner separate from the library under test and aims
+to leave you with a small interface for writing those tests.
 
 This crate provides a runner for testing a REAPER extension plug-in
 (`cdylib`) inside a real REAPER process. In this repository, the plug-in is
 the workspace package `reaper-test-extension-plugin` in `test/`, and the
 integration-test executable is `test/tests/integration_test.rs`.
 
-For another project, add a non-published `cdylib` test package and a host-side
-integration test to its Cargo workspace. The test plug-in must depend on
-`rea-rs-test` and call `ReaperTest::setup` during extension initialization.
-The runner sets `RUN_REAPER_INTEGRATION_TEST` and a unique result-file path;
-the plug-in writes a PASS/FAIL result after test steps complete. REAPER's
-process exit status is reported separately from the plugin outcome. Overall
-success requires a PASS result and normal host exit code 0.
+For your project, add a non-published `cdylib` test package and a host-side
+integration test to its Cargo workspace. The test plug-in depends on
+`rea-rs-test` and calls `ReaperTest::setup` while the extension is
+initializing. Add each test as a named `TestStep`; a step can use the
+initialized `Reaper` to call your library and check its behavior.
+
+`ReaperTest::setup` also registers a REAPER Action. When you load the test
+plug-in manually, run that action from REAPER's Actions list to execute the
+steps yourself. When the host-side runner starts REAPER, it sets
+`RUN_REAPER_INTEGRATION_TEST`, and the test plug-in runs the steps
+automatically. It writes a PASS/FAIL result file, which the runner checks
+separately from REAPER's process exit status. A successful test needs both a
+PASS result and a normal host exit with code 0; a host crash, timeout, missing
+result, or malformed result is reported as an error.
 
 Example workspace layout:
 
@@ -69,6 +80,13 @@ fn main() {
 }
 ```
 
+`ReaperVersion::latest()` currently selects REAPER 7.82. To exercise the same
+test extension on another bundled host version, choose a specific variant
+instead, such as `ReaperVersion::V6_73`, `ReaperVersion::V7_78`, or
+`ReaperVersion::V7_82` (`V6_71` is available too). Run the integration test
+with each version you want to cover. This is useful for checking behavior
+across the REAPER versions your extension supports.
+
 `test/src/lib.rs` is the file your integration tests are placed in.
 
 ```rust
@@ -119,17 +137,21 @@ without a plugin result is an error. A PASS result and normal REAPER exit code
 
 ## Editor build/run workflows
 
-The repository's `rea-rs.sublime-project` includes Linux-specific tasks to
-build/copy the test extension and launch the extracted REAPER instance. Use
-`Build & Copy Integration Test` to prepare the plug-in. `Run REAPER` launches
-the host manually; `Run REAPER Integration Test` runs the cargo harness and
-launches REAPER through it. The paths and `.so` destination are specific to
-Linux and use `target/reaper`.
+The repository includes editor shortcuts so you don't need to remember the
+longer build and launch steps. In Sublime Text, the
+`rea-rs.sublime-project` defines build systems to build/copy the test
+extension, launch the downloaded REAPER instance, and run the host-driven
+integration test. `Build & Copy Integration Test` prepares the plug-in;
+`Run REAPER` is handy when you want to trigger the registered test Action
+yourself; `Run REAPER Integration Test` runs the Cargo harness and starts
+REAPER automatically. The manual build/copy and launch paths are Linux-only
+and point into `target/reaper`.
 
-VS Code tasks can be run from **Terminal → Run Task** after opening the
-repository root. The `Build REAPER integration test` task builds the extension;
-the `Run REAPER integration test` task invokes the host-driven Cargo test and
-launches REAPER through the runner.
+In VS Code, open the repository root and choose **Terminal → Run Task**.
+`.vscode/tasks.json` contains matching tasks: **Build & Copy REAPER
+integration test**, **Launch downloaded REAPER**, and **Run REAPER integration
+test**. The build/copy and manual launch tasks are Linux-specific; the Cargo
+runner handles the supported Linux/macOS hosted-test setup.
 
 ## Hint
 

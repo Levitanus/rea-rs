@@ -1,14 +1,17 @@
 //! # rea-rs-test
 //!
-//! Makes testing of REAPER extension plugins easy.
+//! `rea-rs-test` makes it easier to test a REAPER extension plug-in in the
+//! real host. Keep a small, non-published test extension next to your library,
+//! register named test steps from its entry point, and let a Cargo integration
+//! test build and run it inside REAPER.
 //!
 //! This integration test suite was originally written by Benjamin Klum
 //! <benjamin.klum@helgoboss.org> for `reaper-rs`. But it was dependent on the
 //! `reaper-high` crate, which was not and would not be soon published. And,
 //! also, it was deeply integrated into the library.
 //!
-//! This version incapsulates as much as possible, leaving simple interface to
-//! making tests.
+//! This version keeps the runner separate from the library under test and
+//! aims to leave you with a small interface for writing those tests.
 //!
 //! For testing reaper extension, which itself is of type `cdylib`,
 //! you need transform the project folder to workspace. So, basically,
@@ -61,7 +64,12 @@
 //! }
 //! ```
 //!
-//! `test/src/lib.rs` is the file your integration tests are placed in.
+//! `test/src/lib.rs` is the file your integration tests are placed in. Calling
+//! [`ReaperTest::setup`] also registers a REAPER Action: invoke it from
+//! REAPER's Actions list to run steps manually. During a hosted run, the
+//! runner sets `RUN_REAPER_INTEGRATION_TEST`, which makes the test plug-in
+//! execute the same steps automatically and report PASS/FAIL separately from
+//! REAPER's process exit status.
 //!
 //! ```no_run
 //! use rea_rs_macros::reaper_extension_plugin;
@@ -83,6 +91,9 @@
 //!
 //! Run the integration test from the workspace root with
 //! `cargo test -p reaper-test-extension-plugin --test integration_test`.
+//! [`ReaperVersion::latest`] currently selects REAPER 7.82; choose a specific
+//! [`ReaperVersion`] variant to run the same test plug-in against a different
+//! supported REAPER release.
 //!
 //! ## Hint
 //!
