@@ -1,17 +1,12 @@
 use crate::{
-    utils::{string_from_buf, string_from_const_i8, WithNull},
+    utils::{string_from_buf, string_from_const_i8},
     Envelope, GenericSend, Item, KnowsProject, Project, ReaRsError, Reaper,
     SendIntType, Take, Track, TrackSend, WithReaperPtr,
 };
 use log::debug;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use std::{
-    ffi::CString,
-    fmt::Debug,
-    marker::PhantomData,
-    ptr::{null, null_mut},
-};
+use std::{ffi::CString, fmt::Debug, marker::PhantomData};
 
 const BUF_SIZE: usize = 4096;
 
@@ -168,10 +163,10 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
     }
 
     pub fn section(&self) -> String {
-        self.section.clone().with_null().to_string()
+        self.section.clone().to_string()
     }
     pub fn key(&self) -> String {
-        self.key.clone().with_null().to_string()
+        self.key.clone().to_string()
     }
 
     /// Get value from ext state.
@@ -219,6 +214,7 @@ impl<'a, T: Serialize + DeserializeOwned + Clone + Debug, O: HasExtState>
 
     /// Erase ext value, but keep the object.
     pub fn delete(&mut self) -> Result<(), ReaRsError> {
+        debug!("delete value");
         self.object.delete_ext_value(&self.section, &self.key)
     }
 }
@@ -253,9 +249,9 @@ impl HasExtState for Reaper {
         let low = Reaper::get().low();
         unsafe {
             low.SetExtState(
-                CString::new(section.into().with_null())?.as_ptr(),
-                CString::new(key.into().with_null())?.as_ptr(),
-                CString::new(value.into().with_null())?.as_ptr(),
+                CString::new(section.into())?.as_ptr(),
+                CString::new(key.into())?.as_ptr(),
+                CString::new(value.into())?.as_ptr(),
                 true,
             )
         }
@@ -269,8 +265,8 @@ impl HasExtState for Reaper {
         _buf_size: usize,
     ) -> Result<Option<String>, ReaRsError> {
         let low = self.low();
-        let section = section.into().with_null();
-        let key = key.into().with_null();
+        let section = section.into();
+        let key = key.into();
         let has_state = unsafe {
             low.HasExtState(
                 CString::new(section.clone())?.as_ptr(),
@@ -286,7 +282,7 @@ impl HasExtState for Reaper {
                         CString::new(key)?.as_ptr(),
                     )
                 };
-                Ok(Some(string_from_const_i8(value)?))
+                Ok(Some(unsafe { string_from_const_i8(value)? }))
             }
         }
     }
@@ -298,8 +294,8 @@ impl HasExtState for Reaper {
     ) -> Result<(), ReaRsError> {
         unsafe {
             self.low().DeleteExtState(
-                CString::new(section.into().with_null())?.as_ptr(),
-                CString::new(key.into().with_null())?.as_ptr(),
+                CString::new(section.into())?.as_ptr(),
+                CString::new(key.into())?.as_ptr(),
                 true,
             )
         }
@@ -318,9 +314,9 @@ impl HasExtState for Project {
         let _result = unsafe {
             low.SetProjExtState(
                 self.context().to_raw(),
-                CString::new(section.into().with_null())?.as_ptr(),
-                CString::new(key.into().with_null())?.as_ptr(),
-                CString::new(value.into().with_null())?.as_ptr(),
+                CString::new(section.into())?.as_ptr(),
+                CString::new(key.into())?.as_ptr(),
+                CString::new(value.into())?.as_ptr(),
             )
         };
         Ok(())
@@ -359,7 +355,7 @@ impl HasExtState for Project {
                 self.context().to_raw(),
                 CString::new(section.into())?.as_ptr(),
                 CString::new(key.into())?.as_ptr(),
-                null(),
+                CString::new("")?.as_ptr(),
             );
         }
         Ok(())
@@ -377,7 +373,7 @@ fn get_track_ext_state(
     let result = unsafe {
         Reaper::get().low().GetSetMediaTrackInfo_String(
             track.get()?.as_ptr(),
-            CString::new(category.with_null())?.as_ptr(),
+            CString::new(category)?.as_ptr(),
             buf.as_mut_ptr(),
             false,
         )
@@ -403,11 +399,13 @@ impl HasExtState for Track {
         value: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let c_value = CString::new(value.into())?;
+        let category_cstring = CString::new(category)?;
         unsafe {
             Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
-                CString::new(value.into())?.into_raw(),
+                category_cstring.as_ptr(),
+                c_value.as_ptr() as *mut i8,
                 true,
             )
         };
@@ -429,11 +427,13 @@ impl HasExtState for Track {
         key: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let c_value = CString::new("")?;
+        let category_cstring = CString::new(category)?;
         unsafe {
             Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
-                null_mut(),
+                category_cstring.as_ptr(),
+                c_value.as_ptr() as *mut i8,
                 true,
             )
         };
@@ -449,13 +449,15 @@ impl<'a> HasExtState for TrackSend<'a> {
         value: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let c_value = CString::new(value.into())?;
+        let category_cstring = CString::new(category)?;
         unsafe {
             Reaper::get().low().GetSetTrackSendInfo_String(
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                CString::new(category.with_null())?.as_ptr(),
-                CString::new(value.into())?.into_raw(),
+                category_cstring.as_ptr(),
+                c_value.as_ptr() as *mut i8,
                 true,
             );
         }
@@ -469,13 +471,14 @@ impl<'a> HasExtState for TrackSend<'a> {
         buf_size: usize,
     ) -> Result<Option<String>, ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let category_cstring = CString::new(category)?;
         let mut buf = vec![0_i8; buf_size];
         let result = unsafe {
             Reaper::get().low().GetSetTrackSendInfo_String(
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                CString::new(category.with_null())?.as_ptr(),
+                category_cstring.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             )
@@ -492,18 +495,14 @@ impl<'a> HasExtState for TrackSend<'a> {
         key: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
-        let empty = CString::new("").map_err(|e| {
-            ReaRsError::UnexpectedAPI(format!(
-                "TrackSend ext-state delete value build error: {}",
-                e
-            ))
-        })?;
+        let empty = CString::new("")?;
+        let category_cstring = CString::new(category)?;
         unsafe {
             Reaper::get().low().GetSetTrackSendInfo_String(
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                CString::new(category.with_null())?.as_ptr(),
+                category_cstring.as_ptr(),
                 empty.as_ptr() as *mut i8,
                 true,
             )
@@ -520,11 +519,13 @@ impl<'a, P: KnowsProject> HasExtState for Envelope<'a, P> {
         value: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let c_value = CString::new(value.into())?;
+        let category_cstring = CString::new(category)?;
         unsafe {
             Reaper::get().low().GetSetEnvelopeInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
-                CString::new(value.into())?.into_raw(),
+                category_cstring.as_ptr(),
+                c_value.as_ptr() as *mut i8,
                 true,
             );
         }
@@ -538,11 +539,12 @@ impl<'a, P: KnowsProject> HasExtState for Envelope<'a, P> {
         buf_size: usize,
     ) -> Result<Option<String>, ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let category_cstring = CString::new(category)?;
         let mut buf = vec![0_i8; buf_size];
         let result = unsafe {
             Reaper::get().low().GetSetEnvelopeInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
+                category_cstring.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             )
@@ -559,16 +561,12 @@ impl<'a, P: KnowsProject> HasExtState for Envelope<'a, P> {
         key: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
-        let empty = CString::new("").map_err(|e| {
-            ReaRsError::UnexpectedAPI(format!(
-                "Envelope ext-state delete value build error: {}",
-                e
-            ))
-        })?;
+        let empty = CString::new("")?;
+        let category_cstring = CString::new(category)?;
         unsafe {
             Reaper::get().low().GetSetEnvelopeInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
+                category_cstring.as_ptr(),
                 empty.as_ptr() as *mut i8,
                 true,
             )
@@ -585,11 +583,13 @@ impl HasExtState for Item {
         value: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let c_value = CString::new(value.into())?;
+        let category_cstring = CString::new(category)?;
         unsafe {
             Reaper::get().low().GetSetMediaItemInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
-                CString::new(value.into())?.into_raw(),
+                category_cstring.as_ptr(),
+                c_value.as_ptr() as *mut i8,
                 true,
             );
         }
@@ -603,11 +603,12 @@ impl HasExtState for Item {
         buf_size: usize,
     ) -> Result<Option<String>, ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let category_cstring = CString::new(category)?;
         let mut buf = vec![0_i8; buf_size];
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
+                category_cstring.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             )
@@ -624,16 +625,12 @@ impl HasExtState for Item {
         key: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
-        let empty = CString::new("").map_err(|e| {
-            ReaRsError::UnexpectedAPI(format!(
-                "Item ext-state delete value build error: {}",
-                e
-            ))
-        })?;
+        let empty = CString::new("")?;
+        let category_cstring = CString::new(category)?;
         unsafe {
             Reaper::get().low().GetSetMediaItemInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
+                category_cstring.as_ptr(),
                 empty.as_ptr() as *mut i8,
                 true,
             )
@@ -650,11 +647,13 @@ impl HasExtState for Take {
         value: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let c_value = CString::new(value.into())?;
+        let category_cstring = CString::new(category)?;
         unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
-                CString::new(value.into())?.into_raw(),
+                category_cstring.as_ptr(),
+                c_value.as_ptr() as *mut i8,
                 true,
             );
         }
@@ -668,11 +667,12 @@ impl HasExtState for Take {
         buf_size: usize,
     ) -> Result<Option<String>, ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
+        let category_cstring = CString::new(category)?;
         let mut buf = vec![0_i8; buf_size];
         let result = unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
+                category_cstring.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             )
@@ -689,16 +689,12 @@ impl HasExtState for Take {
         key: impl Into<String>,
     ) -> Result<(), ReaRsError> {
         let category = section_key_to_one_category(section.into(), key.into());
-        let empty = CString::new("").map_err(|e| {
-            ReaRsError::UnexpectedAPI(format!(
-                "Take ext-state delete value build error: {}",
-                e
-            ))
-        })?;
+        let empty = CString::new("")?;
+        let category_cstring = CString::new(category)?;
         unsafe {
             Reaper::get().low().GetSetMediaItemTakeInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
+                category_cstring.as_ptr(),
                 empty.as_ptr() as *mut i8,
                 true,
             )

@@ -3,10 +3,8 @@ use std::{ffi::CString, mem::MaybeUninit, ptr::null};
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
-    ptr_wrappers::MediaTrack,
-    utils::{string_from_const_i8, WithNull},
-    Color, Position, Project, ReaRsError, Reaper, ReaperResult, Track,
-    WithReaperPtr,
+    ptr_wrappers::MediaTrack, utils::string_from_const_i8, Color, Position,
+    Project, ReaRsError, Reaper, ReaperResult, Track, WithReaperPtr,
 };
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -41,10 +39,11 @@ impl MarkerRegionInfo {
                 );
                 return Err(crate::ReaRsError::InvalidObject("Marker"));
             }
+            let parameter_name_cstring = CString::new(parameter_name)?;
             Ok(low.GetRegionOrMarkerInfo_Value(
                 project.context().to_raw(),
                 marker,
-                CString::new(parameter_name.with_null())?.as_ptr(),
+                parameter_name_cstring.as_ptr(),
             ))
         }
     }
@@ -72,11 +71,12 @@ impl MarkerRegionInfo {
             );
             return Err(ReaRsError::InvalidObject("Marker"));
         }
+        let parameter_name_cstring = CString::new(parameter_name)?;
         unsafe {
             low.SetRegionOrMarkerInfo_Value(
                 project.context().to_raw(),
                 marker,
-                CString::new(parameter_name.with_null())?.as_ptr(),
+                parameter_name_cstring.as_ptr(),
                 value,
             );
         }
@@ -247,7 +247,7 @@ impl<'a> MarkerRegionIterator<'a> {
     }
 }
 impl<'a> Iterator for MarkerRegionIterator<'a> {
-    type Item = MarkerRegionInfo;
+    type Item = ReaperResult<MarkerRegionInfo>;
     fn next(&mut self) -> Option<Self::Item> {
         let low = Reaper::get().low();
         unsafe {
@@ -270,16 +270,24 @@ impl<'a> Iterator for MarkerRegionIterator<'a> {
             self.index += 1;
             match result {
                 x if x <= 0 => None,
-                _ => Some(MarkerRegionInfo {
-                    enum_index: (self.index - 1) as usize,
-                    user_index: user_index.assume_init() as usize,
-                    is_region: is_region.assume_init(),
-                    position: Position::from(pos.assume_init()),
-                    rgn_end: Position::from(end.assume_init()),
-                    name: string_from_const_i8(name_buf.assume_init())
-                        .expect("should return string"),
-                    color: Color::from_native(native_color.assume_init()),
-                }),
+                _ => Some((|| {
+                    Ok(MarkerRegionInfo {
+                        enum_index: (self.index - 1) as usize,
+                        user_index: user_index.assume_init() as usize,
+                        is_region: is_region.assume_init(),
+                        position: Position::from_host_seconds(
+                            pos.assume_init(),
+                        )?,
+                        rgn_end: Position::from_host_seconds(
+                            end.assume_init(),
+                        )?,
+                        name: string_from_const_i8(name_buf.assume_init())
+                            .map_err(|error| {
+                                ReaRsError::UnderlyingError(error.into())
+                            })?,
+                        color: Color::from_native(native_color.assume_init()),
+                    })
+                })()),
             }
         }
     }

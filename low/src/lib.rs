@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/rea-rs-low/0.2.0")]
+#![doc(html_root_url = "https://docs.rs/rea-rs-low/1.0.0")]
 #![allow(renamed_and_removed_lints)]
 #![deny(broken_intra_doc_links)]
 
@@ -96,6 +96,9 @@ mod static_context;
 pub use static_context::*;
 
 mod swell_impl;
+
+mod virtual_controls;
+pub use virtual_controls::*;
 
 mod midi;
 // pub use midi::*;

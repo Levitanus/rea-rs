@@ -8,7 +8,8 @@ use std::os::raw::{c_int, c_void};
 pub use super::bindings::root::{
     accelerator_register_t, audio_hook_register_t, custom_action_register_t,
     gaccel_register_t, midi_Input, midi_Output, midi_realtime_write_struct_t,
-    preview_register_t, reaper_functions::AudioAccessor, reaper_plugin_info_t,
+    prefs_page_register_t, preview_register_t,
+    reaper_functions::AudioAccessor, reaper_plugin_info_t,
     IReaperControlSurface, IReaperPitchShift, KbdCmd, KbdSectionInfo,
     MIDI_event_t, MIDI_eventlist, MediaItem, MediaItem_Take, MediaTrack,
     PCM_sink, PCM_source, PCM_source_peaktransfer_t, PCM_source_transfer_t,
@@ -58,14 +59,15 @@ pub use super::bindings::root::{
     DT_LEFT, DT_NOCLIP, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE, DT_TOP,
     DT_VCENTER, DT_WORDBREAK, EN_CHANGE, EN_KILLFOCUS, EN_SETFOCUS,
     GMEM_DDESHARE, GMEM_DISCARDABLE, GMEM_FIXED, GMEM_LOWER, GMEM_MOVEABLE,
-    GMEM_SHARE, GMEM_ZEROINIT, GUID, GWL_ID, GW_CHILD, HANDLE, HBRUSH, HDC,
-    HDC__, HINSTANCE, HMENU, HMENU__, HWND, HWND__, IDABORT, IDCANCEL,
-    IDIGNORE, IDNO, IDOK, IDRETRY, IDYES, INT_PTR, LPARAM, LPSTR, LRESULT,
-    MB_ICONERROR, MB_ICONINFORMATION, MB_ICONSTOP, MB_OK, MB_OKCANCEL,
-    MB_RETRYCANCEL, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFO, MF_BITMAP,
-    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_DISABLED, MF_ENABLED,
-    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_BITMAP,
-    MSG, OPAQUE, PAINTSTRUCT, PCM_SINK_EXT_CREATESOURCE,
+    GMEM_SHARE, GMEM_ZEROINIT, GUID, GWL_ID, GW_CHILD, HANDLE, HBITMAP,
+    HBRUSH, HDC, HDC__, HFONT, HGDIOBJ, HGDIOBJ__, HICON, HIMAGELIST,
+    HIMAGELIST__, HINSTANCE, HMENU, HMENU__, HPEN, HWND, HWND__, IDABORT,
+    IDCANCEL, IDIGNORE, IDNO, IDOK, IDRETRY, IDYES, INT_PTR, LOGFONT, LPARAM,
+    LPSTR, LRESULT, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONSTOP, MB_OK,
+    MB_OKCANCEL, MB_RETRYCANCEL, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFO,
+    MF_BITMAP, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_DISABLED,
+    MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
+    MIIM_BITMAP, MSG, OPAQUE, PAINTSTRUCT, PCM_SINK_EXT_CREATESOURCE,
     PCM_SOURCE_EXT_ADDMIDIEVENTS, PCM_SOURCE_EXT_NOTIFYPREVIEWPLAYPOS,
     PCM_SOURCE_EXT_REMOVEFROMMIDIPOOL, POINT, RECT, SB_BOTH, SB_BOTTOM,
     SB_CTL, SB_ENDSCROLL, SB_HORZ, SB_LEFT, SB_LINEDOWN, SB_LINELEFT,
@@ -107,6 +109,11 @@ pub use super::bindings::root::{
     WM_USER, WM_VSCROLL, WPARAM,
 };
 
+/// Opaque REAPER LICE bitmap and font handles used by the drawing API.
+pub use super::bindings::root::reaper_functions::{
+    LICE_IBitmap, LICE_IFont, LICE_pixel,
+};
+
 // Some constants which are calculated from other constants are not picked up
 // by bindgen.
 pub const TBM_GETPOS: u32 = WM_USER;
@@ -114,6 +121,98 @@ pub const TBM_SETTIC: u32 = WM_USER + 4;
 pub const TBM_SETPOS: u32 = WM_USER + 5;
 pub const TBM_SETRANGE: u32 = WM_USER + 6;
 pub const TBM_SETSEL: u32 = WM_USER + 10;
+
+// Common-control messages which are macros in Win32/SWELL headers and may
+// therefore be absent from bindgen output.
+pub const BM_CLICK: u32 = 0x00F5;
+pub const EM_SETSEL: u32 = 0x00B1;
+pub const LB_ADDSTRING: u32 = 0x0180;
+pub const LB_SETCURSEL: u32 = 0x0186;
+pub const LB_GETCURSEL: u32 = 0x0188;
+pub const PBM_SETPOS: u32 = WM_USER + 2;
+pub const PBM_SETRANGE: u32 = WM_USER + 1;
+pub const PBM_DELTAPOS: u32 = WM_USER + 3;
+// Common-controls notification values defined as macros in SWELL headers.
+pub const TCN_SELCHANGE: u32 = 0xffff_fdd9;
+pub const LVN_ITEMCHANGED: u32 = 0xffff_ff9b;
+pub const LVN_COLUMNCLICK: u32 = 0xffff_ff94;
+pub const TVN_SELCHANGED: u32 = 0xffff_fe6e;
+pub const TVN_ITEMEXPANDING: u32 = 0xffff_fe6b;
+pub const TVN_BEGINDRAG: u32 = 0xffff_fe69;
+/// Native keyboard-focus loss message (Win32/SWELL value).
+pub const WM_KILLFOCUS: u32 = 0x0008;
+/// Native keyboard-focus gain message (Win32/SWELL value).
+pub const WM_SETFOCUS: u32 = 0x0007;
+
+// Window style and window-long constants. Not picked up by bindgen because
+// they are defined in swell-types.h only as macros (SWELL) resp. are needed on
+// Windows as well. Values must match swell-types.h (SWELL) and winuser.h
+// (Windows).
+/// Window style: child window.
+pub const WS_CHILD: i32 = 0x40000000;
+/// Window style: clips child windows to the client area.
+pub const WS_CLIPCHILDREN: i32 = 0x02000000;
+/// Window style: has a horizontal standard scrollbar (Windows only).
+pub const WS_HSCROLL: i32 = 0x00100000;
+/// Window style: has a vertical standard scrollbar (Windows only).
+pub const WS_VSCROLL: i32 = 0x00200000;
+/// Window style: has a title bar. Includes WS_DLGFRAME and WS_BORDER.
+pub const WS_CAPTION: i32 = 0x00C00000;
+/// Window style: has a sizing border.
+pub const WS_THICKFRAME: i32 = 0x00040000;
+/// Window style: has a system menu in its title bar.
+pub const WS_SYSMENU: i32 = 0x00080000;
+/// Window style: the window is initially visible.
+pub const WS_VISIBLE: i32 = 0x02000000;
+/// Window style: the window is initially disabled.
+pub const WS_DISABLED: i32 = 0x08000000;
+/// Window style: clips child windows relative to each other.
+pub const WS_CLIPSIBLINGS: i32 = 0x04000000;
+/// Set of styles which identify a typical resizable top-level window.
+pub const WS_OVERLAPPEDWINDOW: i32 = WS_CAPTION
+    | WS_SYSMENU
+    | WS_THICKFRAME
+    | 0x00010000 /* WS_TABSTOP, unused but keeps the set aligned with Win32 */
+    | 0x00020000 /* WS_GROUP */;
+
+/// `GetWindowLong`/`SetWindowLong` index: window procedure.
+pub const GWL_WNDPROC: i32 = -4;
+/// `GetWindowLong`/`SetWindowLong` index: window style.
+pub const GWL_STYLE: i32 = -16;
+// Note: `GWL_ID` (-12) is already re-exported from `bindings::root` above.
+/// `GetWindowLong`/`SetWindowLong` index: extended window style.
+pub const GWL_EXSTYLE: i32 = -20;
+/// `GetWindowLong`/`SetWindowLong` index: user data.
+pub const GWL_USERDATA: i32 = -21;
+/// `GetWindowLong`/`SetWindowLong` index: dialog procedure.
+pub const DWL_DLGPROC: i32 = -8;
+/// `GetWindowLong`/`SetWindowLong` index: parent window handle
+/// (SWELL-specific).
+pub const GWL_HWNDPARENT: i32 = -25;
+
+/// Class style: redraws the window if a movement or size adjustment changes
+/// the width of the client area.
+pub const CS_HREDRAW: u32 = 0x0002;
+/// Class style: redraws the window if a movement or size adjustment changes
+/// the height of the client area.
+pub const CS_VREDRAW: u32 = 0x0001;
+
+/// `GetWindow` relation: retrieves the owner window.
+pub const GW_OWNER: i32 = 4;
+/// `GetWindow` relation: retrieves the next window in sibling z-order.
+pub const GW_HWNDNEXT: i32 = 2;
+
+// SWELL dialog creation: SWELL_CreateDialog accepts a magic resource ID of
+// 0x400000 | flags in order to create a top-level window without a dialog
+// template. Implemented identically in swell-dlg-generic.cpp and swell-dlg.mm.
+// Bit 0: resizable, Bit 1: no minimize box, Bit 2: no close box.
+pub const SWELL_CREATE_DIALOG_MAGIC: i64 = 0x400000;
+/// SWELL template-less dialog creation flag: window is resizable.
+pub const SWELL_DLG_FORCE_RESIZABLE: i64 = 0x1;
+/// SWELL template-less dialog creation flag: no minimize box.
+pub const SWELL_DLG_NO_MINIMIZE: i64 = 0x2;
+/// SWELL template-less dialog creation flag: no close box.
+pub const SWELL_DLG_NO_CLOSE: i64 = 0x4;
 
 // Some constants/types are different in Unix/SWELL. Search for "these differ"
 // in SWELL source code for explanation.
@@ -148,6 +247,11 @@ pub use crate::bindings::root::{
     SW_SHOWNORMAL,
 };
 
+// SWELL's generated bindings omit this standard SetWindowPos flag although
+// the SWELL and Win32 backends both accept it.
+#[cfg(target_family = "unix")]
+pub const SWP_NOREDRAW: u32 = 0x0008;
+
 #[cfg(target_family = "windows")]
 mod windows_constants {
     // MIIM
@@ -159,6 +263,7 @@ mod windows_constants {
     // SWP
     pub const SWP_FRAMECHANGED: u32 = 0x0020;
     pub const SWP_NOACTIVATE: u32 = 0x0010;
+    pub const SWP_NOREDRAW: u32 = 0x0008;
     pub const SWP_NOCOPYBITS: u32 = 0x0100;
     pub const SWP_NOMOVE: u32 = 0x0002;
     pub const SWP_NOSIZE: u32 = 0x0001;

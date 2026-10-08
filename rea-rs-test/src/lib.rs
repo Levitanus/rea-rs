@@ -29,21 +29,21 @@
 //!         └── integration_test.rs
 //! ```
 //!
-//! `test` crate will not be delivered to the end-user, but will be used for
-//! testing your library. Since there is a need for patching of reaper-low and
-//! reaper-medium, contents of `test/Cargo.toml`:
+//! `test` crate will not be delivered to end-users; it is a non-published
+//! extension plug-in used only for host-driven testing. An example package
+//! manifest is:
 //!
 //! ```toml
 //! [package]
 //! edition = "2021"
 //! name = "reaper-test-extension-plugin"
 //! publish = false
-//! version = "0.2.0"
+//! version = "1.0.0"
 //!
 //! [dependencies]
-//! rea-rs = "0.2.0"
-//! rea-rs-macros = "0.2.0"
-//! rea-rs-test = "0.2.0"
+//! rea-rs = "1.0.0"
+//! rea-rs-macros = "1.0.0"
+//! rea-rs-test = "1.0.0"
 //! my_lib = {path = "../my_lib"}
 //!
 //! [lib]
@@ -67,13 +67,12 @@
 //! use rea_rs_macros::reaper_extension_plugin;
 //! use rea_rs_test::*;
 //! use rea_rs::{Reaper, PluginContext};
-//! use std::error::Error;
 //! fn hello_world(reaper: &mut Reaper) -> TestStepResult {
-//!     reaper.show_console_msg("Hello world!");
+//!     reaper.show_console_msg("Hello world!")?;
 //!     Ok(())
 //! }
 //! #[reaper_extension_plugin]
-//! fn test_extension(context: PluginContext) -> Result<(), Box<dyn Error>> {
+//! fn test_extension(context: PluginContext) -> Result<(), anyhow::Error> {
 //!     // setup test global environment
 //!     let test = ReaperTest::setup(context, "test_action");
 //!     // Push single test step.
@@ -82,26 +81,36 @@
 //! }
 //! ```
 //!
-//! to run integration tests, go to the test folder and type:
-//! `cargo build --workspace; cargo test`
+//! Run the integration test from the workspace root with
+//! `cargo test -p reaper-test-extension-plugin --test integration_test`.
 //!
 //! ## Hint
 //!
-//! Use crates `log` and `env_logger` for printing to stdio. integration test
-//! turns env logger on by itself.
+//! Plug-in test steps can use `log` for structured diagnostics. The runner
+//! captures REAPER stdout and stderr and prints the capture when a test fails.
 
-use rea_rs::{ActionHook, ActionKind, PluginContext, Reaper, Timer};
+use rea_rs::{
+    ActionHook, ActionKind, ActionRegistrationOptions, PluginContext, Reaper,
+    Timer,
+};
 use rea_rs_low::register_plugin_destroy_hook;
 use std::{
-    cell::RefCell, error::Error, fmt::Debug, panic, process, sync::Arc,
+    cell::RefCell,
+    fmt::Debug,
+    panic::{self, AssertUnwindSafe},
+    process,
+    sync::Arc,
 };
 
 pub mod integration_test;
 pub use integration_test::*;
 
+const INTEGRATION_RESULT_PATH_ENV: &str =
+    integration_test::INTEGRATION_RESULT_PATH_ENV;
+
 static mut INSTANCE: Option<ReaperTest> = None;
 
-pub type TestStepResult = Result<(), Box<dyn Error>>;
+pub type TestStepResult = Result<(), anyhow::Error>;
 pub type TestCallback = dyn Fn(&'static mut Reaper) -> TestStepResult;
 
 pub struct TestStep {
@@ -111,7 +120,7 @@ pub struct TestStep {
 impl TestStep {
     pub fn new(
         name: impl Into<String>,
-        operation: impl Fn(&'static mut Reaper) -> Result<(), Box<dyn Error>>
+        operation: impl Fn(&'static mut Reaper) -> Result<(), anyhow::Error>
             + 'static,
     ) -> Self {
         Self {
@@ -126,18 +135,18 @@ impl Debug for TestStep {
     }
 }
 
-fn run_tests() -> Result<(), Box<dyn Error>> {
+fn run_tests() -> Result<(), anyhow::Error> {
     ReaperTest::get_mut().test();
     Ok(())
 }
 
-fn test(_hook: &mut ActionHook) -> Result<(), Box<dyn Error>> {
+fn test(_hook: &mut ActionHook) -> Result<(), anyhow::Error> {
     run_tests()
 }
 
 struct IntegrationTimer {}
 impl Timer for IntegrationTimer {
-    fn run(&mut self) -> Result<(), Box<dyn Error>> {
+    fn run(&mut self) -> Result<(), anyhow::Error> {
         run_tests()?;
         self.stop();
         Ok(())
@@ -179,7 +188,7 @@ impl ReaperTest {
                 action_name,
                 ActionKind::NotToggleable,
                 test,
-                None,
+                ActionRegistrationOptions::default(),
             )
             .expect("Can not reigister test action");
         Self::make_available_globally(instance);
@@ -197,6 +206,7 @@ impl ReaperTest {
     /// before.
     ///
     /// [`make_available_globally()`]: fn.make_available_globally.html
+    #[allow(static_mut_refs)]
     pub fn get() -> &'static ReaperTest {
         unsafe {
             INSTANCE
@@ -204,6 +214,7 @@ impl ReaperTest {
                 .expect("call `load(context)` before using `get()`")
         }
     }
+    #[allow(static_mut_refs)]
     pub fn get_mut() -> &'static mut ReaperTest {
         unsafe {
             INSTANCE
@@ -214,47 +225,59 @@ impl ReaperTest {
 
     fn test(&mut self) {
         println!("# Testing reaper-rs\n");
-        let result = panic::catch_unwind(|| -> TestStepResult {
-            // let r_test = ReaperTest::get_mut();
-            // let rpr = &mut r_test.reaper;
-            // for step in r_test.steps.iter() {
-            //     println!("Testing step: {}", step.name);
-            //     (step.operation)(rpr)?;
-            // }
-            ReaperTest::get()
-                .steps
-                .iter()
-                .map(|step| -> Result<(), Box<dyn Error>> {
-                    println!("Testing step: {}", step.name);
-                    (step.operation)(Reaper::get_mut())?;
-                    Ok(())
-                })
-                .count();
-            Ok(())
-        });
-        let final_result = match result.is_err() {
-            false => result.unwrap(),
-            true => Err("Reaper panicked!".into()),
-        };
-        match final_result {
-            Ok(_) => {
+        let mut is_err = false;
+        for step in ReaperTest::get().steps.iter() {
+            println!("Testing step: {}", step.name);
+            // let operation = step.operation;
+            match panic::catch_unwind(AssertUnwindSafe(
+                || -> TestStepResult { (step.operation)(Reaper::get_mut()) },
+            )) {
+                Ok(result) => match result {
+                    Ok(_) => println!("passed!"),
+                    Err(e) => {
+                        is_err = true;
+                        eprintln!("error occured: {}", e)
+                    }
+                },
+                Err(reason) => {
+                    is_err = true;
+                    eprintln!("paniced: {:?}", reason)
+                }
+            }
+        }
+        match is_err {
+            false => {
                 println!("From REAPER: reaper-rs integration test executed successfully");
                 if self.is_integration_test {
+                    if let Err(error) = write_integration_test_result("PASS") {
+                        eprintln!(
+                            "Could not report integration-test success: {error}"
+                        );
+                        process::exit(173)
+                    }
                     process::exit(0)
                 }
             }
-            Err(reason) => {
+            true => {
                 // We use a particular exit code to distinguish test
                 // failure from other possible
                 // exit paths.
                 match self.is_integration_test {
                     true => {
-                        eprintln!("From REAPER: reaper-rs integration test failed: {}", reason);
+                        eprintln!(
+                            "From REAPER: reaper-rs integration test failed"
+                        );
+                        if let Err(error) =
+                            write_integration_test_result("FAIL")
+                        {
+                            eprintln!(
+                                "Could not report integration-test failure: {error}"
+                            );
+                        }
                         process::exit(172)
                     }
                     false => panic!(
-                        "From REAPER: reaper-rs integration test failed: {}",
-                        reason
+                        "From REAPER: reaper-rs integration test failed. panic!"
                     ),
                 }
             }
@@ -264,4 +287,18 @@ impl ReaperTest {
     pub fn push_test_step(&mut self, step: TestStep) {
         self.steps.push(step);
     }
+}
+
+fn write_integration_test_result(result: &str) -> std::io::Result<()> {
+    let result_path = std::env::var_os(INTEGRATION_RESULT_PATH_ENV)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "integration result path environment variable is not set",
+            )
+        })?;
+    let result_path = std::path::PathBuf::from(result_path);
+    let temporary_path = result_path.with_extension("result.tmp");
+    std::fs::write(&temporary_path, format!("{result}\n"))?;
+    std::fs::rename(&temporary_path, &result_path)
 }

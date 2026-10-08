@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0 - Unreleased
+
+### Changed
+
+* Aligned macro crate release metadata with the `rea-rs` 1.0.0 workspace.
+
 ## Unreleased
 
 ### Added

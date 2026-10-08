@@ -7,18 +7,19 @@ use std::{
 
 use bitflags::bitflags;
 use int_enum::IntEnum;
+use log::debug;
 use serde_derive::{Deserialize, Serialize};
 
+use crate::swell_gui::layout::{SignedPoint, SignedRect};
 use crate::{
     ptr_wrappers::{MediaItem, MediaTrack, ReaProject, TrackEnvelope},
-    utils::{string_from_buf, string_from_const_i8, WithNull},
+    utils::{string_from_buf, string_from_const_i8},
     AudioAccessor, AutomationMode, Color, Envelope, EnvelopeSelector,
     FXParent, GenericSend, GetLength, HardwareSend, HardwareSocket, Item,
-    KnowsProject, Pan, PanLaw, PanLawMode, Position, PositionPixel, Project,
-    ProjectContext, ReaRsError, Reaper, ReaperResult, RecInput, RecMode,
-    RecOutMode, RectPixel, SendIntType, SoloMode, TimeMode, TrackFX,
-    TrackFolderState, TrackReceive, TrackSend, VUMode, Volume, WithReaperPtr,
-    FX, GUID,
+    KnowsProject, Pan, PanLaw, PanLawMode, Position, Project, ProjectContext,
+    ReaRsError, Reaper, ReaperResult, RecInput, RecMode, RecOutMode,
+    SendIntType, SoloMode, TimeMode, TrackFX, TrackFolderState, TrackReceive,
+    TrackSend, VUMode, Volume, WithReaperPtr, FX, GUID,
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -93,25 +94,22 @@ impl Track {
         name: impl Into<String>,
     ) -> ReaperResult<Option<Self>> {
         let name = name.into();
-        let track = project
-            .iter_tracks()
-            .find(|tr| tr.name().map(|n| n == name).unwrap_or(false));
-        match track {
-            Some(track) => {
-                Ok(Some(Self::new(project.get_pointer(), track.ptr)))
+        for track in project.iter_tracks() {
+            if track.name()? == name {
+                return Ok(Some(Self::new(project.get_pointer(), track.ptr)));
             }
-            None => Ok(None),
         }
+        Ok(None)
     }
     pub fn from_point(
         project: &Project,
-        point: PositionPixel,
+        point: SignedPoint,
     ) -> ReaperResult<Option<Self>> {
         let mut info_out = MaybeUninit::zeroed();
         let ptr = unsafe {
             Reaper::get().low().GetTrackFromPoint(
-                point.x as i32,
-                point.y as i32,
+                point.x,
+                point.y,
                 info_out.as_mut_ptr(),
             )
         };
@@ -124,26 +122,26 @@ impl Track {
         project: &Project,
         guid: GUID,
     ) -> ReaperResult<Option<Self>> {
-        let track = project
-            .iter_tracks()
-            .find(|tr| tr.guid().map(|n| n == guid).unwrap_or(false));
-        match track {
-            Some(track) => {
-                Ok(Some(Self::new(project.get_pointer(), track.ptr)))
+        for track in project.iter_tracks() {
+            if track.guid()? == guid {
+                return Ok(Some(Self::new(project.get_pointer(), track.ptr)));
             }
-            None => Ok(None),
         }
+        Ok(None)
     }
 
     fn get_info_string(
         &self,
         category: impl Into<String>,
     ) -> ReaperResult<String> {
+        let category = category.into();
+        // debug!("get info string, category: {:?}", category);
+        let category_cstring = CString::new(category)?;
         unsafe {
             let mut buf = vec![0_i8; self.info_buf_size];
             let result = Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.into().with_null())?.as_ptr(),
+                category_cstring.as_ptr(),
                 buf.as_mut_ptr(),
                 false,
             );
@@ -185,16 +183,49 @@ impl Track {
     pub fn ui_element_rect(
         &self,
         element: impl Into<String>,
-    ) -> anyhow::Result<RectPixel> {
+    ) -> ReaperResult<SignedRect> {
         let mut category = String::from("P_UI_RECT:");
         category += &element.into();
         let result = self.get_info_string(category)?;
-        let mut tokens = result.split(" ");
-        let x: u32 = tokens.next().unwrap().parse().unwrap();
-        let y: u32 = tokens.next().unwrap().parse().unwrap();
-        let width: u32 = tokens.next().unwrap().parse().unwrap();
-        let height: u32 = tokens.next().unwrap().parse().unwrap();
-        Ok(RectPixel::new(x, y, width, height))
+        let values = result
+            .split_whitespace()
+            .map(str::parse::<i32>)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| {
+                ReaRsError::UnexpectedAPI(format!(
+                    "REAPER returned an invalid UI rectangle: {result:?}"
+                ))
+            })?;
+        let [x, y, width, height] = values.as_slice() else {
+            return Err(ReaRsError::UnexpectedAPI(format!(
+                "REAPER returned an invalid UI rectangle: {result:?}"
+            )));
+        };
+        if *width < 0 || *height < 0 {
+            return Err(ReaRsError::UnexpectedAPI(format!(
+                "REAPER returned a negative UI rectangle size: {result:?}"
+            )));
+        }
+        x.checked_add(*width).ok_or(ReaRsError::UnexpectedAPI(
+            "REAPER UI rectangle horizontal edge overflow".into(),
+        ))?;
+        y.checked_add(*height).ok_or(ReaRsError::UnexpectedAPI(
+            "REAPER UI rectangle vertical edge overflow".into(),
+        ))?;
+        Ok(SignedRect {
+            x: *x,
+            y: *y,
+            width: u32::try_from(*width).map_err(|_| {
+                ReaRsError::UnexpectedAPI(
+                    "REAPER returned a negative UI rectangle width".into(),
+                )
+            })?,
+            height: u32::try_from(*height).map_err(|_| {
+                ReaRsError::UnexpectedAPI(
+                    "REAPER returned a negative UI rectangle height".into(),
+                )
+            })?,
+        })
     }
 
     /// Get Vec of RazorEdit areas.
@@ -206,11 +237,11 @@ impl Track {
     /// corresponding to [Track]
     pub fn razor_edits(&self) -> ReaperResult<Vec<RazorEdit>> {
         let result = self.get_info_string("P_RAZOREDITS_EXT")?;
-        Ok(result
-            .split(",")
-            .filter(|v| !v.is_empty())
-            .map(|item| RazorEdit::from_str(item))
-            .collect())
+        result
+            .split(',')
+            .filter(|item| !item.is_empty())
+            .map(RazorEdit::try_from)
+            .collect()
     }
 
     pub fn guid(&self) -> ReaperResult<GUID> {
@@ -224,7 +255,7 @@ impl Track {
         Ok(unsafe {
             Reaper::get().low().GetMediaTrackInfo_Value(
                 self.get()?.as_ptr(),
-                CString::new(category.into().with_null())?.as_ptr(),
+                CString::new(category.into())?.as_ptr(),
             )
         })
     }
@@ -305,7 +336,7 @@ impl Track {
         Ok(self.get_info_value("B_AUTO_RECARM")? != 0.0)
     }
     pub fn vu_mode(&self) -> ReaperResult<VUMode> {
-        Ok(VUMode::from_raw(self.get_info_value("I_VUMODE")? as u32))
+        VUMode::from_raw(self.get_info_value("I_VUMODE")? as u32)
     }
     pub fn n_channels(&self) -> ReaperResult<usize> {
         Ok(self.get_info_value("I_NCHAN")? as usize)
@@ -350,7 +381,7 @@ impl Track {
     pub fn folder_state(&self) -> ReaperResult<TrackFolderState> {
         let depth = self.get_info_value("I_FOLDERDEPTH")? as i32;
         let compact = self.get_info_value("I_FOLDERCOMPACT")? as u32;
-        Ok(TrackFolderState::from_raw(depth, compact))
+        TrackFolderState::from_raw(depth, compact)
     }
 
     /// Get channel and hardware midi out socket, if any.
@@ -391,22 +422,24 @@ impl Track {
     }
 
     pub fn volume(&self) -> ReaperResult<Volume> {
-        Ok(Volume::from(self.get_info_value("D_VOL")?))
+        Volume::try_from(self.get_info_value("D_VOL")?)
     }
     pub fn pan(&self) -> ReaperResult<TrackPan> {
         let pan_mode = self.get_info_value("I_PANMODE")? as u32;
         match pan_mode {
-            0 => Ok(TrackPan::BalanceLegacy(
-                self.get_info_value("D_PAN")?.into(),
-            )),
-            3 => Ok(TrackPan::Balance(self.get_info_value("D_PAN")?.into())),
+            0 => Ok(TrackPan::BalanceLegacy(Pan::try_from(
+                self.get_info_value("D_PAN")?,
+            )?)),
+            3 => Ok(TrackPan::Balance(Pan::try_from(
+                self.get_info_value("D_PAN")?,
+            )?)),
             5 => Ok(TrackPan::Stereo(
-                self.get_info_value("D_PAN")?.into(),
-                self.get_info_value("D_WIDTH")?.into(),
+                Pan::try_from(self.get_info_value("D_PAN")?)?,
+                Pan::try_from(self.get_info_value("D_WIDTH")?)?,
             )),
             6 => Ok(TrackPan::Dual(
-                self.get_info_value("D_DUALPANL")?.into(),
-                self.get_info_value("D_DUALPANR")?.into(),
+                Pan::try_from(self.get_info_value("D_DUALPANL")?)?,
+                Pan::try_from(self.get_info_value("D_DUALPANR")?)?,
             )),
             _ => Err(ReaRsError::UnexpectedAPI(
                 "Can not infer pan mode!".to_string(),
@@ -415,10 +448,10 @@ impl Track {
     }
 
     pub fn pan_law(&self) -> ReaperResult<PanLaw> {
-        Ok(self.get_info_value("D_PANLAW")?.into())
+        PanLaw::try_from(self.get_info_value("D_PANLAW")?)
     }
     pub fn pan_law_mode(&self) -> ReaperResult<PanLawMode> {
-        Ok((self.get_info_value("I_PANLAW_FLAGS")? as i32).into())
+        PanLawMode::try_from(self.get_info_value("I_PANLAW_FLAGS")? as i32)
     }
 
     pub fn visible_in_mcp(&self) -> ReaperResult<bool> {
@@ -546,15 +579,24 @@ impl Track {
         })
     }
 
-    pub fn get_send(&self, index: usize) -> Option<TrackSend<'_>> {
+    pub fn get_send(
+        &self,
+        index: usize,
+    ) -> ReaperResult<Option<TrackSend<'_>>> {
         TrackSend::new(self, index)
     }
 
-    pub fn get_recieve(&self, index: usize) -> Option<TrackReceive<'_>> {
+    pub fn get_receive(
+        &self,
+        index: usize,
+    ) -> ReaperResult<Option<TrackReceive<'_>>> {
         TrackReceive::new(self, index)
     }
 
-    pub fn get_hardware_send(&self, index: usize) -> Option<HardwareSend<'_>> {
+    pub fn get_hardware_send(
+        &self,
+        index: usize,
+    ) -> ReaperResult<Option<HardwareSend<'_>>> {
         HardwareSend::new(self, index)
     }
 
@@ -620,7 +662,7 @@ impl Track {
         };
         match raw.is_null() {
             true => Ok(None),
-            false => Ok(Some(string_from_const_i8(raw)?)),
+            false => Ok(Some(unsafe { string_from_const_i8(raw)? })),
         }
     }
 
@@ -644,8 +686,12 @@ impl Track {
     }
 
     /// Get string, that will differ only if midi changed.
-    pub fn midi_hash(&self, notes_only: bool) -> ReaperResult<Option<String>> {
-        let size = 100;
+    pub fn midi_hash(
+        &self,
+        notes_only: bool,
+        size: impl Into<Option<usize>>,
+    ) -> ReaperResult<Option<String>> {
+        let size = size.into().unwrap_or(128);
         let mut buf = vec![0_i8; size];
         let result = unsafe {
             Reaper::get().low().MIDI_GetTrackHash(
@@ -671,7 +717,7 @@ impl Track {
                 .low()
                 .Track_GetPeakInfo(self.get()?.as_ptr(), channel as i32)
         };
-        Ok(Volume::from(result))
+        Volume::try_from(result)
     }
 
     fn get_envelope_parametrized(
@@ -695,12 +741,12 @@ impl Track {
     ) -> ReaperResult<Option<Envelope<'_, Self>>> {
         let chunk = match selector {
             EnvelopeSelector::Chunk(chunk) => chunk.to_string(),
-            EnvelopeSelector::Guid(guid) => guid.to_string(),
+            EnvelopeSelector::Guid(guid) => guid.to_string()?,
         };
         let ptr = unsafe {
             Reaper::get().low().GetTrackEnvelopeByChunkName(
                 self.get()?.as_ptr(),
-                CString::new(chunk.with_null())?.as_ptr(),
+                CString::new(chunk)?.as_ptr(),
             )
         };
         Ok(match TrackEnvelope::new(ptr) {
@@ -717,7 +763,7 @@ impl Track {
         let ptr = unsafe {
             Reaper::get().low().GetTrackEnvelopeByName(
                 self.get()?.as_ptr(),
-                CString::new(name.with_null())?.as_ptr(),
+                CString::new(name)?.as_ptr(),
             )
         };
         Ok(match TrackEnvelope::new(ptr) {
@@ -805,7 +851,7 @@ impl Track {
         let result = unsafe {
             Reaper::get().low().SetTrackStateChunk(
                 self.get()?.as_ptr(),
-                CString::new(chunk.with_null())?.as_ptr(),
+                CString::new(chunk)?.as_ptr(),
                 need_undo,
             )
         };
@@ -831,7 +877,7 @@ impl Track {
                 self.get()?.as_ptr(),
                 pitch as i32,
                 channel as i32,
-                CString::new(note_name.with_null())?.as_ptr(),
+                CString::new(note_name)?.as_ptr(),
             )
         };
         match result {
@@ -849,11 +895,14 @@ impl Track {
     ) -> ReaperResult<()> {
         let category = category.into();
         let value = value.into();
+        debug!("set_info_string: category: {category}, value: {value}");
+        let c_value = CString::new(value)?;
+        let category_cstring = CString::new(category)?;
         let result = unsafe {
             Reaper::get().low().GetSetMediaTrackInfo_String(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
-                CString::new(value.with_null())?.into_raw(),
+                category_cstring.as_ptr(),
+                c_value.as_ptr() as *mut i8,
                 true,
             )
         };
@@ -884,7 +933,7 @@ impl Track {
     }
 
     pub fn set_guid(&mut self, guid: GUID) -> ReaperResult<()> {
-        self.set_info_string("GUID", guid.to_string())
+        self.set_info_string("GUID", guid.to_string()?)
     }
 
     pub fn set_name(&mut self, name: impl Into<String>) -> ReaperResult<()> {
@@ -954,7 +1003,7 @@ impl Track {
         let index = unsafe {
             Reaper::get().low().TrackFX_AddByName(
                 self.get()?.as_ptr(),
-                CString::new(name.into().with_null())?.as_ptr(),
+                CString::new(name.into())?.as_ptr(),
                 input_fx,
                 insatantinate,
             )
@@ -971,6 +1020,7 @@ impl Track {
         length: impl GetLength,
     ) -> ReaperResult<Item> {
         let start = start.into();
+        let length = length.get_length(start)?;
         let ptr = unsafe {
             Reaper::get()
                 .low()
@@ -979,8 +1029,8 @@ impl Track {
         let ptr = MediaItem::new(ptr)
             .ok_or(ReaRsError::InvalidObject("Can not add track."))?;
         let mut item = Item::new(&self.project(), ptr)?;
-        let _ = item.set_position(start);
-        let _ = item.set_length(length.get_length(start));
+        item.set_position(start)?;
+        item.set_length(length)?;
         Ok(item)
     }
 
@@ -991,7 +1041,8 @@ impl Track {
     ) -> ReaperResult<Item> {
         let qn = MaybeUninit::new(false);
         let start = start.into();
-        let end = Position::from(length.get_length(start)) + start;
+        let length = length.get_length(start)?;
+        let end = start.add_duration(length);
         let ptr = unsafe {
             Reaper::get().low().CreateNewMIDIItemInProj(
                 self.get()?.as_ptr(),
@@ -1021,9 +1072,15 @@ impl Track {
                 .low()
                 .CreateTrackSend(self.get()?.as_ptr(), null_mut())
         };
-        HardwareSend::new(self, index as usize).ok_or(
-            ReaRsError::InvalidObject("No hardware send after creation"),
-        )
+        HardwareSend::new(
+            self,
+            usize::try_from(index).map_err(|_| {
+                ReaRsError::UnsuccessfulOperation(
+                    "Could not create hardware send",
+                )
+            })?,
+        )?
+        .ok_or(ReaRsError::InvalidObject("No hardware send after creation"))
     }
 
     /// Add TrackSend, that sends audio or midi to other track.
@@ -1042,8 +1099,13 @@ impl Track {
                 destination.get()?.as_ptr(),
             )
         };
-        TrackSend::new(self, index as usize)
-            .ok_or(ReaRsError::InvalidObject("No send after creation"))
+        TrackSend::new(
+            self,
+            usize::try_from(index).map_err(|_| {
+                ReaRsError::UnsuccessfulOperation("Could not create send")
+            })?,
+        )?
+        .ok_or(ReaRsError::InvalidObject("No send after creation"))
     }
 
     /// Add TrackReceive, that sends audio or midi to other track.
@@ -1061,8 +1123,13 @@ impl Track {
                 .low()
                 .CreateTrackSend(source.get()?.as_ptr(), self.get()?.as_ptr())
         };
-        TrackReceive::new(self, index as usize)
-            .ok_or(ReaRsError::InvalidObject("No send after creation"))
+        TrackReceive::new(
+            self,
+            usize::try_from(index).map_err(|_| {
+                ReaRsError::UnsuccessfulOperation("Could not create receive")
+            })?,
+        )?
+        .ok_or(ReaRsError::InvalidObject("No send after creation"))
     }
 
     pub fn delete(self) -> ReaperResult<()> {
@@ -1100,7 +1167,7 @@ impl Track {
         let result = unsafe {
             Reaper::get().low().SetMediaTrackInfo_Value(
                 self.get()?.as_ptr(),
-                CString::new(param_name.with_null())?.as_ptr(),
+                CString::new(param_name)?.as_ptr(),
                 value,
             )
         };
@@ -1377,7 +1444,7 @@ impl Track {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// use rea_rs::{TrackGroupParam, Reaper};
     /// use bitvec::prelude::*;
     ///
@@ -1574,41 +1641,59 @@ pub struct RazorEdit {
     pub bot_y_pos: f64,
 }
 impl RazorEdit {
-    pub(crate) fn from_str(data: &str) -> Self {
-        let mut tokens = data.split(" ");
-        let start: f64 = tokens.next().unwrap().parse().unwrap();
-        let end: f64 = tokens.next().unwrap().parse().unwrap();
-        let guid = tokens
-            .next()
-            .unwrap()
-            .strip_prefix("\"")
-            .unwrap()
-            .strip_suffix("\"")
-            .unwrap();
-        let guid = match guid.is_empty() {
-            true => None,
-            false => Some(String::from(guid)),
+    pub fn parse(data: &str) -> ReaperResult<Self> {
+        let tokens = data.split_whitespace().collect::<Vec<_>>();
+        let [start, end, guid, top_y_pos, bot_y_pos] = tokens.as_slice()
+        else {
+            return Err(ReaRsError::InvalidObject(
+                "invalid razor edit format",
+            ));
         };
-        let top_y_pos: f64 = tokens.next().unwrap().parse().unwrap();
-        let bot_y_pos: f64 = tokens.next().unwrap().parse().unwrap();
-        let start = Position::from(start);
-        let end = Position::from(end);
-        let guid = match guid {
-            Some(v) => Some(GUID::from_string(v).unwrap()),
-            None => None,
+        let parse_float = |value: &str| -> ReaperResult<f64> {
+            let value = value.parse::<f64>().map_err(|_| {
+                ReaRsError::InvalidObject("invalid razor edit number")
+            })?;
+            if !value.is_finite() {
+                return Err(ReaRsError::InvalidObject(
+                    "non-finite razor edit number",
+                ));
+            }
+            Ok(value)
         };
-        Self {
-            start,
-            end,
-            envelope_guid: guid,
+        let start = parse_float(start)?;
+        let end = parse_float(end)?;
+        let top_y_pos = parse_float(top_y_pos)?;
+        let bot_y_pos = parse_float(bot_y_pos)?;
+        let guid = guid
+            .strip_prefix('"')
+            .and_then(|guid| guid.strip_suffix('"'))
+            .ok_or(ReaRsError::InvalidObject(
+                "invalid razor edit GUID field",
+            ))?;
+        let envelope_guid = if guid.is_empty() {
+            None
+        } else {
+            Some(GUID::from_string(guid.to_owned()).map_err(|_| {
+                ReaRsError::InvalidObject("invalid razor edit GUID")
+            })?)
+        };
+        if start < 0.0 || end < start || top_y_pos > bot_y_pos {
+            return Err(ReaRsError::InvalidObject(
+                "invalid razor edit bounds",
+            ));
+        }
+        Ok(Self {
+            start: Position::try_from_seconds(start)?,
+            end: Position::try_from_seconds(end)?,
+            envelope_guid,
             top_y_pos,
             bot_y_pos,
-        }
+        })
     }
     pub(crate) fn to_string(&self) -> String {
         let guid = match self.envelope_guid {
             None => String::from(""),
-            Some(guid) => guid.to_string(),
+            Some(guid) => guid.to_string().unwrap_or_default(),
         };
         let start: f64 = self.start.into();
         let end: f64 = self.end.into();
@@ -1617,5 +1702,21 @@ impl RazorEdit {
             start, end, guid, self.top_y_pos, self.bot_y_pos
         );
         line
+    }
+}
+
+impl std::str::FromStr for RazorEdit {
+    type Err = ReaRsError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
+impl TryFrom<&str> for RazorEdit {
+    type Error = ReaRsError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::parse(value)
     }
 }

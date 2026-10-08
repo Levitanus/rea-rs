@@ -6,9 +6,8 @@ use std::{
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
-    utils::{string_from_buf, WithNull},
-    Envelope, KnowsProject, ReaRsError, Reaper, ReaperResult, Take, Track,
-    WithReaperPtr,
+    utils::string_from_buf, Envelope, KnowsProject, ReaRsError, Reaper,
+    ReaperResult, Take, Track, WithReaperPtr,
 };
 
 /// Parametrizes FX functionality for [TrackFX] asn [TakeFX].
@@ -83,10 +82,11 @@ impl TrackFX {
         is_rec_fx: bool,
     ) -> ReaperResult<Option<Self>> {
         let name = name.into();
+        let name_cstring = CString::new(name)?;
         let index = unsafe {
             Reaper::get().low().TrackFX_AddByName(
                 parent.get()?.as_ptr(),
-                CString::new(name.with_null())?.as_ptr(),
+                name_cstring.as_ptr(),
                 is_rec_fx,
                 0,
             )
@@ -253,8 +253,7 @@ impl FX for TrackFX {
             )
         };
         match result {
-            true => Ok(string_from_buf(&buf)
-                .expect("Can not convert result to string.")),
+            true => string_from_buf(&buf),
             false => Err(ReaRsError::UnsuccessfulOperation(
                 "Can not get preset name",
             )),
@@ -427,11 +426,12 @@ impl FX for TrackFX {
 
     fn set_preset(&mut self, preset: impl Into<String>) -> ReaperResult<()> {
         let name = preset.into();
+        let name_cstring = CString::new(name)?;
         let result = unsafe {
             Reaper::get().low().TrackFX_SetPreset(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                CString::new(name.with_null())?.as_ptr(),
+                name_cstring.as_ptr(),
             )
         };
         match result {
@@ -507,11 +507,12 @@ impl param_parent::FXParamParent<Track> for TrackFX {
         param: impl Into<String>,
     ) -> ReaperResult<Option<FXParam<Track, Self>>> {
         let param = param.into();
+        let param_cstring = CString::new(param)?;
         let index = unsafe {
             Reaper::get().low().TrackFX_GetParamFromIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                CString::new(param.with_null())?.as_ptr(),
+                param_cstring.as_ptr(),
             )
         };
         let res = if index < 0 {
@@ -712,11 +713,12 @@ impl param_parent::FXParamParent<Track> for TrackFX {
         param: impl Into<String>,
     ) -> ReaperResult<Option<FXParam<Track, Self>>> {
         let param = param.into();
+        let param_cstring = CString::new(param)?;
         let index = unsafe {
             Reaper::get().low().TrackFX_GetParamFromIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                CString::new(param.with_null())?.as_ptr(),
+                param_cstring.as_ptr(),
             )
         };
         Ok(if index < 0 {
@@ -795,10 +797,11 @@ impl TakeFX {
         name: impl Into<String>,
     ) -> ReaperResult<Option<Self>> {
         let name = name.into();
+        let name_cstring = CString::new(name)?;
         let index = unsafe {
             Reaper::get().low().TakeFX_AddByName(
                 parent.get()?.as_ptr(),
-                CString::new(name.with_null())?.as_ptr(),
+                name_cstring.as_ptr(),
                 0,
             )
         };
@@ -1135,11 +1138,12 @@ impl FX for TakeFX {
 
     fn set_preset(&mut self, preset: impl Into<String>) -> ReaperResult<()> {
         let name = preset.into();
+        let name_cstring = CString::new(name)?;
         let result = unsafe {
             Reaper::get().low().TakeFX_SetPreset(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                CString::new(name.with_null())?.as_ptr(),
+                name_cstring.as_ptr(),
             )
         };
         match result {
@@ -1214,11 +1218,12 @@ impl param_parent::FXParamParent<Take> for TakeFX {
         param: impl Into<String>,
     ) -> ReaperResult<Option<FXParam<Take, Self>>> {
         let param = param.into();
+        let param_cstring = CString::new(param)?;
         let index = unsafe {
             Reaper::get().low().TakeFX_GetParamFromIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                CString::new(param.with_null())?.as_ptr(),
+                param_cstring.as_ptr(),
             )
         };
         Ok(if index < 0 {
@@ -1418,11 +1423,12 @@ impl param_parent::FXParamParent<Take> for TakeFX {
         param: impl Into<String>,
     ) -> ReaperResult<Option<FXParam<Take, Self>>> {
         let param = param.into();
+        let param_cstring = CString::new(param)?;
         let index = unsafe {
             Reaper::get().low().TakeFX_GetParamFromIdent(
                 self.parent.get()?.as_ptr(),
                 self.index as i32,
-                CString::new(param.with_null())?.as_ptr(),
+                param_cstring.as_ptr(),
             )
         };
         Ok(if index < 0 {

@@ -1,6 +1,5 @@
 use crate::{
     ptr_wrappers::{MediaTrack, TrackEnvelope},
-    utils::WithNull,
     AutomationMode, Envelope, KnowsProject, Pan, PanLaw, ReaRsError, Reaper,
     ReaperResult, Track, Volume, WithReaperPtr, GUID,
 };
@@ -64,7 +63,7 @@ impl<'a> TrackSend<'a> {
     /// almost can not affect other objects state — It uses a hack to
     /// mutate `<Immutable>` tracks. Keep this in mind.
     pub fn create_new(
-        source: &Track,
+        source: &'a Track,
         destination: &Track,
     ) -> ReaperResult<Self> {
         if source.project() != destination.project() {
@@ -78,21 +77,28 @@ impl<'a> TrackSend<'a> {
                 destination.get()?.as_ptr(),
             )
         };
-        let source: &Track = unsafe { std::mem::transmute(source) };
-        TrackSend::new(source, index as usize).ok_or(
-            ReaRsError::InvalidObject(
+        let index = usize::try_from(index).map_err(|_| {
+            ReaRsError::UnsuccessfulOperation("Could not create send")
+        })?;
+        let send = TrackSend {
+            track: source,
+            index,
+        };
+        if !send.validate()? {
+            return Err(ReaRsError::InvalidObject(
                 "No send at the given index after creation",
-            ),
-        )
+            ));
+        }
+        Ok(send)
     }
 }
 impl<'a> GenericSend<'a> for TrackSend<'a> {
-    fn new(track: &'a Track, index: usize) -> Option<Self> {
+    fn new(track: &'a Track, index: usize) -> ReaperResult<Option<Self>> {
         let obj = Self { track, index };
-        if let Err(_) = obj.validate() {
-            return None;
+        match obj.validate()? {
+            true => Ok(Some(obj)),
+            false => Ok(None),
         }
-        Some(obj)
     }
     /// Track that sends outside
     fn parent_track(&self) -> &Track {
@@ -118,12 +124,12 @@ pub struct TrackReceive<'a> {
 }
 impl<'a> TrackReceive<'a> {}
 impl<'a> GenericSend<'a> for TrackReceive<'a> {
-    fn new(track: &'a Track, index: usize) -> Option<Self> {
+    fn new(track: &'a Track, index: usize) -> ReaperResult<Option<Self>> {
         let obj = Self { track, index };
-        if let Err(_) = obj.validate() {
-            return None;
+        match obj.validate()? {
+            true => Ok(Some(obj)),
+            false => Ok(None),
         }
-        Some(obj)
     }
     /// Track, that receives.
     fn parent_track(&self) -> &Track {
@@ -151,12 +157,12 @@ pub struct HardwareSend<'a> {
 }
 impl<'a> HardwareSend<'a> {}
 impl<'a> GenericSend<'a> for HardwareSend<'a> {
-    fn new(track: &'a Track, index: usize) -> Option<Self> {
+    fn new(track: &'a Track, index: usize) -> ReaperResult<Option<Self>> {
         let obj = Self { track, index };
-        if let Err(_) = obj.validate() {
-            return None;
+        match obj.validate()? {
+            true => Ok(Some(obj)),
+            false => Ok(None),
         }
-        Some(obj)
     }
     fn parent_track(&self) -> &Track {
         self.track
@@ -176,21 +182,18 @@ impl<'a> GenericSendMut<'a> for HardwareSend<'a> {}
 pub trait GenericSend<'a>: SendIntType + Sized {
     fn parent_track(&self) -> &Track;
     fn index(&self) -> usize;
-    fn new(track: &'a Track, index: usize) -> Option<Self>;
-    fn validate(&self) -> anyhow::Result<()> {
+    fn new(track: &'a Track, index: usize) -> ReaperResult<Option<Self>>;
+    fn validate(&self) -> ReaperResult<bool> {
+        i32::try_from(self.index()).map_err(|_| {
+            ReaRsError::InvalidObject("send index out of range")
+        })?;
         let valid = match self.as_int() {
             ..0 => self.parent_track().n_receives()? > self.index(),
 
             0 => self.parent_track().n_sends()? > self.index(),
             0.. => self.parent_track().n_hardware_sends()? > self.index(),
         };
-        match valid {
-            false => {
-                Err(ReaRsError::InvalidObject("no receive at the given index")
-                    .into())
-            }
-            true => Ok(()),
-        }
+        Ok(valid)
     }
 
     /// Core method to retrieve send properties.
@@ -201,8 +204,10 @@ pub trait GenericSend<'a>: SendIntType + Sized {
             Reaper::get().low().GetTrackSendInfo_Value(
                 track_ptr,
                 self.as_int(),
-                self.index() as i32,
-                CString::new(param.into().with_null())?.as_ptr(),
+                i32::try_from(self.index()).map_err(|_| {
+                    ReaRsError::InvalidObject("send index out of range")
+                })?,
+                CString::new(param.into())?.as_ptr(),
             )
         })
     }
@@ -220,13 +225,13 @@ pub trait GenericSend<'a>: SendIntType + Sized {
         Ok(self.get_info_value("B_MONO")? as i32 != 0)
     }
     fn volume(&self) -> ReaperResult<Volume> {
-        Ok(Volume::from(self.get_info_value("D_VOL")?))
+        Volume::try_from(self.get_info_value("D_VOL")?)
     }
     fn pan(&self) -> ReaperResult<Pan> {
-        Ok(Pan::from(self.get_info_value("D_PAN")?))
+        Pan::try_from(self.get_info_value("D_PAN")?)
     }
     fn pan_law(&self) -> ReaperResult<PanLaw> {
-        Ok(PanLaw::from(self.get_info_value("D_PANLAW")?))
+        PanLaw::try_from(self.get_info_value("D_PANLAW")?)
     }
     fn send_mode(&self) -> ReaperResult<SendMode> {
         Ok(SendMode::from(self.get_info_value("I_SENDMODE")?))
@@ -270,7 +275,7 @@ pub trait GenericSend<'a>: SendIntType + Sized {
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                CString::new(String::from("P_DESTTRACK\0"))?.as_ptr(),
+                CString::new(String::from("P_DESTTRACK"))?.as_ptr(),
                 null_mut(),
             ) as *mut rea_rs_low::raw::MediaTrack
         };
@@ -288,7 +293,7 @@ pub trait GenericSend<'a>: SendIntType + Sized {
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                CString::new(String::from("P_SRCTRACK\0"))?.as_ptr(),
+                CString::new(String::from("P_SRCTRACK"))?.as_ptr(),
                 null_mut(),
             ) as *mut rea_rs_low::raw::MediaTrack
         };
@@ -312,8 +317,7 @@ pub trait GenericSend<'a>: SendIntType + Sized {
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                CString::new(selector.into().to_string().with_null())?
-                    .as_ptr(),
+                CString::new(selector.into().try_to_string()?)?.as_ptr(),
                 null_mut(),
             ) as *mut rea_rs_low::raw::TrackEnvelope
         };
@@ -363,7 +367,7 @@ pub trait GenericSendMut<'a>: SendIntType + GenericSend<'a> {
                 self.parent_track().get()?.as_ptr(),
                 self.as_int(),
                 self.index() as i32,
-                CString::new(param.into().with_null())?.as_ptr(),
+                CString::new(param.into())?.as_ptr(),
                 value,
             )
         };
@@ -490,14 +494,14 @@ pub enum EnvelopeSelector {
     Chunk(EnvelopeChunk),
     Guid(GUID),
 }
-impl ToString for EnvelopeSelector {
-    fn to_string(&self) -> String {
+impl EnvelopeSelector {
+    pub fn try_to_string(&self) -> ReaperResult<String> {
         let start = String::from("P_ENV:");
         let append = match self {
-            Self::Chunk(ch) => ch.to_string(),
-            Self::Guid(guid) => guid.to_string(),
+            Self::Chunk(chunk) => chunk.to_string(),
+            Self::Guid(guid) => guid.to_string()?,
         };
-        start + &append
+        Ok(start + &append)
     }
 }
 impl Into<EnvelopeSelector> for EnvelopeChunk {

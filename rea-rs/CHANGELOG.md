@@ -1,3 +1,42 @@
+# 1.0.0 - Unreleased
+
+This is the first stable release and contains breaking API changes. See
+`RELEASE_1.0.0_API_AUDIT.md` for the migration ledger. In particular, fallible
+host operations and conversions now return `ReaperResult`/`TryFrom`; project
+positions are signed and use `SourceOffset` precision; measure indices use
+REAPER's signed `i32` numbering directly (including zero); MIDI channel and
+buffer validation is stricter; and SWELL-backed track geometry uses layout
+types. There are no compatibility aliases or deprecated legacy signatures.
+
+Publishing order: `rea-rs-low`, `rea-rs-macros`, `rea-rs`, then
+`rea-rs-test`. Publish each crate only after its exact-version dependencies
+are available on crates.io; the test plug-in package is not published.
+
+## Changed
+
+* Made invalid input, malformed host data, and fallible host calls report
+    errors instead of panicking or silently substituting defaults.
+* Added a PASS/FAIL file handshake to the REAPER integration-test runner and
+    report host exit codes, signals, missing results, and timeouts separately.
+* Refreshed vendored REAPER SDK and WDL sources from upstream.
+* Aligned all publishable workspace crates and internal dependencies to 1.0.0.
+
+## Fixed
+
+* Corrected REAPER Linux cache detection and ensured the test extension is
+    rebuilt before installation.
+* Fixed native output-buffer boundary checks and MIDI event validation.
+
+## Migration
+
+Review the method-by-method audit before upgrading. Breaking changes include
+fallible constructors/getters/setters, checked enum/numeric conversions,
+signed position handling, direct `i32` measure indices, corrected
+`get_receive` spelling, fallible send lookups, and explicit error propagation
+for project switching, MIDI parsing, and resource validity.
+
+---
+
 # 0.2.0
 ## Changed
 

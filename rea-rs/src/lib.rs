@@ -20,9 +20,9 @@
 //! These are the dependencies:
 //! ```toml
 //! [dependencies]
-//! rea-rs = "0.2.0"
-//! rea-rs-low = "0.2.0" # optional
-//! rea-rs-macros = "0.2.0"
+//! rea-rs = "1.0.0"
+//! rea-rs-low = "1.0.0" # optional
+//! rea-rs-macros = "1.0.0"
 //! ```
 //!
 //! But, actually, all medium- and low-level functionality is still existing in
@@ -32,16 +32,17 @@
 //! The Common entry point should look like this:
 //!
 //! ```no_run
-//! use rea_rs::{ActionKind, Reaper, PluginContext};
+//! use rea_rs::{ActionKind, ActionRegistrationOptions, Section, Reaper, PluginContext};
 //! use rea_rs_macros::reaper_extension_plugin;
 //! use std::error::Error;
 //!
 //! #[reaper_extension_plugin]
-//! fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
+//! fn plugin_main(context: PluginContext) -> Result<(), anyhow::Error> {
 //!     Reaper::init_global(context);
 //!     let reaper = Reaper::get_mut();
 //!     let message = "Hello from small extension";
-//!     reaper.show_console_msg(message);
+//!     reaper.show_console_msg(message)?;
+//!     let _ = ActionRegistrationOptions::new(Section::Main);
 //!     Ok(())
 //! }
 //! ```
@@ -51,7 +52,7 @@
 //!
 //! ```no_run
 //! use rea_rs::{
-//!     ActionHook, ActionKind, PluginContext, Reaper, RegisteredAccel, Timer,
+//!     ActionHook, ActionKind, ActionRegistrationOptions, PluginContext, Reaper, RegisteredAction, Timer,
 //! };
 //! use rea_rs_macros::reaper_extension_plugin;
 //! use std::error::Error;
@@ -59,25 +60,25 @@
 //!
 //! #[derive(Debug)]
 //! struct Listener {
-//!     action: RegisteredAccel,
+//!     action: RegisteredAction,
 //! }
 //!
 //! // Full list of function larger.
 //! impl Timer for Listener {
-//!     fn run(&mut self) -> Result<(), Box<dyn Error>> {
+//!     fn run(&mut self) -> Result<(), anyhow::Error> {
 //!         Reaper::get().perform_action(self.action.command_id, 0, None);
 //!         Ok(())
 //!     }
 //!     fn id_string(&self) -> String {"test listener".to_string()}
 //! }
 //!
-//! fn my_action_func(_hook: &mut ActionHook) -> Result<(), Box<dyn Error>> {
-//!     Reaper::get().show_console_msg("running");
+//! fn my_action_func(_hook: &mut ActionHook) -> Result<(), anyhow::Error> {
+//!     Reaper::get().show_console_msg("running")?;
 //!     Ok(())
 //! }
 //!
 //! #[reaper_extension_plugin]
-//! fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
+//! fn plugin_main(context: PluginContext) -> Result<(), anyhow::Error> {
 //!     Reaper::init_global(context);
 //!     let reaper = Reaper::get_mut();
 //!
@@ -88,8 +89,8 @@
 //!         "description",
 //!         ActionKind::NotToggleable,
 //!         my_action_func,
-//!         // Only type currently supported
-//!         None
+//!         // Register this action in REAPER's global section.
+//!         ActionRegistrationOptions::new(rea_rs::Section::Main)
 //!     )?;
 //!
 //!     reaper.register_timer(Arc::new(RefCell::new(Listener{action})));
@@ -153,9 +154,10 @@
 //!
 //! Enjoy the coding!
 
-use std::{ffi::NulError, str::Utf8Error};
+use std::{ffi::NulError, str::Utf8Error, string::FromUtf8Error};
 
 use anyhow::Error;
+use base64::DecodeError;
 pub use chrono::Duration;
 pub use int_enum::IntEnum;
 pub use rea_rs_low::PluginContext;
@@ -164,6 +166,7 @@ pub mod reaper;
 pub use reaper::*;
 
 pub mod ptr_wrappers;
+pub use ptr_wrappers::ReaperHwnd;
 pub mod reaper_pointer;
 
 pub mod simple_functions;
@@ -234,6 +237,28 @@ pub use control_surface::*;
 
 pub mod socket;
 
+pub mod swell_gui;
+pub use swell_gui::{
+    capture_window, client_to_screen, default_logfont, screen_to_client,
+    Bitmap, Brush, Button, Canvas, CheckBox, ComboBox, ComboBoxOptions,
+    CommandNotification, ContainerEvent, ControlEvent, ControlHandle,
+    ControlKind, ControlRect, DockPosition, DrawTextFlags, DrawTextOptions,
+    EditField, EventResponse, Font, FontCharset, FontSpec, GroupBox, Icon,
+    ImageList, ImageSize, KeyMessage, KeyModifiers, LiceBitmap,
+    LiceBitmapKind, LiceBlitOptions, LiceCombineMode, LiceFont, LicePoint,
+    LiceRect, LiceSurface, LiceTextOptions, ListBox, ListBoxOptions, ListView,
+    ListViewImageListKind, ListViewOptions, MouseButton, MouseButtons,
+    MouseMessage, NativeContainer, NativeKey, PaintInfo, Panel, PanelContext,
+    PanelLayout, PanelRects, PanelSizes, Pen, PenStyle, ProgressBar,
+    ProgressBarOptions, RadioButton, RadioButtonOptions, ReaperControl,
+    ReaperWindow, ScrollCommand, ScrollMetrics, ScrollOffset, ScrollState,
+    ScrollView, ScrollViewEvent, ScrollViewEventSource, ScrollbarRenderer,
+    ScrollbarVisibility, SignedPoint, StaticLabel, SwellId, TabControl,
+    TabControlOptions, Trackbar, TrackbarOptions, TreeView, TreeViewOptions,
+    WidgetEventCallback, WindowCommand, WindowEvent, WindowEventCallback,
+    WindowHandler, WindowId, WindowSpec,
+};
+
 #[derive(thiserror::Error, Debug)]
 pub enum ReaRsError {
     #[error("The pointer to {0} is null.")]
@@ -262,6 +287,10 @@ pub enum ReaRsError {
     CString(#[from] NulError),
     #[error("Utf8Error: can not convert pointer to String")]
     Utf8Error(#[from] Utf8Error),
+    #[error("DecodeError: can not convert base64 string")]
+    DecodeError(#[from] DecodeError),
+    #[error("FromUtf8Error: can not convert base64 string")]
+    FromUtf8Error(#[from] FromUtf8Error),
     #[error("UnderlyingError: other error {0}")]
     UnderlyingError(Error),
     #[error("IntEnumError: {0}")]

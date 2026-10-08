@@ -43,20 +43,20 @@ impl<'a, T: KnowsProject> AudioAccessor<'a, T> {
         })
     }
     pub fn start(&self) -> Result<Position, ReaRsError> {
-        Ok(unsafe {
+        let seconds = unsafe {
             Reaper::get()
                 .low()
                 .GetAudioAccessorStartTime(self.get()?.as_ptr())
-                .into()
-        })
+        };
+        Position::from_host_seconds(seconds)
     }
     pub fn end(&self) -> Result<Position, ReaRsError> {
-        Ok(unsafe {
+        let seconds = unsafe {
             Reaper::get()
                 .low()
                 .GetAudioAccessorEndTime(self.get()?.as_ptr())
-                .into()
-        })
+        };
+        Position::from_host_seconds(seconds)
     }
 
     /// Get buffer of samples with given absolute project position in samples.
@@ -86,15 +86,26 @@ impl<'a, T: KnowsProject> AudioAccessor<'a, T> {
         n_channels: u8,
         samplerate: u32,
     ) -> Result<Option<Vec<f64>>, ReaRsError> {
-        let mut sample_buffer =
-            vec![0.0; (samples_per_channel * n_channels as u32) as usize];
-        let start = start.as_time(samplerate) + self.start()?.as_duration();
+        let sample_count = usize::try_from(samples_per_channel)
+            .ok()
+            .and_then(|samples| samples.checked_mul(usize::from(n_channels)))
+            .ok_or(ReaRsError::InvalidObject(
+                "audio sample buffer size overflow",
+            ))?;
+        let mut sample_buffer = vec![0.0; sample_count];
+        let start_seconds = self.start()?.as_seconds_f64()
+            + start.as_time(samplerate)?.as_secs_f64();
+        if !start_seconds.is_finite() {
+            return Err(ReaRsError::InvalidObject(
+                "audio accessor start out of range",
+            ));
+        }
         let result = unsafe {
             Reaper::get().low().GetAudioAccessorSamples(
                 self.get()?.as_ptr(),
                 samplerate as i32,
                 n_channels as i32,
-                start.as_secs_f64(),
+                start_seconds,
                 samples_per_channel as i32,
                 sample_buffer.as_mut_ptr(),
             )

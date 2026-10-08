@@ -1,8 +1,7 @@
 use crate::{
-    ptr_wrappers::TrackEnvelope,
-    utils::{string_from_buf, WithNull},
-    GetLength, KnowsProject, Position, ReaRsError, Reaper, ReaperResult,
-    WithReaperPtr, GUID,
+    ptr_wrappers::TrackEnvelope, utils::string_from_buf, GetLength,
+    KnowsProject, Position, ReaRsError, Reaper, ReaperResult, WithReaperPtr,
+    GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
@@ -52,8 +51,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     pub fn guid(&self) -> ReaperResult<GUID> {
         let size = 50;
         let mut buf = vec![0_i8; size];
-        let category = CString::new("GUID")
-            .expect("Can not convert category to CString.");
+        let category = CString::new("GUID")?;
         let result = unsafe {
             Reaper::get().low().GetSetEnvelopeInfo_String(
                 self.get()?.as_ptr(),
@@ -200,6 +198,9 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         match result {
             true => unsafe {
                 Ok(EnvelopePoint {
+                    position: Position::new(Duration::from_secs_f64(
+                        time.assume_init(),
+                    )),
                     value: self.scale_from(value.assume_init())?,
                     shape: EnvelopePointShape::from_int(shape.assume_init())
                         .map_err(|_| {
@@ -213,7 +214,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
                 })
             },
             false => Err(ReaRsError::UnsuccessfulOperation(
-                "Can not set envelope point!",
+                "Can not get envelope point!",
             )
             .into()),
         }
@@ -238,7 +239,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
             Reaper::get().low().GetEnvelopePointByTimeEx(
                 self.get()?.as_ptr(),
                 a_itm,
-                position.into().into(),
+                position.into().as_seconds_f64(),
             )
         };
         if point_index < 0 {
@@ -265,6 +266,15 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         samplerate: u32,
         samples_requested: usize,
     ) -> ReaperResult<EnvelopeEvaluateResult> {
+        if samplerate == 0 {
+            return Err(ReaRsError::InvalidObject(
+                "envelope evaluation sample rate must be non-zero",
+            ));
+        }
+        let samples_requested =
+            i32::try_from(samples_requested).map_err(|_| {
+                ReaRsError::InvalidObject("too many envelope samples")
+            })?;
         let (mut value, mut dvds, mut ddvds, mut dddvds) = (
             MaybeUninit::zeroed(),
             MaybeUninit::zeroed(),
@@ -274,9 +284,9 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         unsafe {
             let result = Reaper::get().low().Envelope_Evaluate(
                 self.get()?.as_ptr(),
-                position.as_duration().as_secs_f64(),
+                position.as_seconds_f64(),
                 samplerate as f64,
-                samples_requested as i32,
+                samples_requested,
                 value.as_mut_ptr(),
                 dvds.as_mut_ptr(),
                 ddvds.as_mut_ptr(),
@@ -284,7 +294,11 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
             );
             Ok(EnvelopeEvaluateResult {
                 position,
-                valid_for: result as usize,
+                valid_for: usize::try_from(result).map_err(|_| {
+                    ReaRsError::UnsuccessfulOperation(
+                        "Envelope evaluation failed",
+                    )
+                })?,
                 value: self.scale_from(value.assume_init())?,
                 first_derivative: dvds.assume_init(),
                 second_derivative: ddvds.assume_init(),
@@ -324,10 +338,11 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         category: impl Into<String>,
     ) -> ReaperResult<f64> {
         let category = category.into();
+        let category_cstring = CString::new(category)?;
         Ok(unsafe {
             Reaper::get().low().GetEnvelopeInfo_Value(
                 self.get()?.as_ptr(),
-                CString::new(category.with_null())?.as_ptr(),
+                category_cstring.as_ptr(),
             )
         })
     }
@@ -535,8 +550,8 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         position: Position,
         length: impl GetLength,
     ) -> ReaperResult<AutomationItem<'a, P>> {
-        let length: f64 = length.get_length(position).as_secs_f64();
-        let position: f64 = position.into();
+        let length: f64 = length.get_length(position)?.as_secs_f64();
+        let position = position.as_seconds_f64();
         let pool_id = match pool_id {
             0 => -1,
             x => x as i32,
@@ -560,27 +575,24 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     pub fn set_point(
         &mut self,
         point_index: usize,
-        position: Option<Position>,
+        // position: Option<Position>,
         point: EnvelopePoint,
         sort: bool,
     ) -> ReaperResult<()> {
-        self.set_point_ex(None, false, point_index, position, point, sort)
+        self.set_point_ex(None, false, point_index, point, sort)
     }
-    fn set_point_ex(
+    pub fn set_point_ex(
         &self,
         automation_item_index: Option<usize>,
         only_visible: bool,
         point_index: usize,
-        position: Option<Position>,
+        // position: Option<Position>,
         point: EnvelopePoint,
         sort: bool,
     ) -> ReaperResult<()> {
         let mut sort = MaybeUninit::new(!sort);
         let a_itm = automation_item_idx(only_visible, automation_item_index);
-        let mut time = match position {
-            Some(pos) => MaybeUninit::new(pos.as_duration().as_secs_f64()),
-            None => MaybeUninit::zeroed(),
-        };
+        let mut time = MaybeUninit::new(point.position.as_seconds_f64());
         let mut value = MaybeUninit::new(self.scale_to(point.value)?);
         let mut shape = MaybeUninit::new(point.shape.int_value());
         let mut tension = MaybeUninit::new(point.tension.into());
@@ -609,17 +621,17 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
 
     pub fn insert_point(
         &mut self,
-        position: Position,
+        // position: Position,
         point: EnvelopePoint,
         sort: bool,
     ) -> ReaperResult<()> {
-        self.insert_point_ex(None, false, position, point, sort)
+        self.insert_point_ex(None, false, point, sort)
     }
-    fn insert_point_ex(
+    pub fn insert_point_ex(
         &self,
         automation_item_index: Option<usize>,
         only_visible: bool,
-        position: Position,
+        // position: Position,
         point: EnvelopePoint,
         sort: bool,
     ) -> ReaperResult<()> {
@@ -629,7 +641,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
             Reaper::get().low().InsertEnvelopePointEx(
                 self.get()?.as_ptr(),
                 a_itm,
-                position.into(),
+                point.position.as_seconds_f64(),
                 self.scale_to(point.value)?,
                 point.shape.int_value(),
                 point.tension.into(),
@@ -649,7 +661,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     pub fn delete_point(&mut self, index: usize) -> ReaperResult<()> {
         self.delete_point_ex(None, false, index)
     }
-    fn delete_point_ex(
+    pub fn delete_point_ex(
         &self,
         automation_item_index: Option<usize>,
         only_visible: bool,
@@ -679,7 +691,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     ) -> ReaperResult<()> {
         self.delete_point_range_ex(None, false, start, end)
     }
-    fn delete_point_range_ex(
+    pub fn delete_point_range_ex(
         &self,
         automation_item_index: Option<usize>,
         only_visible: bool,
@@ -691,8 +703,8 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
             Reaper::get().low().DeleteEnvelopePointRangeEx(
                 self.get()?.as_ptr(),
                 a_itm,
-                start.into().into(),
-                end.into().into(),
+                start.into().as_seconds_f64(),
+                end.into().as_seconds_f64(),
             )
         };
         match result {
@@ -707,7 +719,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     pub fn sort_points(&mut self) -> ReaperResult<()> {
         self.sort_points_ex(None)
     }
-    fn sort_points_ex(
+    pub fn sort_points_ex(
         &self,
         automation_item_index: Option<usize>,
     ) -> ReaperResult<()> {
@@ -733,7 +745,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         let result = unsafe {
             Reaper::get().low().SetEnvelopeStateChunk(
                 self.get()?.as_ptr(),
-                CString::new(state.with_null())?.as_ptr(),
+                CString::new(state)?.as_ptr(),
                 with_undo,
             )
         };
@@ -748,6 +760,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EnvelopePoint {
+    pub position: Position,
     pub value: f64,
     pub shape: EnvelopePointShape,
     // from -1.0 to 1.0
@@ -756,12 +769,14 @@ pub struct EnvelopePoint {
 }
 impl EnvelopePoint {
     pub fn new(
+        position: Position,
         value: f64,
         shape: EnvelopePointShape,
         tension: f64,
         selected: bool,
     ) -> Self {
         Self {
+            position,
             value,
             shape,
             tension,
@@ -878,7 +893,7 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
             Reaper::get().low().GetSetAutomationItemInfo(
                 self.envelope().get()?.as_ptr(),
                 self.index() as i32,
-                CString::new(category.with_null())?.as_ptr(),
+                CString::new(category)?.as_ptr(),
                 0.0,
                 false,
             )
@@ -893,7 +908,7 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
     }
 
     pub fn position(&self) -> ReaperResult<Position> {
-        Ok(self.get_info_value("D_POSITION")?.into())
+        Position::from_host_seconds(self.get_info_value("D_POSITION")?)
     }
 
     pub fn length(&self) -> ReaperResult<Duration> {
@@ -935,11 +950,12 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
         value: f64,
     ) -> ReaperResult<()> {
         let category = category.into();
+        let category_cstring = CString::new(category)?;
         unsafe {
             Reaper::get().low().GetSetAutomationItemInfo(
                 self.envelope().get()?.as_ptr(),
                 self.index() as i32,
-                CString::new(category.with_null())?.as_ptr(),
+                category_cstring.as_ptr(),
                 value,
                 true,
             );
@@ -955,18 +971,22 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
     }
 
     pub fn set_position(&mut self, position: Position) -> ReaperResult<()> {
-        self.set_info_value("D_POSITION", position.into())
+        self.set_info_value("D_POSITION", position.as_seconds_f64())
     }
 
     pub fn set_length(&mut self, length: impl GetLength) -> ReaperResult<()> {
         self.set_info_value(
             "D_LENGTH",
-            length.get_length(self.position()?).as_secs_f64(),
+            length.get_length(self.position()?)?.as_secs_f64(),
         )
     }
 
     pub fn set_play_rate(&mut self, rate: f64) -> ReaperResult<()> {
-        assert!(rate > 0.0);
+        if !rate.is_finite() || rate <= 0.0 {
+            return Err(ReaRsError::InvalidObject(
+                "automation item play rate must be finite and positive",
+            ));
+        }
         self.set_info_value("D_PLAYRATE", rate)
     }
 
@@ -975,13 +995,21 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
     /// base line seems to work from API (I can set and read it). But it is not
     /// set in interface, and didn't affected to points in tests.
     pub fn set_base_line(&mut self, base_line: f64) -> ReaperResult<()> {
-        assert!((0.0..1.0).contains(&base_line));
+        if !base_line.is_finite() || !(0.0..1.0).contains(&base_line) {
+            return Err(ReaRsError::InvalidObject(
+                "automation item baseline must be between 0 and 1",
+            ));
+        }
         self.set_info_value("D_BASELINE", base_line)
     }
 
     /// Amplitude should be in range of `-1.0 .. 1.0`
     pub fn set_amplitude(&mut self, amplitude: f64) -> ReaperResult<()> {
-        assert!((-1.0..1.0).contains(&amplitude));
+        if !amplitude.is_finite() || !(-1.0..1.0).contains(&amplitude) {
+            return Err(ReaRsError::InvalidObject(
+                "automation item amplitude must be between -1 and 1",
+            ));
+        }
         self.set_info_value("D_AMPLITUDE", amplitude)
     }
 
@@ -1019,7 +1047,7 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
         &mut self,
         only_visible: bool,
         point_index: usize,
-        position: Option<Position>,
+        // position: Option<Position>,
         point: EnvelopePoint,
         sort: bool,
     ) -> ReaperResult<()> {
@@ -1028,7 +1056,6 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
             Some(index),
             only_visible,
             point_index,
-            position,
             point,
             sort,
         )
@@ -1042,18 +1069,13 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
     pub fn insert_point(
         &mut self,
         only_visible: bool,
-        position: Position,
+        // position: Position,
         point: EnvelopePoint,
         sort: bool,
     ) -> ReaperResult<()> {
         let index = self.index();
-        self.envelope().insert_point_ex(
-            Some(index),
-            only_visible,
-            position,
-            point,
-            sort,
-        )
+        self.envelope()
+            .insert_point_ex(Some(index), only_visible, point, sort)
     }
 
     /// if `only_visible == true`, points will be presented as they are seen in

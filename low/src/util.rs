@@ -1,7 +1,6 @@
 use super::raw::{reaper_plugin_info_t, HINSTANCE};
 use super::PluginContext;
 use crate::StaticExtensionPluginContext;
-use std::error::Error;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 /// This function catches panics before they reach REAPER.
@@ -32,7 +31,7 @@ pub unsafe fn bootstrap_extension_plugin(
     h_instance: HINSTANCE,
     rec: *mut reaper_plugin_info_t,
     static_context: StaticExtensionPluginContext,
-    init: fn(PluginContext) -> Result<(), Box<dyn Error>>,
+    init: fn(PluginContext) -> Result<(), anyhow::Error>,
 ) -> i32 {
     // TODO-low Log early errors
     firewall(|| {
@@ -74,6 +73,7 @@ pub unsafe fn bootstrap_extension_plugin(
 /// # Safety
 ///
 /// Must only be called in main thread.
+#[allow(static_mut_refs)]
 pub unsafe fn execute_plugin_destroy_hooks() {
     for f in PLUGIN_DESTROY_HOOKS.drain(..) {
         f();
@@ -90,6 +90,7 @@ pub unsafe fn execute_plugin_destroy_hooks() {
 /// # Safety
 ///
 /// Must only be called in main thread.
+#[allow(static_mut_refs)]
 pub unsafe fn register_plugin_destroy_hook(f: fn()) {
     PLUGIN_DESTROY_HOOKS.push(f);
 }

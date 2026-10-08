@@ -2,16 +2,13 @@ use std::ptr::null;
 
 use serde_derive::{Deserialize, Serialize};
 
-use crate::{
-    Position, ReaRsError, Reaper, ReaperResult, SourceOffset, Take,
-    WithReaperPtr,
-};
+use crate::{Position, ReaRsError, Reaper, ReaperResult, Take, WithReaperPtr};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StretchMarker {
     pub index: usize,
     pub position: Position,
-    pub source_position: SourceOffset,
+    pub source_position: Position,
     pub slope: f64,
 }
 
@@ -81,8 +78,8 @@ impl Take {
         };
         Ok(Some(StretchMarker {
             index: idx as usize,
-            position: Position::from(position),
-            source_position: SourceOffset::from_secs_f64(source_position),
+            position: Position::from_host_seconds(position)?,
+            source_position: Position::from_secs_f64(source_position)?,
             slope,
         }))
     }
@@ -102,7 +99,7 @@ impl Take {
         &mut self,
         index: impl Into<Option<usize>>,
         position: Position,
-        source_position: impl Into<Option<SourceOffset>>,
+        source_position: impl Into<Option<Position>>,
     ) -> ReaperResult<usize> {
         let source_position =
             source_position.into().map(|value| value.as_secs_f64());

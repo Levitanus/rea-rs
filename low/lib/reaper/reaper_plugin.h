@@ -315,6 +315,16 @@ typedef struct reaper_plugin_info_t
        void on_exit(void) { }
        plugin_register("atexit",(void*)on_exit);
 
+  ext_name:
+  ext_url:
+  ext_vendor:
+     These can all be registered at extension load-time only in order to provide information on the
+     plug-in (for purposes of the prefs view). ext_url should be a page where the user can get updates, ideally.
+
+       plugin_register("ext_name",(void*)"MyPluginName");
+
+
+
   accel_section:
   action_help:
   custom_action:
@@ -626,7 +636,14 @@ typedef struct _REAPER_cue
   double m_endtime;
   bool m_isregion;
   char *m_name; // can be NULL if unnamed
-  int m_flags; // &1:DEPRECATED caller must call Extended(PCM_SOURCE_EXT_ENUMCUES, -1, &cue, 0) when finished, &2:time is QN, &0x10000:write cue regardless of sink settings, &4:is chapter, &(8|16)=8:has low confidence cue name, &(8|16)=16:has medium confidence cue name, &(8|16)=24:has high confidence cue name
+  int m_flags; // &1:DEPRECATED caller must call Extended(PCM_SOURCE_EXT_ENUMCUES, -1, &cue, 0) when finished
+               // &2:time is QN
+               // &0x10000:write cue regardless of sink settings
+               // &4:is chapter
+               // &(8|16)=8:has low confidence cue name
+               // &(8|16)=16:has medium confidence cue name
+               // &(8|16)=24:has high confidence cue name
+               // &32:is hidden
   char resvd[124]; // future expansion -- should be 0
 } REAPER_cue;
 
@@ -650,6 +667,7 @@ typedef struct _REAPER_inline_positioninfo
   void *extraParms[8];
   // WM_KEYDOWN handlers can use MSG *msg = (MSG *)extraParms[0]
   // WM_SETCURSOR handlers should set *extraParms[0] = hcursor
+  // WM_PAINT: (int)(INT_PTR)extraParms[0] is flags, &1= continuous scroll active, don't draw decorations/etc
 } REAPER_inline_positioninfo;
 
 
@@ -1509,6 +1527,8 @@ class IReaperControlSurface
 #define CSURF_EXT_SETFXCHANGE 0x00010013 // parm1=(MediaTrack*)track, whenever FX are added, deleted, or change order. flags=(INT_PTR)parm2, &1=rec fx
 #define CSURF_EXT_SETPROJECTMARKERCHANGE 0x00010014 // whenever project markers are changed
 #define CSURF_EXT_TRACKFX_PRESET_CHANGED  0x00010015 // parm1=(MediaTrack*)track, parm2=(int*)fxidx (6.13+ probably)
+#define CSURF_EXT_TRACKFX_PARAMINFO_CHANGED 0x00010016 // parm1=(MediaTrack*)track, parm2=(int*)fxidx, called when parameter names or context change
+#define CSURF_EXT_TAKEFX_PARAMINFO_CHANGED 0x00010017 // parm1=(MediaItem_Take*)take, parm2=(int*)fxidx, called when parameter names or context change
 #define CSURF_EXT_SUPPORTS_EXTENDED_TOUCH 0x00080001 // returns nonzero if GetTouchState can take isPan=2 for width, etc
 #define CSURF_EXT_MIDI_DEVICE_REMAP 0x00010099 // parm1 = isout, parm2 = old idx, parm3 = new idx
 

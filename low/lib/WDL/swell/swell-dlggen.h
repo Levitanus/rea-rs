@@ -17,33 +17,9 @@
        misrepresented as being the original software.
     3. This notice may not be removed or altered from any source distribution.
   
-  DialogBox emulation is here. To declare the resource at a global level, use (in any source file that includes this file and resource.h):
+  This file provides functions to dynamically create controls in a view from a win32 resource script.
 
-  
-  #ifdef MAC
-
-
-  SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(IDD_SOMEDIALOG,0,"Dialog Box Title",222,55,1.8) // width, height, scale (1.8 is usually good)
-
-  BEGIN
-  DEFPUSHBUTTON   "OK",IDOK,117,33,47,14
-  CONTROL         "Expand MIDI tracks to new REAPER tracks                    ",IDC_CHECK1,
-  "Button",BS_AUTOCHECKBOX | WS_TABSTOP,4,7,214,10
-  CONTROL         "Merge MIDI tempo map to project tempo map at                ",
-  IDC_CHECK2,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,4,19,
-  214,10
-  PUSHBUTTON      "Cancel",IDCANCEL,168,33,50,14
-  END
-
-  SWELL_DEFINE_DIALOG_RESOURCE_END(IDD_SOMEDIALOG)
-
-
-  #endif
-
-
-  This file also provides functions to dynamically create controls in a view from a win32 resource script.
-
-
+  Use swell_resgen.pl or swell_resgen.php on the .rc file, which will produce .rc_mac_dlg, include that.
 
 */
 
@@ -136,6 +112,9 @@ struct SWELL_DlgResourceEntry
 #define SWELL_DLG_WS_NOAUTOSIZE 8
 #define SWELL_DLG_WS_OPAQUE 16
 #define SWELL_DLG_WS_DROPTARGET 32
+#ifdef SWELL_TARGET_OSX
+#define SWELL_DLG_WS_DEFAULT_SCALING 128
+#endif
      
 typedef struct SWELL_DialogResourceIndex
 {
@@ -182,12 +161,14 @@ class SWELL_DialogRegHelper {
   class SWELL_DialogRegValidator 
   {
     public:
-      SWELL_DialogRegValidator(const SWELL_DlgResourceEntry *recs, size_t recs_sz, int dlg_w, int dlg_h)
+      SWELL_DialogRegValidator(const SWELL_DlgResourceEntry *recs, size_t recs_sz, int dlg_w, int dlg_h, int recid)
       {
         if (recs_sz>1)
         {
           // check for duplicate IDs
+          // also check for multiple DEFPUSHBUTTON
           WDL_IntKeyedArray<bool> tmp;
+          int defpushcnt = 0;
           for (size_t x = 0; x < recs_sz; x ++)
           {
             const SWELL_DlgResourceEntry *list = recs + x;
@@ -195,16 +176,26 @@ class SWELL_DialogRegHelper {
             int parms[6] = { list->p1, list->p2, list->p3, list->p4, list->p5, list->p6 };
             const int coord_offs = 1; // all, I guess?
             const int xpos = parms[coord_offs], ypos = parms[coord_offs+1];
-            const int w = parms[coord_offs+2];
-            const int h = strcmp(list->str1,"__SWELL_COMBO") ? parms[coord_offs+3] : 0;
-
             WDL_ASSERT(xpos >= -1);
             WDL_ASSERT(ypos >= -1);
-            WDL_ASSERT(xpos + w <= dlg_w);
-            WDL_ASSERT(ypos + h <= dlg_h);
+            if (list->flag1 && !strcmp(list->str1,"__SWELL_BUTTON"))
+            {
+              if (defpushcnt) wdl_log("resource %d has duplicate DEFPUSHBUTTON\n",recid);
+              WDL_ASSERT(!defpushcnt);
+              defpushcnt++;
+            }
+
+            // far-bounds check; for old style pre-scaled coordinates this didn't work right (dlg_w/h were scaled)
+            // and there are instances where out of bounds controls do make sense.
+
+            // const int w = parms[coord_offs+2];
+            // const int h = strcmp(list->str1,"__SWELL_COMBO") ? parms[coord_offs+3] : 0;
+            // WDL_ASSERT(xpos + w <= dlg_w);
+            // WDL_ASSERT(ypos + h <= dlg_h);
 
             if (idx != 0 && idx != -1)
             {
+              if (tmp.Get(idx)) wdl_log("resource %d has duplicate item ID %d\n",recid, idx);
               WDL_ASSERT(!tmp.Get(idx));
               tmp.Insert(idx,true);
             }
@@ -212,23 +203,49 @@ class SWELL_DialogRegHelper {
         }
       }
   };
-  #define SWELL_VALIDATE_DIALOG_RESOURCE(v,r,w,h) static SWELL_DialogRegValidator v(r+1, sizeof(r)/sizeof(r[0])-1,w,h);
+  #define SWELL_VALIDATE_DIALOG_RESOURCE(v,r,w,h,recid) static SWELL_DialogRegValidator v(r+1, sizeof(r)/sizeof(r[0])-1,w,h,recid);
 #else
-  #define SWELL_VALIDATE_DIALOG_RESOURCE(v,r,w,h)
+  #define SWELL_VALIDATE_DIALOG_RESOURCE(v,r,w,h,recid)
 #endif
 
 
+// per-resource scaling (deprecated), these have a bit more overhead (an extra float) and can't do
+// dynamic scaling on macOS
 #define SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(recid, flags, titlestr, wid, hei, scale) \
                                        static void SWELL__dlg_cf__##recid(HWND view, int wflags); \
                                        const float __swell_dlg_scale__##recid = (float) (scale); \
-                                       static SWELL_DialogRegHelper __swell_dlg_helper_##recid(&SWELL_curmodule_dialogresource_head, SWELL__dlg_cf__##recid, recid,flags,titlestr,wid,hei,scale,(scale)*(SWELL_DLG_SCALE_AUTOGEN_YADJ)); \
+                                       static SWELL_DialogRegHelper __swell_dlg_helper_##recid(&SWELL_curmodule_dialogresource_head, SWELL__dlg_cf__##recid, recid,(flags) & ~SWELL_DLG_WS_DEFAULT_SCALING,titlestr,wid,hei,scale,(scale)*(SWELL_DLG_SCALE_AUTOGEN_YADJ)); \
                                        static const SWELL_DlgResourceEntry __swell_dlg_list__##recid[]={
 
                                             
 #define SWELL_DEFINE_DIALOG_RESOURCE_END(recid ) }; \
-                              SWELL_VALIDATE_DIALOG_RESOURCE( __swell_dlg_validator__##recid, __swell_dlg_list__##recid, __swell_dlg_helper_##recid.m_rec.width, __swell_dlg_helper_##recid.m_rec.height) \
+                              SWELL_VALIDATE_DIALOG_RESOURCE( __swell_dlg_validator__##recid, __swell_dlg_list__##recid, __swell_dlg_helper_##recid.m_rec.width, __swell_dlg_helper_##recid.m_rec.height, recid) \
                               static void SWELL__dlg_cf__##recid(HWND view, int wflags) { \
                                 SWELL_MakeSetCurParms(__swell_dlg_scale__##recid,__swell_dlg_scale__##recid * (SWELL_DLG_SCALE_AUTOGEN_YADJ),0,0,view,false,!(wflags&SWELL_DLG_WS_NOAUTOSIZE));  \
+                                SWELL_GenerateDialogFromList(__swell_dlg_list__##recid+1,sizeof(__swell_dlg_list__##recid)/sizeof(__swell_dlg_list__##recid[0])-1); \
+                              }
+
+#ifdef SWELL_TARGET_OSX
+// macOS uses dynamic dialog scaling if not overriden
+#define SWELL_DEF_DLGSCALE2 1.0
+#define SWELL_DEF_DLGFLAG2 SWELL_DLG_WS_DEFAULT_SCALING
+#else
+// -generic uses a fixed dialog scaling if not overridden
+#define SWELL_DEF_DLGSCALE2 1.9
+#define SWELL_DEF_DLGFLAG2 0
+#endif
+
+// newer declaration, does not include scale (globally defined default is used)
+#define SWELL_DEFINE_DIALOG_RESOURCE_BEGIN2(recid, flags, titlestr, wid, hei) \
+                                       static void SWELL__dlg_cf__##recid(HWND view, int wflags); \
+                                       static SWELL_DialogRegHelper __swell_dlg_helper_##recid(&SWELL_curmodule_dialogresource_head, SWELL__dlg_cf__##recid, recid,(flags)|SWELL_DEF_DLGFLAG2,titlestr,wid,hei,SWELL_DEF_DLGSCALE2,SWELL_DEF_DLGSCALE2); \
+                                       static const SWELL_DlgResourceEntry __swell_dlg_list__##recid[]={
+
+#define SWELL_DEFINE_DIALOG_RESOURCE_END2(recid) }; \
+                              SWELL_VALIDATE_DIALOG_RESOURCE( __swell_dlg_validator__##recid, __swell_dlg_list__##recid, __swell_dlg_helper_##recid.m_rec.width, __swell_dlg_helper_##recid.m_rec.height, recid) \
+                              static void SWELL__dlg_cf__##recid(HWND view, int wflags) { \
+                                SWELL_MakeSetCurParms(0.0 /* use default */,0.0 /* use default */, \
+                                    0,0,view,false,!(wflags&SWELL_DLG_WS_NOAUTOSIZE));  \
                                 SWELL_GenerateDialogFromList(__swell_dlg_list__##recid+1,sizeof(__swell_dlg_list__##recid)/sizeof(__swell_dlg_list__##recid[0])-1); \
                               }
 

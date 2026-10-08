@@ -1,46 +1,39 @@
 use crate::{reaper_pointer::ReaperPointer, Project, ReaRsError, Reaper};
-use std::ffi::CStr;
+use std::{
+    ffi::CStr,
+    panic::{self, AssertUnwindSafe},
+};
 
-/// Returns self as a null-terminated String. Implemented only for [String].
-pub trait WithNull: Clone {
-    /// If not `\0` at the end, it will be added.
-    fn with_null(self) -> String;
-}
-impl WithNull for String {
-    fn with_null(mut self) -> String {
-        if !self.ends_with("\0") {
-            self.push('\0');
-        }
-        self
+/// Convert a valid, NUL-terminated C string pointer to a Rust `String`.
+///
+/// # Safety
+///
+/// `ptr` must be non-null, point to readable memory, and refer to a
+/// NUL-terminated string for the duration of this call.
+pub unsafe fn string_from_const_i8(
+    ptr: *const i8,
+) -> Result<String, ReaRsError> {
+    if ptr.is_null() {
+        return Err(ReaRsError::NullPtr("C string"));
     }
-}
-
-/// Convert pointer to CStr to String.
-pub fn string_from_const_i8(ptr: *const i8) -> Result<String, ReaRsError> {
-    let value: &CStr = unsafe { CStr::from_ptr(ptr) };
+    let value: &CStr = CStr::from_ptr(ptr);
     let value = value.to_str()?;
     let value = String::from(value);
     Ok(value)
 }
 
-/// Convert an in-place C output buffer to Rust String with basic
-/// truncation/encoding checks.
+/// Convert a NUL-terminated C output buffer to a Rust UTF-8 string.
+///
+/// The buffer must be non-empty and contain a NUL terminator. If it is full
+/// and has no terminator, the native response is treated as truncated.
 pub fn string_from_buf(buf: &[i8]) -> Result<String, ReaRsError> {
-    if buf.len() < 2 {
-        return Err(ReaRsError::InvalidObject(
-            "buffer size must be at least 2",
-        ));
+    if buf.is_empty() {
+        return Err(ReaRsError::InvalidObject("buffer must not be empty"));
     }
 
     let nul_pos = buf.iter().position(|ch| *ch == 0).ok_or(
         ReaRsError::InvalidObject("Can not get value string terminator"),
     )?;
-    if nul_pos == buf.len() - 1 {
-        return Err(ReaRsError::UnsuccessfulOperation(
-            "Buffer is too small for value",
-        ));
-    }
-
     String::from_utf8(buf[..nul_pos].iter().map(|ch| *ch as u8).collect())
         .map_err(|_| {
             ReaRsError::InvalidObject("Can not decode value as UTF-8")
@@ -92,9 +85,9 @@ pub trait WithReaperPtr {
     /// [`WithReaperPtr::make_unchecked`].
     fn require_valid(&self) -> Result<Self::Ptr, ReaRsError> {
         if !self.should_check() {
-            return Ok(self.get()?);
+            return Ok(self.get_pointer());
         }
-        let ptr = self.get()?;
+        let ptr = self.get_pointer();
         match Reaper::get().validate_ptr(ptr.clone()) {
             true => Ok(ptr),
             false => Err(ReaRsError::NullPtr("reaper object").into()),
@@ -112,9 +105,9 @@ pub trait WithReaperPtr {
         project: &Project,
     ) -> Result<Self::Ptr, ReaRsError> {
         if !self.should_check() {
-            return Ok(self.get()?);
+            return Ok(self.get_pointer());
         }
-        let ptr = self.get()?;
+        let ptr = self.get_pointer();
         match Reaper::get().validate_ptr_2(project, ptr.clone()) {
             true => Ok(ptr),
             false => Err(ReaRsError::NullPtr("reaper object").into()),
@@ -132,8 +125,11 @@ pub trait WithReaperPtr {
     ) -> anyhow::Result<()> {
         self.require_valid()?;
         self.make_unchecked();
-        (f)(self)?;
+        let result = panic::catch_unwind(AssertUnwindSafe(|| f(self)));
         self.make_checked();
-        Ok(())
+        match result {
+            Ok(result) => result,
+            Err(payload) => panic::resume_unwind(payload),
+        }
     }
 }

@@ -107,7 +107,7 @@ typedef struct REAPER_FXEMBED_SizeHints { // alias to MINMAXINFO
 // internally we use the VST2 'opt' parameter to store this message, so we must
 // ensure these are representable as floats
 #define REAPER_FXEMBED_WM_NOBORDER                     0x100001 // plug-in returns &1 if wants no decoration around area
-#define REAPER_FXEMBED_WM_HITTEST                      0x100002 // parm3: REAPER_FXEMBED_DrawInfo*. parm2: original message being processed (e.g. REAPER_FXEMBED_WM_LBUTTONDOWN). plug-in returns &1 click should passthrough
+#define REAPER_FXEMBED_WM_HITTEST                      0x100002 // parm3: REAPER_FXEMBED_DrawInfo* or NULL. parm2: original message being processed (e.g. REAPER_FXEMBED_WM_LBUTTONDOWN). plug-in returns &1 click should passthrough, &2 if tooltips should be inhibited
 
 /* REAPER_FXEMBED_WM_SETCURSOR should return REAPER_FXEMBED_RETNOTIFY_HANDLED if a cursor was set
  */

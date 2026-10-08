@@ -16,6 +16,499 @@ static mut INSTANCE: Option<Swell> = None;
 /// This impl block contains functions which exist in SWELL as macros and
 /// therefore are not picked up by `bindgen`.
 impl Swell {
+    /// Applies native standard scrollbar state where the platform exposes it.
+    /// SWELL Unix builds currently lack range/position APIs, so callers should
+    /// use REAPER CoolSB there instead.
+    pub unsafe fn set_native_scrollbar(
+        &self,
+        hwnd: root::HWND,
+        bar: i32,
+        info: &mut root::SCROLLINFO,
+        visible: bool,
+    ) -> bool {
+        #[cfg(target_family = "windows")]
+        {
+            use winapi::um::winuser;
+            winuser::SetScrollInfo(hwnd as _, bar, info as *mut _, 1);
+            winuser::ShowScrollBar(hwnd as _, bar, visible as i32);
+            true
+        }
+        #[cfg(target_family = "unix")]
+        {
+            let _ = (hwnd, bar, info, visible);
+            false
+        }
+    }
+
+    /// Creates a hidden child window with the supplied procedure.
+    ///
+    /// This is intentionally lower-level than `create_window`: the caller
+    /// owns the child lifetime through its parent and may use the window as a
+    /// structural container without registering it as a dialog control.
+    pub unsafe fn create_child_window(
+        &self,
+        parent: root::HWND,
+        width: i32,
+        height: i32,
+        proc_: root::DLGPROC,
+        param: root::LPARAM,
+    ) -> Option<root::HWND> {
+        self.create_child_window_with_style(
+            parent, width, height, proc_, param, 0,
+        )
+    }
+
+    pub unsafe fn create_child_window_with_style(
+        &self,
+        parent: root::HWND,
+        width: i32,
+        height: i32,
+        proc_: root::DLGPROC,
+        param: root::LPARAM,
+        extra_style: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            let hwnd = self.SWELL_CreateDialog(
+                std::ptr::null_mut(),
+                crate::raw::SWELL_CREATE_DIALOG_MAGIC as *const _,
+                parent,
+                proc_,
+                param,
+            );
+            if hwnd.is_null() {
+                return None;
+            }
+            if extra_style != 0 {
+                let style = self.GetWindowLong(hwnd, crate::raw::GWL_STYLE);
+                self.SetWindowLong(
+                    hwnd,
+                    crate::raw::GWL_STYLE,
+                    style | extra_style as isize,
+                );
+            }
+            self.SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                width.max(1),
+                height.max(1),
+                (crate::raw::SWP_NOMOVE | crate::raw::SWP_NOZORDER) as i32,
+            );
+            Some(hwnd)
+        }
+        #[cfg(target_family = "windows")]
+        {
+            use std::iter::once;
+            use winapi::um::winuser;
+            let class = windows_class_name();
+            let hwnd = winuser::CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                winuser::WS_CHILD
+                    | winuser::WS_CLIPCHILDREN
+                    | extra_style as u32,
+                0,
+                0,
+                width.max(1),
+                height.max(1),
+                parent as _,
+                std::ptr::null_mut(),
+                winuser::GetModuleHandleW(std::ptr::null()),
+                param as _,
+            );
+            if hwnd.is_null() {
+                return None;
+            }
+            if let Some(real_proc) = proc_ {
+                winuser::SetWindowLongPtrW(
+                    hwnd,
+                    winuser::GWLP_WNDPROC,
+                    std::mem::transmute(real_proc),
+                );
+            }
+            Some(hwnd as _)
+        }
+    }
+
+    /// Creates a child button using the native SWELL/Win32 control API.
+    ///
+    /// The returned handle belongs to `parent`; the caller remains responsible
+    /// for retaining the logical control ID and for destroying the parent.
+    pub unsafe fn create_button(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        label: *const ::std::os::raw::c_char,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
+            let hwnd =
+                self.SWELL_MakeButton(0, label, id, x, y, width, height, 0);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent,
+                id,
+                label,
+                "BUTTON",
+                winapi::um::winuser::BS_PUSHBUTTON,
+                x,
+                y,
+                width,
+                height,
+            )
+        }
+    }
+
+    /// Creates a child edit control using the native SWELL/Win32 control API.
+    pub unsafe fn create_edit_field(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        flags: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
+            let hwnd =
+                self.SWELL_MakeEditField(id, x, y, width, height, flags);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent,
+                id,
+                std::ptr::null(),
+                "EDIT",
+                winapi::um::winuser::ES_LEFT | flags as u32,
+                x,
+                y,
+                width,
+                height,
+            )
+        }
+    }
+
+    /// Creates a child static label using the native SWELL/Win32 control API.
+    pub unsafe fn create_label(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        label: *const ::std::os::raw::c_char,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
+            let hwnd =
+                self.SWELL_MakeLabel(0, label, id, x, y, width, height, 0);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent,
+                id,
+                label,
+                "STATIC",
+                winapi::um::winuser::SS_LEFT,
+                x,
+                y,
+                width,
+                height,
+            )
+        }
+    }
+
+    /// Creates a child check box using the native SWELL/Win32 control API.
+    pub unsafe fn create_checkbox(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        label: *const ::std::os::raw::c_char,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
+            let hwnd =
+                self.SWELL_MakeCheckBox(label, id, x, y, width, height, 0);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent,
+                id,
+                label,
+                "BUTTON",
+                winapi::um::winuser::BS_AUTOCHECKBOX,
+                x,
+                y,
+                width,
+                height,
+            )
+        }
+    }
+
+    /// Creates a child group box using the native SWELL/Win32 control API.
+    pub unsafe fn create_group_box(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        label: *const ::std::os::raw::c_char,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
+            let hwnd =
+                self.SWELL_MakeGroupBox(label, id, x, y, width, height, 0);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent,
+                id,
+                label,
+                "BUTTON",
+                winapi::um::winuser::BS_GROUPBOX,
+                x,
+                y,
+                width,
+                height,
+            )
+        }
+    }
+
+    /// Creates a child combo box using the native SWELL/Win32 control API.
+    pub unsafe fn create_combo_box(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        flags: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
+            let hwnd = self.SWELL_MakeCombo(id, x, y, width, height, flags);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent,
+                id,
+                std::ptr::null(),
+                "COMBOBOX",
+                flags as u32,
+                x,
+                y,
+                width,
+                height,
+            )
+        }
+    }
+
+    /// Creates a child list box using the native SWELL/Win32 control API.
+    pub unsafe fn create_list_box(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        styles: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_MakeSetCurParms(
+                1.0, 1.0, 0.0, 0.0, parent, false, false,
+            );
+            let hwnd = self.SWELL_MakeListBox(id, x, y, width, height, styles);
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent,
+                id,
+                std::ptr::null(),
+                "LISTBOX",
+                styles as u32,
+                x,
+                y,
+                width,
+                height,
+            )
+        }
+    }
+
+    /// Creates a child from one of the built-in SWELL/Win32 control classes.
+    /// The class name is passed through SWELL_MakeControl on Unix and to
+    /// CreateWindowExW on Windows, keeping the platform factory choice here.
+    pub unsafe fn create_native_control(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        class_name: &str,
+        text: *const ::std::os::raw::c_char,
+        style: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            use std::ffi::CString;
+            let class_name = CString::new(class_name).ok()?;
+            let make_set_cur_parms =
+                root::swell_functions::SWELL_MakeSetCurParms?;
+            let make_control = root::swell_functions::SWELL_MakeControl?;
+            make_set_cur_parms(1.0, 1.0, 0.0, 0.0, parent, false, false);
+            let hwnd = make_control(
+                text,
+                id,
+                class_name.as_ptr(),
+                style,
+                x,
+                y,
+                width,
+                height,
+                0,
+            );
+            return (!hwnd.is_null()).then_some(hwnd);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.create_windows_control(
+                parent,
+                id,
+                text,
+                class_name,
+                winapi::um::winuser::WS_CHILD
+                    | winapi::um::winuser::WS_VISIBLE
+                    | style as u32,
+                x,
+                y,
+                width,
+                height,
+            )
+        }
+    }
+
+    #[cfg(target_family = "windows")]
+    unsafe fn create_windows_control(
+        &self,
+        parent: root::HWND,
+        id: i32,
+        text: *const ::std::os::raw::c_char,
+        class_name: &str,
+        style: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<root::HWND> {
+        use std::iter::once;
+        use winapi::um::winuser;
+        let class: Vec<u16> =
+            class_name.encode_utf16().chain(once(0)).collect();
+        let text = if text.is_null() {
+            Vec::new()
+        } else {
+            std::ffi::CStr::from_ptr(text)
+                .to_string_lossy()
+                .encode_utf16()
+                .chain(once(0))
+                .collect()
+        };
+        let hwnd = winuser::CreateWindowExW(
+            0,
+            class.as_ptr(),
+            if text.is_empty() {
+                std::ptr::null()
+            } else {
+                text.as_ptr()
+            },
+            winuser::WS_CHILD | winuser::WS_VISIBLE | style,
+            x,
+            y,
+            width,
+            height,
+            parent as _,
+            id as isize as _,
+            winuser::GetModuleHandleW(std::ptr::null()),
+            std::ptr::null_mut(),
+        );
+        (!hwnd.is_null()).then_some(hwnd as _)
+    }
+
+    /// Paints a standard REAPER/SWELL window background for a paint region.
+    pub unsafe fn paint_window_background(
+        &self,
+        hdc: root::HDC,
+        rect: *const root::RECT,
+    ) {
+        #[cfg(target_family = "unix")]
+        {
+            self.SWELL_FillDialogBackground(hdc, rect, 0);
+        }
+        #[cfg(target_family = "windows")]
+        {
+            winapi::um::winuser::FillRect(
+                hdc as _,
+                rect as _,
+                winapi::um::winuser::GetSysColorBrush(
+                    winapi::um::winuser::COLOR_BTNFACE,
+                ),
+            );
+        }
+    }
+
     /// Makes the given instance available globally.
     ///
     /// After this has been called, the instance can be queried globally using
@@ -40,6 +533,7 @@ impl Swell {
     /// before.
     ///
     /// [`make_available_globally()`]: fn.make_available_globally.html
+    #[allow(static_mut_refs)]
     pub fn get() -> &'static Swell {
         unsafe {
             INSTANCE.as_ref().expect(
@@ -278,11 +772,79 @@ impl Swell {
 /// SWELL ... just Windows was missing.
 #[cfg(target_family = "windows")]
 impl Swell {
+    /// Windows counterpart of SWELL's UTF-8 `GetClassName` API.
+    ///
+    /// SWELL class names are diagnostic hints and may be unavailable for
+    /// windows created outside SWELL.
+    pub unsafe fn GetClassName(
+        &self,
+        hwnd: root::HWND,
+        class_name: *mut ::std::os::raw::c_char,
+        max_count: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        if class_name.is_null() || max_count <= 0 {
+            return 0;
+        }
+        let mut utf16 = vec![0u16; max_count as usize];
+        let len = winapi::um::winuser::GetClassNameW(
+            hwnd as _,
+            utf16.as_mut_ptr(),
+            max_count,
+        );
+        if len <= 0 {
+            return 0;
+        }
+        let name = String::from_utf16_lossy(&utf16[..len as usize]);
+        let name = match std::ffi::CString::new(name) {
+            Ok(name) => name,
+            Err(_) => return 0,
+        };
+        let bytes = name.as_bytes();
+        let copy_len = bytes.len().min(max_count as usize - 1);
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            class_name as *mut u8,
+            copy_len,
+        );
+        *class_name.add(copy_len) = 0;
+        copy_len as ::std::os::raw::c_int
+    }
+
     /// # Safety
     ///
     /// REAPER can crash if you pass an invalid pointer.
     pub unsafe fn UpdateWindow(&self, hwnd: root::HWND) {
         winapi::um::winuser::UpdateWindow(hwnd as _);
+    }
+
+    /// Windows counterpart of SWELL's `GetWindowLong`.
+    pub unsafe fn GetWindowLong(
+        &self,
+        hwnd: root::HWND,
+        index: ::std::os::raw::c_int,
+    ) -> root::LONG_PTR {
+        winapi::um::winuser::GetWindowLongPtrW(hwnd as _, index)
+    }
+
+    /// Windows counterpart of SWELL's `SetWindowLong`.
+    pub unsafe fn SetWindowLong(
+        &self,
+        hwnd: root::HWND,
+        index: ::std::os::raw::c_int,
+        value: root::LONG_PTR,
+    ) -> root::LONG_PTR {
+        winapi::um::winuser::SetWindowLongPtrW(hwnd as _, index, value)
+    }
+
+    /// Windows counterpart of SWELL's `DefWindowProc`.
+    pub unsafe fn DefWindowProc(
+        &self,
+        hwnd: root::HWND,
+        msg: root::UINT,
+        w_param: root::WPARAM,
+        l_param: root::LPARAM,
+    ) -> root::LRESULT {
+        winapi::um::winuser::DefWindowProcW(hwnd as _, msg, w_param, l_param)
     }
 
     /// # Safety
@@ -596,4 +1158,239 @@ fn menu_item_needs_string_conversion(mi: root::MENUITEMINFO) -> bool {
     // values deviate from the Windows constants!!!
     use crate::raw;
     (mi.fMask & raw::MIIM_TYPE) != 0 && (mi.fMask & raw::MIIM_DATA) != 0
+}
+
+/// Creates a top-level window (owned by the given parent) without requiring a
+/// dialog template and returns its handle, or `None` if creation failed or the
+/// window was destroyed during creation.
+///
+/// On Unix (SWELL), this uses `SWELL_CreateDialog` with the magic resource ID
+/// `0x400000 | flags` (see `swell-dlg-generic.cpp` and `swell-dlg.mm`). The
+/// given `proc` is installed as window procedure and receives `WM_CREATE`
+/// synchronously (with `param` as `lParam`). Any nonzero flag bit forces the
+/// window to be top-level (owned by `parent`) instead of a child window.
+///
+/// On Windows, this uses one-time `RegisterClassExW` plus `CreateWindowExW`.
+/// The given `proc` is used as window procedure as well. `WM_CREATE` receives
+/// a `CREATESTRUCTW` pointer as `lParam` (the `param` value is available via
+/// `lpCreateParams`).
+///
+/// The window is created hidden. Show it via `ShowWindow` afterwards.
+///
+/// # Arguments
+///
+/// * `parent` - Window which will own the new window (typically REAPER's main
+///   window).
+/// * `title` - UTF-8 encoded title of the window.
+/// * `width` - Requested client area width in pixels.
+/// * `height` - Requested client area height in pixels.
+/// * `resizable` - Whether the window has a resizable border.
+/// * `hinstance` - Module handle of the plugin (used on Windows for class
+///   registration; ignored on Unix).
+/// * `proc` - Window/dialog procedure which receives all window messages.
+/// * `param` - Value passed to `WM_CREATE` (Unix: as `lParam`; Windows: via
+///   `CREATESTRUCTW.lpCreateParams`).
+///
+/// # Safety
+///
+/// `parent` must be a valid window handle and `proc` must be a valid function
+/// pointer. Both are usually obtained from REAPER.
+impl Swell {
+    pub unsafe fn create_window(
+        &self,
+        parent: root::HWND,
+        title: &str,
+        width: i32,
+        height: i32,
+        resizable: bool,
+        no_minimize: bool,
+        no_close: bool,
+        hinstance: root::HINSTANCE,
+        proc_: root::DLGPROC,
+        param: root::LPARAM,
+    ) -> Option<root::HWND> {
+        #[cfg(target_family = "unix")]
+        {
+            // Any nonzero flag bit forces a top-level (owned) window instead
+            // of a child window. Bit 0 additionally makes it resizable. We
+            // always set bit 1 ("no minimize") as the top-level forcing bit
+            // and rely on post-creation style adjustment for the resizable
+            // case:
+            //
+            // - Linux/GDK: bit 0 => WS_THICKFRAME|WS_CAPTION (close/min/max +
+            //   resize), otherwise WS_CAPTION (title + minimize, fixed size).
+            //   Bits 1 and 2 are ignored.
+            // - macOS: bit 0 => +NSResizableWindowMask, bit 1 =>
+            //   -Miniaturizable, bit 2 => -Closable.
+            //
+            // Because the desired style differs per platform and SWELL applies
+            // styles only at creation time, we create with bit 0 set
+            // (resizable) and, for non-resizable windows, strip WS_THICKFRAME
+            // afterwards via SetWindowLong(GWL_STYLE). On Linux this updates
+            // the GDK decorations (swell_oswindow_update_style), on macOS it
+            // recreates the window frame with the right style mask.
+            let mut flags = crate::raw::SWELL_DLG_FORCE_RESIZABLE;
+            if no_minimize {
+                flags |= crate::raw::SWELL_DLG_NO_MINIMIZE;
+            }
+            if no_close {
+                flags |= crate::raw::SWELL_DLG_NO_CLOSE;
+            }
+            let resid =
+                (crate::raw::SWELL_CREATE_DIALOG_MAGIC | flags) as usize;
+            let hwnd = self.SWELL_CreateDialog(
+                std::ptr::null_mut(),
+                resid as *const ::std::os::raw::c_char,
+                parent,
+                proc_,
+                param,
+            );
+            if hwnd.is_null() {
+                return None;
+            }
+            // Initialize the backing style before the window is shown. This
+            // avoids exposing an uninitialized/garbled native surface on the
+            // first paint, especially on GDK-backed SWELL windows.
+            let mut style = self.GetWindowLong(hwnd, crate::raw::GWL_STYLE);
+            style |= crate::raw::WS_CAPTION as isize;
+            if resizable {
+                style |= crate::raw::WS_THICKFRAME as isize;
+            } else {
+                style &= !(crate::raw::WS_THICKFRAME as isize);
+            }
+            // Force SWELL to rebuild the native frame. Some backends only
+            // update decorations when the caption bit changes; merely
+            // writing the final style can therefore leave a borderless,
+            // non-resizable native surface.
+            self.SetWindowLong(
+                hwnd,
+                crate::raw::GWL_STYLE,
+                style & !(crate::raw::WS_CAPTION as isize),
+            );
+            self.SetWindowLong(hwnd, crate::raw::GWL_STYLE, style);
+            // Title must be set after creation. SWELL's template-less mode
+            // doesn't take a title.
+            let title_c = std::ffi::CString::new(title).ok()?;
+            self.SetWindowText(hwnd, title_c.as_ptr());
+            if !resizable {
+                // Strip the resizable border. Keep WS_CAPTION.
+                let style = self.GetWindowLong(hwnd, crate::raw::GWL_STYLE);
+                self.SetWindowLong(
+                    hwnd,
+                    crate::raw::GWL_STYLE,
+                    style & !(crate::raw::WS_THICKFRAME as isize),
+                );
+            }
+            // Apply the requested size. SWELL's template-less mode starts with
+            // a default size (300x200 UI-scaled on Linux, 10x10 on macOS).
+            self.SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                width,
+                height,
+                (crate::raw::SWP_NOMOVE | crate::raw::SWP_NOZORDER) as i32,
+            );
+            Some(hwnd)
+        }
+        #[cfg(target_family = "windows")]
+        {
+            use winapi::um::winuser;
+            // Register the window class once per process. The class stores a
+            // fallback procedure; the real procedure is installed via
+            // SetWindowLongPtrW(GWLP_WNDPROC) after creation because WM_CREATE
+            // is delivered during CreateWindowExW and must not crash if the
+            // real procedure is not yet reachable.
+            static REGISTER_CLASS: std::sync::Once = std::sync::Once::new();
+            static CLASS_REGISTERED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            REGISTER_CLASS.call_once(|| {
+                let class_name = windows_class_name();
+                let wc = winuser::WNDCLASSEXW {
+                    cbSize: std::mem::size_of::<winuser::WNDCLASSEXW>() as u32,
+                    style: winuser::CS_HREDRAW | winuser::CS_VREDRAW,
+                    lpfnWndProc: Some(windows_default_wndproc),
+                    cbClsExtra: 0,
+                    cbWndExtra: 0,
+                    hInstance: hinstance as _,
+                    hIcon: std::ptr::null_mut(),
+                    hCursor: winuser::LoadCursorW(
+                        std::ptr::null_mut(),
+                        winuser::IDC_ARROW,
+                    ),
+                    hbrBackground: winuser::GetSysColorBrush(
+                        winuser::COLOR_BTNFACE,
+                    ),
+                    lpszMenuName: std::ptr::null(),
+                    lpszClassName: class_name.as_ptr(),
+                    hIconSm: std::ptr::null_mut(),
+                };
+                let atom = winuser::RegisterClassExW(&wc);
+                CLASS_REGISTERED
+                    .store(atom != 0, std::sync::atomic::Ordering::Release);
+            });
+            if !CLASS_REGISTERED.load(std::sync::atomic::Ordering::Acquire) {
+                return None;
+            }
+            let style = if resizable {
+                winuser::WS_OVERLAPPEDWINDOW
+            } else {
+                winuser::WS_OVERLAPPEDWINDOW
+                    & !(winuser::WS_THICKFRAME | winuser::WS_MAXIMIZEBOX)
+            };
+            let title_utf16 = windows_title_utf16(title);
+            let hwnd = winuser::CreateWindowExW(
+                0,
+                windows_class_name().as_ptr(),
+                title_utf16.as_ptr(),
+                style,
+                winuser::CW_USEDEFAULT,
+                winuser::CW_USEDEFAULT,
+                width,
+                height,
+                parent as _,
+                std::ptr::null_mut(),
+                hinstance as _,
+                param as _,
+            );
+            if hwnd.is_null() {
+                return None;
+            }
+            // Install the actual window procedure. WM_CREATE has already been
+            // delivered to the fallback procedure above.
+            if let Some(real_proc) = proc_ {
+                winuser::SetWindowLongPtrW(
+                    hwnd as _,
+                    winuser::GWLP_WNDPROC,
+                    std::mem::transmute(real_proc),
+                );
+            }
+            Some(hwnd as _)
+        }
+    }
+}
+
+/// Fallback window procedure used on Windows until the real procedure is
+/// installed after `CreateWindowExW` returns.
+#[cfg(target_family = "windows")]
+unsafe extern "system" fn windows_default_wndproc(
+    hwnd: winapi::shared::windef::HWND,
+    msg: winapi::shared::minwindef::UINT,
+    w_param: winapi::shared::minwindef::WPARAM,
+    l_param: winapi::shared::minwindef::LPARAM,
+) -> winapi::shared::minwindef::LRESULT {
+    winapi::um::winuser::DefWindowProcW(hwnd, msg, w_param, l_param)
+}
+
+#[cfg(target_family = "windows")]
+fn windows_class_name() -> std::vec::Vec<u16> {
+    use std::iter::once;
+    "ReaRsWindow".encode_utf16().chain(once(0)).collect()
+}
+
+#[cfg(target_family = "windows")]
+fn windows_title_utf16(title: &str) -> std::vec::Vec<u16> {
+    use std::iter::once;
+    title.encode_utf16().chain(once(0)).collect()
 }

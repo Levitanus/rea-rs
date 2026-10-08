@@ -8,6 +8,15 @@ use crate::{
 static mut INSTANCE: Option<Reaper> = None;
 
 impl Reaper {
+    /// Returns whether all CoolSB operations needed by ScrollView are loaded.
+    pub fn supports_cool_scrollbars(&self) -> bool {
+        let pointers = self.pointers();
+        pointers.InitializeCoolSB.is_some()
+            && pointers.UninitializeCoolSB.is_some()
+            && pointers.CoolSB_SetScrollInfo.is_some()
+            && pointers.CoolSB_ShowScrollBar.is_some()
+    }
+
     /// Makes the given instance available globally.
     ///
     /// After this has been called, the instance can be queried globally using
@@ -32,6 +41,7 @@ impl Reaper {
     /// before.
     ///
     /// [`make_available_globally()`]: fn.make_available_globally.html
+    #[allow(static_mut_refs)]
     pub fn get() -> &'static Reaper {
         unsafe {
             INSTANCE.as_ref().expect(

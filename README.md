@@ -16,15 +16,23 @@ Item, [AudioAccessor](https://levitanus.github.io/rea-rs-doc/rea_rs/audio_access
 It should also be possible to use from VST Plugin, but this has not yet
 been tested at all.
 
+## Release status
+
+The workspace is preparing the breaking `1.0.0` API release. Review
+[`RELEASE_1.0.0_API_AUDIT.md`](RELEASE_1.0.0_API_AUDIT.md) for migration
+changes and audit status before upgrading. The public API review is still in
+progress; this release is not signed off until the remaining audit and
+cross-platform checks are complete.
+
 Until there is no new version of `reaper-rs` which differs from the current master branch a lot, this is the dependency list I highly recommend:
 
 These are the dependencies:
 
 ```toml
 [dependencies]
-rea-rs = "0.2.0"
-rea-rs-low = "0.2.0" # optional
-rea-rs-macros = "0.2.0"
+rea-rs = "1.0.0"
+rea-rs-low = "1.0.0" # optional
+rea-rs-macros = "1.0.0"
 ```
 
 But, actually, all medium- and low-level functionality is still existing in the [Reaper](https://levitanus.github.io/rea-rs-doc/rea_rs/reaper/struct.Reaper.html) object. Just use `Reaper::low`, `Reaper::medium` and `Reaper::medium_session`. The Common entry point should look like this:
@@ -39,7 +47,7 @@ fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
     Reaper::init_global(context);
     let reaper = Reaper::get_mut();
     let message = "Hello from small extension";
-    reaper.show_console_msg(message);
+    reaper.show_console_msg(message)?;
     Ok(())
 }
 ```
