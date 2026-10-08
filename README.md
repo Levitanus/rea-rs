@@ -234,8 +234,8 @@ invocation. From the repository root, run
 `cargo test -p reaper-test-extension-plugin --test integration_test`.
 The first run downloads the selected REAPER build into `target/reaper` and
 needs network access. Linux needs REAPER's GUI/runtime dependencies; macOS
-uses the configured disk image and `hdiutil`. The runner currently skips
-Windows because hosted integration testing there is not implemented.
+uses the configured disk image and `hdiutil`; Windows silently installs an
+isolated portable x64 REAPER copy under `target/reaper`.
 
 There are also editor shortcuts for the same workflow. The Sublime Text
 project (`rea-rs.sublime-project`) defines build systems to build/copy the
@@ -243,7 +243,7 @@ test plug-in, launch the downloaded REAPER manually, and run the host-driven
 integration test. VS Code's `.vscode/tasks.json` provides the corresponding
 tasks; open the repository root and choose **Terminal → Run Task**. These
 convenience build/copy and launch tasks are Linux-specific; the Cargo runner
-handles the supported Linux/macOS hosted-test setup. See
+handles hosted tests on Linux, macOS, and Windows. See
 [`rea-rs-test/README.md`](rea-rs-test/README.md) for the workspace layout and
 more details.
 

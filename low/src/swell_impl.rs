@@ -16,6 +16,119 @@ static mut INSTANCE: Option<Swell> = None;
 /// This impl block contains functions which exist in SWELL as macros and
 /// therefore are not picked up by `bindgen`.
 impl Swell {
+    /// Creates the native image-list equivalent of SWELL's
+    /// parameterless `ImageList_CreateEx` macro.
+    #[cfg(target_family = "windows")]
+    pub fn ImageList_CreateEx(&self) -> root::HIMAGELIST {
+        unsafe {
+            winapi::um::commctrl::ImageList_Create(
+                16,
+                16,
+                winapi::um::commctrl::ILC_COLOR32
+                    | winapi::um::commctrl::ILC_MASK,
+                0,
+                1,
+            ) as root::HIMAGELIST
+        }
+    }
+
+    #[cfg(target_family = "windows")]
+    pub unsafe fn ImageList_Add(
+        &self,
+        list: root::HIMAGELIST,
+        image: root::HBITMAP,
+        mask: root::HBITMAP,
+    ) -> i32 {
+        winapi::um::commctrl::ImageList_Add(list as _, image as _, mask as _)
+    }
+
+    #[cfg(target_family = "windows")]
+    pub unsafe fn ImageList_ReplaceIcon(
+        &self,
+        list: root::HIMAGELIST,
+        offset: i32,
+        image: root::HICON,
+    ) -> i32 {
+        winapi::um::commctrl::ImageList_ReplaceIcon(
+            list as _, offset, image as _,
+        )
+    }
+
+    #[cfg(target_family = "windows")]
+    pub unsafe fn ImageList_Remove(
+        &self,
+        list: root::HIMAGELIST,
+        index: i32,
+    ) -> root::BOOL {
+        (winapi::um::commctrl::ImageList_Remove(list as _, index) != 0) as _
+    }
+
+    #[cfg(target_family = "windows")]
+    pub unsafe fn ImageList_Destroy(&self, list: root::HIMAGELIST) {
+        winapi::um::commctrl::ImageList_Destroy(list as _);
+    }
+
+    #[cfg(target_family = "windows")]
+    pub unsafe fn ListView_SetImageList(
+        &self,
+        hwnd: root::HWND,
+        image_list: root::HIMAGELIST,
+        which: i32,
+    ) {
+        use winapi::shared::minwindef::{LPARAM, WPARAM};
+        use winapi::um::{commctrl, winuser};
+        winuser::SendMessageW(
+            hwnd as _,
+            commctrl::LVM_SETIMAGELIST,
+            which as WPARAM,
+            image_list as LPARAM,
+        );
+    }
+
+    #[cfg(target_family = "windows")]
+    pub unsafe fn DeleteObject(&self, object: root::HGDIOBJ) {
+        winapi::um::wingdi::DeleteObject(object as _);
+    }
+
+    #[cfg(target_family = "windows")]
+    pub fn CreatePen(&self, style: i32, width: i32, color: i32) -> root::HPEN {
+        unsafe {
+            winapi::um::wingdi::CreatePen(style, width, color as u32) as _
+        }
+    }
+
+    #[cfg(target_family = "windows")]
+    pub unsafe fn CreateFontIndirect(
+        &self,
+        logfont: *const root::LOGFONT,
+    ) -> root::HFONT {
+        use winapi::um::wingdi::{CreateFontIndirectA, LOGFONTA};
+
+        let logfont = &*logfont;
+        let mut native_logfont: LOGFONTA = std::mem::zeroed();
+        native_logfont.lfHeight = logfont.lfHeight;
+        native_logfont.lfWidth = logfont.lfWidth;
+        native_logfont.lfEscapement = logfont.lfEscapement;
+        native_logfont.lfOrientation = logfont.lfOrientation;
+        native_logfont.lfWeight = logfont.lfWeight;
+        native_logfont.lfItalic = logfont.lfItalic as u8;
+        native_logfont.lfUnderline = logfont.lfUnderline as u8;
+        native_logfont.lfStrikeOut = logfont.lfStrikeOut as u8;
+        native_logfont.lfCharSet = logfont.lfCharSet as u8;
+        native_logfont.lfOutPrecision = logfont.lfOutPrecision as u8;
+        native_logfont.lfClipPrecision = logfont.lfClipPrecision as u8;
+        native_logfont.lfQuality = logfont.lfQuality as u8;
+        native_logfont.lfPitchAndFamily = logfont.lfPitchAndFamily as u8;
+        for (dest, source) in native_logfont
+            .lfFaceName
+            .iter_mut()
+            .zip(logfont.lfFaceName.iter())
+        {
+            *dest = *source;
+        }
+        CreateFontIndirectA(&native_logfont) as _
+    }
+
     /// Applies native standard scrollbar state where the platform exposes it.
     /// SWELL Unix builds currently lack range/position APIs, so callers should
     /// use REAPER CoolSB there instead.
@@ -29,7 +142,15 @@ impl Swell {
         #[cfg(target_family = "windows")]
         {
             use winapi::um::winuser;
-            winuser::SetScrollInfo(hwnd as _, bar, info as *mut _, 1);
+            let mut native_info: winuser::SCROLLINFO = std::mem::zeroed();
+            native_info.cbSize = std::mem::size_of_val(&native_info) as u32;
+            native_info.fMask = info.fMask;
+            native_info.nMin = info.nMin;
+            native_info.nMax = info.nMax;
+            native_info.nPage = info.nPage;
+            native_info.nPos = info.nPos;
+            native_info.nTrackPos = info.nTrackPos;
+            winuser::SetScrollInfo(hwnd as _, bar, &mut native_info, 1);
             winuser::ShowScrollBar(hwnd as _, bar, visible as i32);
             true
         }
@@ -100,7 +221,7 @@ impl Swell {
         }
         #[cfg(target_family = "windows")]
         {
-            use std::iter::once;
+            use winapi::um::libloaderapi;
             use winapi::um::winuser;
             let class = windows_class_name();
             let hwnd = winuser::CreateWindowExW(
@@ -116,7 +237,7 @@ impl Swell {
                 height.max(1),
                 parent as _,
                 std::ptr::null_mut(),
-                winuser::GetModuleHandleW(std::ptr::null()),
+                libloaderapi::GetModuleHandleW(std::ptr::null()),
                 param as _,
             );
             if hwnd.is_null() {
@@ -481,7 +602,7 @@ impl Swell {
             height,
             parent as _,
             id as isize as _,
-            winuser::GetModuleHandleW(std::ptr::null()),
+            winapi::um::libloaderapi::GetModuleHandleW(std::ptr::null()),
             std::ptr::null_mut(),
         );
         (!hwnd.is_null()).then_some(hwnd as _)

@@ -39,13 +39,19 @@ fn classify_integration_test_result(
     termination: HostTermination,
 ) -> Result<()> {
     let exit_status = termination.describe();
-    let contents = contents.map_err(|error| {
-        io::Error::new(
+    let contents = contents.map_err(|error| match termination {
+        HostTermination::TimedOut => io::Error::new(
+            error.kind(),
+            format!(
+                "REAPER integration test timed out after 300 seconds without producing a result file: {error}"
+            ),
+        ),
+        _ => io::Error::new(
             error.kind(),
             format!(
                 "REAPER exited with status {exit_status}, but did not produce an integration test result: {error}"
             ),
-        )
+        ),
     })?;
     let outcome = parse_integration_test_outcome(&contents).map_err(|error| {
         io::Error::new(
@@ -165,6 +171,22 @@ impl ReaperVersion {
             }
         }
     }
+    fn windows_download_url(&self) -> &'static str {
+        match self {
+            Self::V6_71 => {
+                "https://www.reaper.fm/files/6.x/reaper671_x64-install.exe"
+            }
+            Self::V6_73 => {
+                "https://www.reaper.fm/files/6.x/reaper673_x64-install.exe"
+            }
+            Self::V7_78 => {
+                "https://www.reaper.fm/files/7.x/reaper778_x64-install.exe"
+            }
+            Self::V7_82 => {
+                "https://www.reaper.fm/files/7.x/reaper782_x64-install.exe"
+            }
+        }
+    }
     fn linux_download_path(&self) -> PathBuf {
         PathBuf::from("reaper_linux_x86_64/REAPER")
     }
@@ -176,14 +198,6 @@ impl ReaperVersion {
     }
     fn macos_executable_path(&self) -> PathBuf {
         PathBuf::from("REAPER.app/Contents/MacOS/REAPER")
-    }
-    fn macos_install_folder(&self) -> PathBuf {
-        match self {
-            Self::V7_82 => {
-                PathBuf::from("/Volumes/REAPER_INSTALL_UNIVERSAL64/REAPER.app")
-            }
-            _ => PathBuf::from("/Volumes/REAPER_INSTALL_INTEL64/REAPER.app"),
-        }
     }
 }
 
@@ -225,12 +239,6 @@ fn build_test_extension() -> Result<()> {
 pub fn build_integration_test(
     reaper_version: ReaperVersion,
 ) -> Option<Result<PathBuf>> {
-    if cfg!(target_family = "windows") {
-        println!(
-            "REAPER integration tests currently not supported on Windows"
-        );
-        return None;
-    }
     if let Err(error) = build_test_extension() {
         return Some(Err(error));
     }
@@ -239,7 +247,13 @@ pub fn build_integration_test(
             .join("../target");
     let reaper_download_dir_path = target_dir_path.join("reaper");
     println!("Running integration test");
-    let executable_path = if cfg!(target_os = "macos") {
+    let executable_path = if cfg!(target_os = "windows") {
+        build_on_windows(
+            &reaper_version,
+            &target_dir_path,
+            &reaper_download_dir_path,
+        )
+    } else if cfg!(target_os = "macos") {
         build_on_macos(
             &reaper_version,
             &target_dir_path,
@@ -262,10 +276,40 @@ fn build_on_linux(
 ) -> Result<PathBuf> {
     let reaper_home_path =
         setup_reaper_for_linux(reaper_version, reaper_download_dir_path)?;
+    seed_bundled_vst_cache(&reaper_home_path)?;
     install_plugin(&target_dir_path, &reaper_home_path)?;
     let reaper_executable =
         reaper_home_path.join(reaper_version.linux_executable_path());
     Ok(reaper_executable)
+}
+
+/// Seeds REAPER's per-install bundled-VST cache without scanning arbitrary
+/// third-party plug-in paths. This makes bundled effects such as ReaEQ
+/// immediately addressable when plugin_scan disables first-run scanning.
+fn seed_bundled_vst_cache(reaper_home_path: &Path) -> Result<()> {
+    let cache_path = reaper_home_path.join("reaper-vstplugins64.ini");
+    let mut ini = match Ini::load_from_file(&cache_path) {
+        Ok(ini) => ini,
+        Err(ini::Error::Io(error)) if error.kind() == ErrorKind::NotFound => {
+            Ini::new()
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let mut cache = ini.with_section(Some("vstcache"));
+    for (file_name, identifier, display_name) in [
+        ("reaeq.vst.so", "1919247729", "ReaEQ (Cockos)"),
+        ("reacomp.vst.so", "1919247213", "ReaComp (Cockos)"),
+    ] {
+        let plugin_path = reaper_home_path.join("Plugins/FX").join(file_name);
+        if plugin_path.is_file() {
+            cache.set(
+                file_name,
+                format!("00035C13AD2EDD01,{identifier},{display_name}"),
+            );
+        }
+    }
+    ini.write_to_file(cache_path)?;
+    Ok(())
 }
 
 fn build_on_macos(
@@ -275,10 +319,22 @@ fn build_on_macos(
 ) -> Result<PathBuf> {
     let reaper_home_path =
         setup_reaper_for_macos(reaper_version, reaper_download_dir_path)?;
-    install_plugin(&target_dir_path, &reaper_home_path)?;
+    let resource_path = macos_resource_path(&reaper_home_path);
+    install_plugin(&target_dir_path, &resource_path)?;
     let reaper_executable =
         reaper_home_path.join(reaper_version.macos_executable_path());
     Ok(reaper_executable)
+}
+
+fn build_on_windows(
+    reaper_version: &ReaperVersion,
+    target_dir_path: &Path,
+    reaper_download_dir_path: &Path,
+) -> Result<PathBuf> {
+    let reaper_home_path =
+        setup_reaper_for_windows(reaper_version, reaper_download_dir_path)?;
+    install_plugin(target_dir_path, &reaper_home_path)?;
+    Ok(reaper_home_path.join("reaper.exe"))
 }
 
 /// Download file only if it is not exists.
@@ -297,14 +353,21 @@ fn install_plugin(
     target_dir_path: &Path,
     reaper_home_path: &Path,
 ) -> Result<()> {
-    let extension = if cfg!(target_os = "macos") {
+    let extension = if cfg!(target_os = "windows") {
+        "dll"
+    } else if cfg!(target_os = "macos") {
         "dylib"
     } else {
         "so"
     };
-    let source_path = target_dir_path
-        .join("debug")
-        .join(format!("libreaper_test_extension_plugin.{}", extension));
+    let library_prefix = if cfg!(target_os = "windows") {
+        ""
+    } else {
+        "lib"
+    };
+    let source_path = target_dir_path.join("debug").join(format!(
+        "{library_prefix}reaper_test_extension_plugin.{extension}"
+    ));
     let target_path = reaper_home_path
         .join("UserPlugins")
         .join(format!("reaper_test_extension_plugin.{}", extension));
@@ -337,17 +400,40 @@ fn install_plugin(
 }
 
 fn run_integration_test_in_reaper(reaper_executable: &Path) -> Result<()> {
-    write_reaper_config(
-        &reaper_executable
+    let executable_directory = reaper_executable
+        .parent()
+        .ok_or("can not find parent dir of reaper executable")?;
+    let (resource_path, isolated_home) = if cfg!(target_os = "macos") {
+        let app_bundle_directory = executable_directory
             .parent()
-            .ok_or("can not find parent dir of reaper executable")?,
-    )?;
+            .ok_or("can not find Contents directory of REAPER.app")?;
+        let reaper_home_path = app_bundle_directory
+            .parent()
+            .ok_or("can not find REAPER.app directory")?
+            .parent()
+            .ok_or("can not find REAPER installation directory")?;
+        (
+            macos_resource_path(reaper_home_path),
+            Some(reaper_home_path),
+        )
+    } else {
+        (executable_directory.to_path_buf(), None)
+    };
+    write_reaper_config(&resource_path)?;
     println!("Starting REAPER ({:?})...", &reaper_executable);
     let result_path = integration_result_path()?;
     let output_path = result_path.with_extension("log");
     let output_file = fs::File::create(&output_path)?;
     let error_file = output_file.try_clone()?;
-    let mut child = Command::new(reaper_executable)
+    let mut command = Command::new(reaper_executable);
+    if let Some(home) = isolated_home {
+        // macOS REAPER reads its resources from ~/Library/Application
+        // Support/REAPER. Isolate that directory per downloaded REAPER
+        // copy so the test plug-in, configuration, and
+        // result-producing run all use the same resource path.
+        command.env("HOME", home);
+    }
+    let mut child = command
         .env("RUN_REAPER_INTEGRATION_TEST", "true")
         .env(INTEGRATION_RESULT_PATH_ENV, &result_path)
         // .env("RUST_LOG", "debug")
@@ -415,6 +501,53 @@ fn setup_reaper_for_linux(
     Ok(reaper_home_path)
 }
 
+fn setup_reaper_for_windows(
+    reaper_version: &ReaperVersion,
+    reaper_download_dir_path: &Path,
+) -> Result<PathBuf> {
+    let reaper_home_path = reaper_download_dir_path.join(format!(
+        "reaper-{}-windows-x64",
+        reaper_version.version_key()
+    ));
+    let reaper_executable = reaper_home_path.join("reaper.exe");
+    if reaper_executable.exists() {
+        return Ok(reaper_home_path);
+    }
+
+    let installer_path = reaper_download_dir_path.join(format!(
+        "reaper-{}_windows_x64-install.exe",
+        reaper_version.version_key()
+    ));
+    if !installer_path.exists() {
+        println!("Downloading REAPER to ({installer_path:?})...");
+        download(reaper_version.windows_download_url(), &installer_path)?;
+    }
+
+    fs::create_dir_all(&reaper_home_path)?;
+    println!("Installing REAPER to ({reaper_home_path:?})...");
+    let status = Command::new(&installer_path)
+        // GitHub Actions runs without an interactive UAC desktop. Force the
+        // installer to use the runner's current token; the destination is
+        // inside the workspace and does not require elevation.
+        .env("__COMPAT_LAYER", "RunAsInvoker")
+        .arg("/S")
+        .arg(format!("/D={}", reaper_home_path.display()))
+        .status()?;
+    if !status.success() || !reaper_executable.exists() {
+        return Err(format!(
+            "REAPER installer failed ({status}) or did not create {:?}",
+            reaper_executable
+        )
+        .into());
+    }
+
+    // REAPER enables portable mode when this marker is next to the executable.
+    fs::write(reaper_home_path.join("portable.ini"), "")?;
+    write_reaper_config(&reaper_home_path)?;
+    println!("REAPER home directory is {reaper_home_path:?}");
+    Ok(reaper_home_path)
+}
+
 /// Returns path of REAPER home
 fn setup_reaper_for_macos(
     reaper_version: &ReaperVersion,
@@ -423,7 +556,9 @@ fn setup_reaper_for_macos(
     let reaper_home_path = reaper_download_dir_path
         .join(format!("reaper-{}", reaper_version.version_key()))
         .join(reaper_version.macos_download_path());
-    if reaper_home_path.exists() {
+    let reaper_executable =
+        reaper_home_path.join(reaper_version.macos_executable_path());
+    if reaper_executable.exists() {
         return Ok(reaper_home_path);
     }
     let reaper_dmg_path = reaper_download_dir_path
@@ -433,30 +568,45 @@ fn setup_reaper_for_macos(
         download(reaper_version.macos_download_url(), &reaper_dmg_path)?;
     }
     println!("Unpacking REAPER dmg...");
-    mount_dmg(&reaper_dmg_path)?;
-    println!("Copying from mount...");
     fs::create_dir_all(&reaper_home_path)?;
-
-    fs_extra::dir::copy(
-        reaper_version.macos_install_folder(),
-        &reaper_home_path,
-        &CopyOptions {
-            overwrite: false,
-            skip_exist: false,
-            buffer_size: 0,
-            copy_inside: false,
-            depth: 0,
-            ..Default::default()
-        },
-    )?;
-    write_reaper_config(&reaper_home_path)?;
+    let mount_path = reaper_download_dir_path
+        .join(format!("reaper-{}-mounted", reaper_version.version_key()));
+    fs::create_dir_all(&mount_path)?;
+    mount_dmg(&reaper_dmg_path, &mount_path)?;
+    let copy_result: Result<()> = (|| {
+        let app_bundle = find_reaper_app_bundle(&mount_path)?;
+        println!("Copying REAPER bundle from {app_bundle:?}...");
+        fs_extra::dir::copy(
+            app_bundle,
+            &reaper_home_path,
+            &CopyOptions {
+                overwrite: false,
+                skip_exist: false,
+                buffer_size: 0,
+                copy_inside: false,
+                depth: 0,
+                ..Default::default()
+            },
+        )?;
+        Ok(())
+    })();
+    let detach_result = detach_dmg(&mount_path);
+    let _ = fs::remove_dir(&mount_path);
+    copy_result?;
+    detach_result?;
+    write_reaper_config(&macos_resource_path(&reaper_home_path))?;
     remove_rewire_plugin_macos_bundle(&reaper_home_path)?;
     println!("REAPER home directory is {:?}", &reaper_home_path);
     Ok(reaper_home_path)
 }
 
+fn macos_resource_path(reaper_home_path: &Path) -> PathBuf {
+    reaper_home_path.join("Library/Application Support/REAPER")
+}
+
 fn write_reaper_config(reaper_home_path: &Path) -> Result<()> {
     println!("Writing REAPER configuration...");
+    fs::create_dir_all(reaper_home_path)?;
     let config_path = reaper_home_path.join("reaper.ini");
     let mut ini = match Ini::load_from_file(config_path.clone()) {
         Ok(ini) => ini,
@@ -465,11 +615,16 @@ fn write_reaper_config(reaper_home_path: &Path) -> Result<()> {
         }
         Err(error) => return Err(error.into()),
     };
-    ini.with_section(Some("REAOER"))
+    ini.with_section(Some("REAPER"))
         .set("linux_audio_mode", "2")
         .set("coreaudiobs", "512")
         .set("coreaudioindevnew", "<none>")
-        .set("coreaudiooutdevnew", "<none>")
+        .set("coreaudiooutdevnew", "<none>");
+    // Plug-in scan preferences belong to REAPER's canonical [reaper]
+    // section. Setting them under [REAOER] leaves the first-run scan prompt
+    // enabled because REAPER ignores those entries there.
+    ini.with_section(Some("reaper"))
+        .set("plugin_scan", "2")
         .set("vst_scan", "2")
         .set("vstpath", "")
         .set("lv2path_linux", "")
@@ -481,9 +636,11 @@ fn write_reaper_config(reaper_home_path: &Path) -> Result<()> {
 
 fn remove_rewire_plugin_macos_bundle(reaper_home_path: &Path) -> Result<()> {
     println!("Removing Rewire plug-in (because it makes REAPER get stuck on headless macOS)...");
-    fs::remove_dir_all(
-        reaper_home_path.join("REAPER.app/Contents/Plugins/ReWire.bundle"),
-    )?;
+    let rewire_bundle =
+        reaper_home_path.join("REAPER.app/Contents/Plugins/ReWire.bundle");
+    if rewire_bundle.exists() {
+        fs::remove_dir_all(rewire_bundle)?;
+    }
     Ok(())
 }
 
@@ -507,20 +664,66 @@ fn unpack_tar_xz(file_path: &Path, dest_dir_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn mount_dmg(file_path: &Path) -> Result<()> {
+fn mount_dmg(file_path: &Path, mount_path: &Path) -> Result<()> {
     let mut child = Command::new("hdiutil")
         .arg("attach")
+        .arg("-nobrowse")
+        .arg("-readonly")
+        .arg("-mountpoint")
+        .arg(mount_path)
         .arg(file_path)
         .stdin(Stdio::piped())
         .spawn()?;
-    let stdin = child.stdin.as_mut().ok_or("Failed to open stdin")?;
-    // Get rid of displayed license by simulating q and y key presses
-    stdin.write_all("q\nq\ny\ny\ny\ny\n".as_bytes())?;
+    // REAPER's DMG includes a software license dialog. hdiutil presents it
+    // through its pager before asking for agreement, even in non-interactive
+    // CI. Quit the pager and accept the bundled license so attachment works
+    // without a TTY.
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(b"q\ny\n")?;
+    }
     let status = child.wait()?;
     if !status.success() {
-        return Err("mount not successful".into());
+        return Err(
+            format!("mounting REAPER disk image failed: {status}").into()
+        );
     }
     Ok(())
+}
+
+fn detach_dmg(mount_path: &Path) -> Result<()> {
+    let status = Command::new("hdiutil")
+        .arg("detach")
+        .arg(mount_path)
+        .status()?;
+    if !status.success() {
+        return Err(
+            format!("detaching REAPER disk image failed: {status}").into()
+        );
+    }
+    Ok(())
+}
+
+fn find_reaper_app_bundle(mount_path: &Path) -> Result<PathBuf> {
+    let mut pending = vec![mount_path.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.file_name().is_some_and(|name| name == "REAPER.app")
+                && path.is_dir()
+            {
+                return Ok(path);
+            }
+            if path.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    Err(format!(
+        "could not find REAPER.app in mounted disk image at {}",
+        mount_path.display()
+    )
+    .into())
 }
 
 #[cfg(test)]

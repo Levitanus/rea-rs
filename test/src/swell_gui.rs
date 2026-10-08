@@ -71,7 +71,7 @@
 //! update controls from REAPER in timer/event callbacks, and unregister timers
 //! and renderers in `on_destroy` or `Drop`. Replace the gallery-specific track
 //! and MIDI code with the state owned by the extension.
-use log::{info, trace, warn};
+use log::{debug, info, trace, warn};
 use rea_rs::{
     db_to_linear, linear_to_db,
     swell_gui::{
@@ -108,10 +108,6 @@ const TIMER_INTERVAL: Duration = Duration::from_millis(33);
 const LIST_RESET_CONTENT: raw::UINT = 0x0184;
 const MIDI_CANVAS_CHILD_INDEX: usize = 1;
 const MIDI_C3_PITCH: i32 = 48;
-// SWS uses MIDI_RULER_H = 64 px at 96 DPI; the piano-roll child includes
-// this ruler before the note rows. Keep it separate from the pitch transform
-// so callers can adjust it for a different DPI/layout.
-const MIDI_RULER_HEIGHT: f64 = 64.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum DemoEvent {
@@ -267,10 +263,8 @@ impl DemoCSurf {
                 return;
             }
         };
-        let measure_start_ppq = match Measure::from_index(2, &take.project())
-            .and_then(|measure| measure.start.as_ppq(&take))
-        {
-            Ok(ppq) => ppq as f64,
+        let measure_start = match Measure::from_index(2, &take.project()) {
+            Ok(measure) => measure.start,
             Err(error) => {
                 warn!("MIDI overlay skipped: could not locate measure 2: {error}");
                 return;
@@ -308,10 +302,15 @@ impl DemoCSurf {
         let initial_pixels_per_pitch = initial_view.vertical_pixels_per_pitch;
         if let Err(error) = window.on_render(move |_info, surface| {
             // Re-read the transform on each paint so scroll/zoom changes move
-            // the musical anchor with the native MIDI content.
+            // the project-time anchor with the native MIDI content. Convert
+            // project time to take PPQ after each paint so moving the item
+            // doesn't leave the marker at its old item-relative position.
             let view = midi_editor.view_transform()?;
+            let measure_start_ppq = measure_start.as_ppq(&take)? as f64;
             let x = view.x_for_ppq(measure_start_ppq, &take).ok();
-            let y = view.y_for_pitch(MIDI_C3_PITCH, MIDI_RULER_HEIGHT).ok();
+            // This child is the piano-roll canvas; its client origin is the
+            // note-row origin, not the top of the editor's ruler.
+            let y = view.y_for_pitch(MIDI_C3_PITCH, 0.0).ok();
             if let (Some(x), Some(y)) = (x, y) {
                 let width_scale =
                     view.horizontal_pixels_per_unit / initial_horizontal_zoom;
@@ -322,7 +321,7 @@ impl DemoCSurf {
                     x,
                     y,
                     100.0 * width_scale,
-                    50.0 * height_scale,
+                    view.vertical_pixels_per_pitch * height_scale,
                     width,
                     height,
                     &font,
@@ -617,7 +616,16 @@ impl DemoWindow {
         )?;
         window.on_widget_event(button.id(), |event| {
             if let ControlEvent::ButtonClicked { control: _ } = event {
-                info!("Hello World");
+                info!("Hello World from test extension");
+                let pr = Reaper::get().current_project();
+                let cursor_pos = pr.get_cursor_position()?;
+
+                info!(
+                    "cursor position is: measure: {}, beat: {}, seconds: {}",
+                    Measure::from_position(cursor_pos, &pr)?.index,
+                    cursor_pos.as_quarters(&pr)?,
+                    cursor_pos.as_secs_f64()
+                );
             }
             Ok(EventResponse::Handled)
         });
@@ -647,7 +655,7 @@ impl DemoWindow {
             WidgetSize::new_fill_both(width, 100)
                 .set_min_y(90)
                 .set_max_x(width),
-            rea_rs::swell_gui::ListBoxOptions::default(),
+            rea_rs::swell_gui::ListBoxOptions::NOTIFY,
         )?;
         let inspector = content.group_box(
             rea_rs::SwellId(103),
@@ -699,7 +707,9 @@ impl DemoWindow {
         }
         let volume_row = inspector.row(
             rea_rs::SwellId::new_control(),
-            WidgetSize::new_fill_x(380, 32).set_max_x(width),
+            WidgetSize::new_fill_x(380, 32)
+                .set_max_x(width)
+                .set_min_x(200),
         )?;
         let volume = volume_row.trackbar(
             rea_rs::SwellId(109),
@@ -1071,13 +1081,10 @@ impl DemoWindow {
     }
 
     fn set_paint_over(&mut self) {
-        // A native close request unregisters the window handler before
-        // destruction; don't interpret any late control notification as a
-        // user click. Programmatic checkbox synchronization is filtered by
-        // `on_control_event` before this method is reached.
-        if !window_registered() {
-            return;
-        }
+        // Owned-window command handlers are temporarily detached from the
+        // registry while callbacks run, so window_registered() is false for
+        // normal user clicks too. Programmatic checkbox synchronization is
+        // filtered by on_control_event before this method is reached.
         let command_name = format!(
             "{}_section_{}",
             PAINT_OVER_ACTION,
@@ -1226,6 +1233,7 @@ impl WindowHandler for DemoWindow {
                 if control == self.tracklist.id() =>
             {
                 let index = self.tracklist.selected_index().unwrap_or(-1);
+                debug!("LontolEvent::ListSelectionChanged. List index is: {index}");
                 self.set_track_selection(
                     usize::try_from(index)
                         .ok()

@@ -1609,6 +1609,7 @@ impl<'a> CreationContext<'a> {
             ControlRect::new(0, 0, rect.width, rect.height),
             raw::WS_CLIPSIBLINGS,
         )?;
+        self.window.install_container_event_proc(content)?;
         match renderer {
             ScrollbarRenderer::CoolSb
                 if Reaper::get().low().supports_cool_scrollbars() =>

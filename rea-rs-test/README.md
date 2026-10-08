@@ -115,7 +115,8 @@ runner downloads the configured REAPER build under `target/reaper`, installs
 the freshly built test extension in that REAPER copy's `UserPlugins` folder,
 starts a new REAPER process, and waits up to 300 seconds. The first run needs
 network access to download REAPER. macOS uses the configured disk image and
-requires `hdiutil`; Windows is currently reported as unsupported/skipped.
+requires `hdiutil`. Windows downloads and silently installs the x64 REAPER
+installer into an isolated portable directory under `target/reaper`.
 
 ```sh
 cargo build -p reaper-test-extension-plugin
@@ -151,7 +152,7 @@ In VS Code, open the repository root and choose **Terminal → Run Task**.
 `.vscode/tasks.json` contains matching tasks: **Build & Copy REAPER
 integration test**, **Launch downloaded REAPER**, and **Run REAPER integration
 test**. The build/copy and manual launch tasks are Linux-specific; the Cargo
-runner handles the supported Linux/macOS hosted-test setup.
+runner handles hosted tests on Linux, macOS, and Windows.
 
 ## Hint
 

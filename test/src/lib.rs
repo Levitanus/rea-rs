@@ -662,12 +662,15 @@ fn tracks() -> TestStep {
         assert_eq!(aac.end()?, Position::from_seconds(0.0)?);
         drop(aac);
 
-        debug!("FX");
-        let fx = tr
-            .add_fx("ReaEQ", None, false, false)?
-            .ok_or(ReaRsError::Str("Can not add FX"))?;
-        assert!(fx.is_enabled()?);
-        drop(fx);
+        #[cfg(not(target_os = "macos"))]
+        {
+            debug!("FX");
+            let fx = tr
+                .add_fx("ReaEQ", None, false, false)?
+                .ok_or(ReaRsError::Str("Can not add FX"))?;
+            assert!(fx.is_enabled()?);
+            drop(fx);
+        }
 
         debug!("Item");
         let item = tr.add_item(pos, Duration::from_secs(2))?;

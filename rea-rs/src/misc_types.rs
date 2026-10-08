@@ -35,7 +35,7 @@ impl Measure {
         let seconds = unsafe {
             low.TimeMap_GetMeasureInfo(
                 project.get()?.as_ptr(),
-                index,
+                index - 1,
                 std::ptr::null_mut(),
                 qn_end.as_mut_ptr(),
                 numerator.as_mut_ptr(),

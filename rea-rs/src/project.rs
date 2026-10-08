@@ -672,7 +672,7 @@ impl<'a> Project {
     /// ```no_run
     /// # use rea_rs::{Project, ProjectContext};
     /// # fn example() -> anyhow::Result<()> {
-    /// let project = Project::new(ProjectContext::CurrentProject)?;
+    /// let project = Project::new(ProjectContext::CurrentProject);
     /// let marker = project
     ///     .iter_markers_and_regions()
     ///     .find_map(|info| match info {

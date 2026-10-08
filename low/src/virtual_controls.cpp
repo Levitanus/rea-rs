@@ -111,6 +111,9 @@ void rea_wdl_control_set_value(rea_wdl_control *control, int value) {
 int rea_wdl_control_get_value(rea_wdl_control *control) {
   return control && control->kind == REA_WDL_SLIDER ? static_cast<WDL_VirtualSlider *>(control->widget)->GetSliderPosition() : 0;
 }
+int rea_wdl_control_id(rea_wdl_control *control) {
+  return control && control->widget ? control->widget->GetID() : -1;
+}
 int rea_wdl_control_add_item(rea_wdl_control *control, const char *text) {
   if (!control || !text) return -1;
   control->strings.emplace_back(text);

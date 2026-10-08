@@ -315,6 +315,15 @@ fn compile_glue_code() {
         .file("lib/WDL/projectcontext.cpp");
     println!("cargo:rerun-if-changed=src/virtual_controls.cpp");
     println!("cargo:rerun-if-changed=src/virtual_controls.hpp");
+    if cfg!(target_os = "windows") {
+        cc::Build::new()
+            .warnings(false)
+            .file("lib/WDL/win32_utf8.c")
+            .compile("wdl_win32_utf8");
+        println!("cargo:rustc-link-lib=shell32");
+        println!("cargo:rustc-link-lib=comdlg32");
+        println!("cargo:rerun-if-changed=lib/WDL/win32_utf8.c");
+    }
     if cfg!(target_os = "macos") {
         build.cpp_set_stdlib("c++");
     }
