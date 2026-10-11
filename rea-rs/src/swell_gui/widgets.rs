@@ -5,8 +5,8 @@ use crate::{
         layout::{Axis, OverflowPolicy, Panel, PanelLayout, PanelRects},
         windows::{LayoutNode, ScrollViewRuntime},
     },
-    ReaRsError, Reaper, ReaperResult, ScrollState, ScrollViewEvent,
-    ScrollbarRenderer,
+    ReaRsError, Reaper, ReaperHwnd, ReaperResult, ScrollState,
+    ScrollViewEvent, ScrollbarRenderer,
 };
 use rea_rs_low::raw;
 use std::{cell::RefCell, collections::HashMap, ffi::CString, rc::Rc};
@@ -1181,6 +1181,10 @@ impl<'a> CreationContext<'a> {
             container: None,
             panel: None,
         }
+    }
+
+    pub fn parent_hwnd(&self) -> ReaperHwnd {
+        ReaperHwnd::from_raw(self.parent)
     }
 
     fn size(&self, size: WidgetSize) -> ControlRect {

@@ -1,3 +1,11 @@
+# Unreleased
+
+## added
+* `CreationContext::parent_hwnd` method for retrieving hwnd's of containers. 
+There is a sense of reworking this API a bit
+
+---
+
 # 1.0.0 - 2026-10-08
 
 This is the first stable release and contains breaking API changes. In
