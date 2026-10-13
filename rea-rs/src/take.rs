@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     ffi::{c_char, CString},
     mem::MaybeUninit,
     vec::IntoIter,
@@ -10,10 +11,11 @@ use crate::{
         TrackEnvelope,
     },
     utils::{string_from_buf, string_from_const_i8},
-    AudioAccessor, Color, Envelope, FXParent, Item, KnowsProject,
-    MidiEventBuilder, Pan, PanLaw, Pitch, PlayRate, Position, Project,
-    ProjectContext, ReaRsError, Reaper, ReaperResult, Source, TakeFX, Track,
-    Volume, WithReaperPtr, FX, GUID,
+    AudioAccessor, Color, Envelope, FXParent, Item, KnowsProject, MidiEvent,
+    MidiEventBuilder, MidiEventConsumer, MidiMessage, Pan, PanLaw, Pitch,
+    PlayRate, Position, Project, ProjectContext, RawMidiMessage, ReaRsError,
+    Reaper, ReaperResult, Source, TakeFX, Track, Volume, WithReaperPtr, FX,
+    GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
@@ -179,6 +181,49 @@ impl Take {
     ) -> ReaperResult<MidiEventBuilder<IntoIter<u8>>> {
         let buf = self.get_midi(buf_size_override)?;
         Ok(MidiEventBuilder::new(buf.into_iter()))
+    }
+
+    /// Insert one event into Take MIDI buffer.
+    ///
+    /// The event is inserted sorted and it costs O(n) where n is amount of
+    /// events in the buffer.
+    pub fn insert_midi_event<T: MidiMessage>(
+        &mut self,
+        event: MidiEvent<T>,
+        buf_size_override: impl Into<Option<i32>>,
+    ) -> ReaperResult<()> {
+        let msg = event.message().as_raw_message();
+        let event = MidiEvent::with_new_message(event, msg);
+        self.insert_midi_events(vec![event], buf_size_override)
+    }
+
+    /// Insert a group of events into Take MIDI buffer.
+    ///
+    /// Events are inserted sorted and it costs O(n) where n is amount of
+    /// events in the buffer.
+    pub fn insert_midi_events(
+        &mut self,
+        mut events: Vec<MidiEvent<RawMidiMessage>>,
+        buf_size_override: impl Into<Option<i32>>,
+    ) -> ReaperResult<()> {
+        let builder = self.iter_midi(buf_size_override)?;
+        events.sort_by(|left, right| {
+            left.ppq_position().cmp(&right.ppq_position())
+        });
+        let mut events: VecDeque<_> = events.into();
+        let mut sum = Vec::new();
+
+        for event in builder {
+            while events
+                .front()
+                .is_some_and(|ins| ins.ppq_position() <= event.ppq_position())
+            {
+                sum.push(events.pop_front().unwrap());
+            }
+            sum.push(event);
+        }
+        let midi: Vec<u8> = MidiEventConsumer::new(sum.into_iter()).collect();
+        self.set_midi(midi)
     }
 
     /// Get take raw midi data.

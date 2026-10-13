@@ -3,6 +3,7 @@
 ## added
 * `CreationContext::parent_hwnd` method for retrieving hwnd's of containers. 
 There is a sense of reworking this API a bit
+* `Take::insert_midi_event` and `Take::insert_midi_events` for easier inserting of single events into Take
 
 ---
 
