@@ -109,7 +109,7 @@ impl Measure {
         }
         Ok(pos.round() as i64)
     }
-    pub fn from_ppq(&self, take: &Take, ppq: i64) -> Result<Self, ReaRsError> {
+    pub fn from_ppq(&self, take: &Take, ppq: u32) -> Result<Self, ReaRsError> {
         let pos = Position::from_ppq(ppq, take)?;
         Self::from_position(pos, &take.project())
     }
@@ -410,23 +410,23 @@ impl Position {
     ) -> ReaperResult<bool> {
         Ok(self.rounded_to(precision)? == other.rounded_to(precision)?)
     }
-    pub fn as_ppq(&self, take: &Take) -> Result<i64, ReaRsError> {
+    pub fn as_ppq(&self, take: &Take) -> Result<u32, ReaRsError> {
         let ppq = unsafe {
             Reaper::get().low().MIDI_GetPPQPosFromProjTime(
                 take.get()?.as_mut(),
                 self.as_seconds_f64(),
             )
         };
-        if !ppq.is_finite() || ppq < i64::MIN as f64 || ppq >= i64::MAX as f64
+        if !ppq.is_finite() || ppq < u32::MIN as f64 || ppq >= u32::MAX as f64
         {
             return Err(ReaRsError::InvalidObject(
                 "PPQ position out of range",
             ));
         }
-        Ok(ppq.round() as i64)
+        Ok(ppq.round() as u32)
     }
 
-    pub fn from_ppq(ppq: i64, take: &Take) -> Result<Self, ReaRsError> {
+    pub fn from_ppq(ppq: u32, take: &Take) -> Result<Self, ReaRsError> {
         let val = unsafe {
             Reaper::get()
                 .low()
