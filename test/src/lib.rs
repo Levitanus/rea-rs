@@ -89,9 +89,7 @@ fn global_instances() -> TestStep {
             low_reaper = size_of_val(Reaper::get().low()),
         ))?;
         // Low-level REAPER
-        rea_rs_low::Reaper::make_available_globally(*Reaper::get().low());
-        // rea_rs_low::Reaper::make_available_globally(*medium_reaper.low());
-        let low = rea_rs_low::Reaper::get();
+        let low = Reaper::get().low();
         println!("rea_rs_low::Reaper {:?}", &low);
         unsafe {
             low.ShowConsoleMsg(

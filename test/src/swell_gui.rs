@@ -86,7 +86,7 @@ use rea_rs::{
     SoloMode, Track, Trackbar, Volume, WindowHandler, WindowId, WindowSpec,
     WithReaperPtr,
 };
-use rea_rs_low::raw;
+use rea_rs::raw;
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, sync::Arc, time::Duration};
 

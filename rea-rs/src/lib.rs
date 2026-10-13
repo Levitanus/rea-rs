@@ -267,7 +267,11 @@ use anyhow::Error;
 use base64::DecodeError;
 pub use chrono::Duration;
 pub use int_enum::IntEnum;
-pub use rea_rs_low::PluginContext;
+pub use rea_rs_low::{
+    bootstrap_extension_plugin, execute_plugin_destroy_hooks, raw,
+    register_swell_function_provider, static_extension_plugin_context, register_plugin_destroy_hook,
+    PluginContext,
+};
 
 pub mod reaper;
 pub use reaper::*;

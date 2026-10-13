@@ -101,10 +101,9 @@
 //! captures REAPER stdout and stderr and prints the capture when a test fails.
 
 use rea_rs::{
-    ActionHook, ActionKind, ActionRegistrationOptions, PluginContext, Reaper,
-    Timer,
+    ActionHook, ActionKind, ActionRegistrationOptions, PluginContext, Reaper, Timer, register_plugin_destroy_hook,
 };
-use rea_rs_low::register_plugin_destroy_hook;
+
 use std::{
     cell::RefCell,
     fmt::Debug,

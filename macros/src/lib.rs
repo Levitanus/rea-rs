@@ -15,8 +15,7 @@ use quote::quote;
 /// ```ignore
 /// use std::error::Error;
 /// use rea_rs_macros::reaper_extension_plugin;
-/// use rea_rs_low::PluginContext;
-/// use rea_rs::Reaper;
+/// use rea_rs::{PluginContext, Reaper};
 ///
 /// #[reaper_extension_plugin]
 /// fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
@@ -64,13 +63,13 @@ fn generate_low_level_plugin_code(main_function: syn::ItemFn) -> TokenStream {
         #[allow(non_snake_case)]
         #[no_mangle]
         extern "system" fn DllMain(
-            hinstance: rea_rs_low::raw::HINSTANCE,
+            hinstance: rea_rs::raw::HINSTANCE,
             reason: u32,
             _: *const u8,
         ) -> u32 {
-            if (reason == rea_rs_low::raw::DLL_PROCESS_DETACH) {
+            if (reason == rea_rs::raw::DLL_PROCESS_DETACH) {
                 unsafe {
-                    rea_rs_low::execute_plugin_destroy_hooks();
+                    rea_rs::execute_plugin_destroy_hooks();
                 }
             }
             1
@@ -91,7 +90,7 @@ fn generate_low_level_plugin_code(main_function: syn::ItemFn) -> TokenStream {
         #[allow(non_snake_case)]
         #[no_mangle]
         extern "C" fn SWELL_dllMain(
-            hinstance: rea_rs_low::raw::HINSTANCE,
+            hinstance: rea_rs::raw::HINSTANCE,
             reason: u32,
             get_func: Option<
                 unsafe extern "C" fn(
@@ -99,8 +98,8 @@ fn generate_low_level_plugin_code(main_function: syn::ItemFn) -> TokenStream {
                 ) -> *mut std::os::raw::c_void,
             >,
         ) -> std::os::raw::c_int {
-            if (reason == rea_rs_low::raw::DLL_PROCESS_ATTACH) {
-                rea_rs_low::register_swell_function_provider(get_func);
+            if (reason == rea_rs::raw::DLL_PROCESS_ATTACH) {
+                rea_rs::register_swell_function_provider(get_func);
             }
             1
         }
@@ -109,9 +108,9 @@ fn generate_low_level_plugin_code(main_function: syn::ItemFn) -> TokenStream {
         ///
         /// This is called by REAPER at startup time.
         #[no_mangle]
-        unsafe extern "C" fn ReaperPluginEntry(h_instance: ::rea_rs_low::raw::HINSTANCE, rec: *mut ::rea_rs_low::raw::reaper_plugin_info_t) -> ::std::os::raw::c_int {
-            let static_context = rea_rs_low::static_extension_plugin_context();
-            ::rea_rs_low::bootstrap_extension_plugin(h_instance, rec, static_context, #main_function_name)
+        unsafe extern "C" fn ReaperPluginEntry(h_instance: ::rea_rs::raw::HINSTANCE, rec: *mut ::rea_rs::raw::reaper_plugin_info_t) -> ::std::os::raw::c_int {
+            let static_context = rea_rs::static_extension_plugin_context();
+            ::rea_rs::bootstrap_extension_plugin(h_instance, rec, static_context, #main_function_name)
         }
 
         #main_function
