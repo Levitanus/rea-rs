@@ -355,6 +355,58 @@ impl Take {
         }
     }
 
+    /// Get position in quarter notes fpr given ppq position in take.
+    pub fn get_quarters_from_ppq(&self, ppq: u32) -> ReaperResult<f64> {
+        unsafe {
+            Ok(Reaper::get()
+                .low()
+                .MIDI_GetProjQNFromPPQPos(self.get()?.as_ptr(), ppq as f64))
+        }
+    }
+
+    /// Get position in quarter notes fpr given ppq position in take.
+    ///
+    /// # Safety
+    /// Negative time valutes, including negative ppq position are unreliable
+    /// so instead of returning i32 we return an error.
+    pub fn get_ppq_from_quarters(&self, quarters: f64) -> ReaperResult<u32> {
+        let ppq = unsafe {
+            Reaper::get()
+                .low()
+                .MIDI_GetPPQPosFromProjQN(self.get()?.as_ptr(), quarters)
+        };
+        if ppq.is_sign_negative() {
+            return Err(ReaRsError::InvalidArgument(
+                "quarters",
+                format!("{quarters}"),
+                "resulted in negative ppq.",
+            ));
+        }
+        Ok(ppq as u32)
+    }
+
+    /// Get the MIDI tick (ppq) position corresponding to the start of the
+    /// measure.
+    pub fn get_ppq_start_of_measure(&self, ppq: u32) -> ReaperResult<u32> {
+        unsafe {
+            Ok(Reaper::get().low().MIDI_GetPPQPos_StartOfMeasure(
+                self.get()?.as_ptr(),
+                ppq as f64,
+            ) as u32)
+        }
+    }
+
+    /// Get the MIDI tick (ppq) position corresponding to the end of the
+    /// measure.
+    pub fn get_ppq_end_of_measure(&self, ppq: u32) -> ReaperResult<u32> {
+        unsafe {
+            Ok(Reaper::get()
+                .low()
+                .MIDI_GetPPQPos_EndOfMeasure(self.get()?.as_ptr(), ppq as f64)
+                as u32)
+        }
+    }
+
     /// Start offset of source media.
     pub fn source_offset(&self) -> ReaperResult<Time> {
         Time::from_seconds_f64(self.get_info_value("D_STARTOFFS")?)

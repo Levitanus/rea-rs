@@ -6,6 +6,7 @@ There is a sense of reworking this API a bit
 * `Take::insert_midi_event` and `Take::insert_midi_events` for easier inserting of single events into Take
 * `Time::format_timestr`, `Time::parse_timestr`, `Time::format_timestr_len`, `Time::parse_timestr_len` and `TimeRange::format_timestr_len` as well as `TimeStringFormattingMode` enum for getting and parsing ruler time string representation.
 * `Measure::get_ruler_index` for retriving visual measure index as it is displayed in ruler
+* `quantize` module, which can be used for easy quantisation of any time units.
 
 ## Changed
 * renamed `Position` to `Time`, as it represents now all reaper-related time

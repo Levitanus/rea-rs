@@ -22,7 +22,7 @@ pub(crate) type GetSwellFunc =
 /// Once obtained, it is supposed to be passed to [`Reaper::load()`].
 ///
 /// [`Reaper::load()`]: struct.Reaper.html#method.load
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct PluginContext {
     type_specific: TypeSpecificPluginContext,
     h_instance: raw::HINSTANCE,
@@ -36,7 +36,7 @@ unsafe impl Send for PluginContext {}
 
 /// Additional stuff available in the plug-in context specific to a certain
 /// plug-in type.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum TypeSpecificPluginContext {
     /// This is an extension plug-in.
     Extension(ExtensionPluginContext),
@@ -45,7 +45,7 @@ pub enum TypeSpecificPluginContext {
 }
 
 /// Additional data available in the context of extension plug-ins.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct ExtensionPluginContext {
     caller_version: c_int,
     hwnd_main: raw::HWND,
@@ -54,7 +54,7 @@ pub struct ExtensionPluginContext {
 }
 
 /// Additional data available in the context of VST plug-ins.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct VstPluginContext {
     host_callback: HostCallbackProc,
 }
@@ -278,7 +278,7 @@ impl std::error::Error for ContextFromVstPluginError {}
 ///
 /// [`reaper_vst_plugin`]: macro.reaper_vst_plugin.html
 /// [`static_vst_plugin_context()`]: fn.static_vst_plugin_context.html
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct StaticVstPluginContext {
     /// `HINSTANCE` representing the handle of the module (DLL) containing the
     /// plug-in.
@@ -304,7 +304,7 @@ impl Default for StaticVstPluginContext {
 /// obtained from static variables.
 ///
 /// This just contains the SWELL function provider at the moment.
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct StaticExtensionPluginContext {
     /// Function which returns SWELL function by its name.
     ///

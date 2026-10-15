@@ -16,6 +16,7 @@ use rea_rs::{
     TrackGroupParam, TrackPan, TrackPerformanceFlags, TrackPlayOffset,
     TrackSend, UndoFlags, VUMode, Volume, WithReaperPtr, FX, GUID,
 };
+mod quantize;
 mod swell_gui;
 use rea_rs_macros::reaper_extension_plugin;
 use rea_rs_test::{TestStep, TestStepResult};
@@ -26,6 +27,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::Duration;
+
+use crate::quantize::quantize;
 
 #[reaper_extension_plugin]
 fn test_main(context: PluginContext) -> TestStepResult {
@@ -65,6 +68,7 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
         items(),
         takes(),
         render_settings(),
+        quantize(),
     ]
     .into_iter();
     let _user_interaction =

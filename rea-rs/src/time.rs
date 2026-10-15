@@ -3,8 +3,8 @@ use std::{
     ffi::CString,
     hash::{Hash, Hasher},
     mem::MaybeUninit,
-    ops::{Add, Sub},
-    ptr::null,
+    ops::{Add, Div, Mul, Rem, Sub},
+    ptr::{null, null_mut},
     time::Duration,
 };
 
@@ -53,12 +53,21 @@ pub struct Measure {
     pub end: Time,
     pub time_signature: TimeSignature,
     pub tempo: f64,
+    pub qn_start: f64,
+    pub qn_end: f64,
 }
 
 impl Measure {
     pub fn from_index(index: u32, project: &Project) -> ReaperResult<Self> {
         let low = Reaper::get().low();
-        let (mut qn_end, mut numerator, mut denominator, mut tempo) = (
+        let (
+            mut qn_start,
+            mut qn_end,
+            mut numerator,
+            mut denominator,
+            mut tempo,
+        ) = (
+            MaybeUninit::zeroed(),
             MaybeUninit::zeroed(),
             MaybeUninit::zeroed(),
             MaybeUninit::zeroed(),
@@ -68,15 +77,16 @@ impl Measure {
             low.TimeMap_GetMeasureInfo(
                 project.get()?.as_ptr(),
                 index as i32,
-                std::ptr::null_mut(),
+                qn_start.as_mut_ptr(),
                 qn_end.as_mut_ptr(),
                 numerator.as_mut_ptr(),
                 denominator.as_mut_ptr(),
                 tempo.as_mut_ptr(),
             )
         };
-        let (qn_end, numerator, denominator, tempo) = unsafe {
+        let (qn_start, qn_end, numerator, denominator, tempo) = unsafe {
             (
+                qn_start.assume_init(),
                 qn_end.assume_init(),
                 numerator.assume_init(),
                 denominator.assume_init(),
@@ -98,6 +108,8 @@ impl Measure {
                 })?,
             ),
             tempo,
+            qn_start,
+            qn_end,
         })
     }
 
@@ -106,6 +118,22 @@ impl Measure {
         let (_, relative, _) = position.time_to_beats_raw(project)?;
         let (index, _) = relative.relative(project)?;
         Self::from_index(index, project)
+    }
+
+    /// Find the measure containing a signed project position.
+    pub fn from_quarters(
+        position: f64,
+        project: &Project,
+    ) -> ReaperResult<Self> {
+        let index = unsafe {
+            Reaper::get().low().TimeMap_QNToMeasures(
+                project.get()?.as_ptr(),
+                position,
+                null_mut(),
+                null_mut(),
+            )
+        };
+        Self::from_index((index - 1) as u32, project)
     }
 
     /// Return measure number as it is displayed in the project ruler.
@@ -511,6 +539,56 @@ impl Sub for Time {
         }
     }
 }
+impl Div<Time> for Time {
+    type Output = i64;
+    fn div(self, rhs: Time) -> Self::Output {
+        let lhs: i128 = self
+            .offset
+            .num_nanoseconds()
+            .expect("num nanosecond overflowed")
+            .into();
+        let rhs: i128 = rhs
+            .offset
+            .num_nanoseconds()
+            .expect("num nanoseconds overflowed")
+            .into();
+        (lhs / rhs).try_into().expect("can not convert i128 to i64")
+    }
+}
+impl Div<i32> for Time {
+    type Output = Time;
+    fn div(mut self, rhs: i32) -> Self::Output {
+        self.offset = self.offset / rhs;
+        self
+    }
+}
+impl Rem<Time> for Time {
+    type Output = Time;
+    fn rem(self, rhs: Time) -> Self::Output {
+        let lhs: i64 = self
+            .offset
+            .num_nanoseconds()
+            .expect("num nanosecond overflowed")
+            .into();
+        let rhs: i64 = rhs
+            .offset
+            .num_nanoseconds()
+            .expect("num nanoseconds overflowed")
+            .into();
+        let nanos: i64 = lhs % rhs;
+        Time {
+            offset: TimeDelta::nanoseconds(nanos),
+        }
+    }
+}
+impl Mul<i32> for Time {
+    type Output = Time;
+    fn mul(mut self, rhs: i32) -> Self::Output {
+        self.offset = self.offset * rhs;
+        self
+    }
+}
+
 impl Add<TimeDelta> for Time {
     type Output = Time;
 

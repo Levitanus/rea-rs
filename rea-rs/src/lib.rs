@@ -373,6 +373,8 @@ pub use swell_gui::{
     WindowHandler, WindowId, WindowSpec,
 };
 
+pub mod quantize;
+
 #[derive(thiserror::Error, Debug)]
 pub enum ReaRsError {
     #[error("The pointer to {0} is null.")]
@@ -411,6 +413,9 @@ pub enum ReaRsError {
     UnderlyingError(Error),
     #[error("IntEnumError: {0}")]
     IntEnum(String),
+    /// Argument {name} is incorrect: {value}, {expectation}
+    #[error("Argument {0} is incorrect: {1}, {2}")]
+    InvalidArgument(&'static str, String, &'static str),
 }
 
 pub type ReaperResult<T> = Result<T, ReaRsError>;
