@@ -1,5 +1,5 @@
 use crate::{
-    ptr_wrappers, KnowsProject, Position, ReaRsError, Reaper, SampleAmount,
+    ptr_wrappers, KnowsProject, ReaRsError, Reaper, SampleAmount, Time,
     WithReaperPtr,
 };
 
@@ -42,21 +42,21 @@ impl<'a, T: KnowsProject> AudioAccessor<'a, T> {
                 .AudioAccessorStateChanged(self.get()?.as_ptr())
         })
     }
-    pub fn start(&self) -> Result<Position, ReaRsError> {
+    pub fn start(&self) -> Result<Time, ReaRsError> {
         let seconds = unsafe {
             Reaper::get()
                 .low()
                 .GetAudioAccessorStartTime(self.get()?.as_ptr())
         };
-        Position::from_host_seconds(seconds)
+        Time::from_seconds_f64(seconds)
     }
-    pub fn end(&self) -> Result<Position, ReaRsError> {
+    pub fn end(&self) -> Result<Time, ReaRsError> {
         let seconds = unsafe {
             Reaper::get()
                 .low()
                 .GetAudioAccessorEndTime(self.get()?.as_ptr())
         };
-        Position::from_host_seconds(seconds)
+        Time::from_seconds_f64(seconds)
     }
 
     /// Get buffer of samples with given absolute project position in samples.
@@ -93,8 +93,8 @@ impl<'a, T: KnowsProject> AudioAccessor<'a, T> {
                 "audio sample buffer size overflow",
             ))?;
         let mut sample_buffer = vec![0.0; sample_count];
-        let start_seconds = self.start()?.as_seconds_f64()
-            + start.as_time(samplerate)?.as_secs_f64();
+        let start_seconds =
+            (self.start()? + start.as_time(samplerate)?).as_seconds_f64();
         if !start_seconds.is_finite() {
             return Err(ReaRsError::InvalidObject(
                 "audio accessor start out of range",

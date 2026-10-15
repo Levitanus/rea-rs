@@ -3,8 +3,8 @@ use std::{ffi::CString, mem::MaybeUninit, ptr::null};
 use serde_derive::{Deserialize, Serialize};
 
 use crate::{
-    ptr_wrappers::MediaTrack, utils::string_from_const_i8, Color, Position,
-    Project, ReaRsError, Reaper, ReaperResult, Track, WithReaperPtr,
+    ptr_wrappers::MediaTrack, utils::string_from_const_i8, Color, Project,
+    ReaRsError, Reaper, ReaperResult, Time, Track, WithReaperPtr,
 };
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -12,8 +12,8 @@ pub struct MarkerRegionInfo {
     pub is_region: bool,
     pub user_index: usize,
     pub enum_index: usize,
-    pub position: Position,
-    pub rgn_end: Position,
+    pub position: Time,
+    pub rgn_end: Time,
     pub name: String,
     pub color: Color,
 }
@@ -275,12 +275,8 @@ impl<'a> Iterator for MarkerRegionIterator<'a> {
                         enum_index: (self.index - 1) as usize,
                         user_index: user_index.assume_init() as usize,
                         is_region: is_region.assume_init(),
-                        position: Position::from_host_seconds(
-                            pos.assume_init(),
-                        )?,
-                        rgn_end: Position::from_host_seconds(
-                            end.assume_init(),
-                        )?,
+                        position: Time::from_seconds_f64(pos.assume_init())?,
+                        rgn_end: Time::from_seconds_f64(end.assume_init())?,
                         name: string_from_const_i8(name_buf.assume_init())
                             .map_err(|error| {
                                 ReaRsError::UnderlyingError(error.into())

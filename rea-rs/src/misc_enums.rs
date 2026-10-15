@@ -354,3 +354,31 @@ bitflags! {
         const FREEZE_STATES = 16;
     }
 }
+
+#[repr(i32)]
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, IntEnum, Serialize, Deserialize,
+)]
+pub enum TimeStringFormattingMode {
+    Time = 0,
+    MeasuresBeatsAndTime = 1,
+    MeasuresBeats = 2,
+    Seconds = 3,
+    Samples = 4,
+    /// h:m:s:f
+    Video = 5,
+}
+impl TryFrom<i32> for TimeStringFormattingMode {
+    type Error = ReaRsError;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        Self::from_int(value).map_err(|_| {
+            ReaRsError::InvalidObject("unknown timestring formatting mode")
+        })
+    }
+}
+impl Into<i32> for TimeStringFormattingMode {
+    fn into(self) -> i32 {
+        self.int_value()
+    }
+}

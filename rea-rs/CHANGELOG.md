@@ -1,9 +1,20 @@
 # Unreleased
 
-## added
+## Added
 * `CreationContext::parent_hwnd` method for retrieving hwnd's of containers. 
 There is a sense of reworking this API a bit
 * `Take::insert_midi_event` and `Take::insert_midi_events` for easier inserting of single events into Take
+* `Time::format_timestr`, `Time::parse_timestr`, `Time::format_timestr_len`, `Time::parse_timestr_len` and `TimeRange::format_timestr_len` as well as `TimeStringFormattingMode` enum for getting and parsing ruler time string representation.
+* `Measure::get_ruler_index` for retriving visual measure index as it is displayed in ruler
+
+## Changed
+* renamed `Position` to `Time`, as it represents now all reaper-related time
+* reduced usage of `std::Duration` (left only in timer functions)
+* all functions that previously used `Duration` or `GetLength` nor are using `Time`
+* `TimeRange` type now corresponds to `Time` interval and will be future-developed ofr easier time-range manipulation (various boundaries, items manipulation etc.)
+* for time selection and loop selection now is used `LoopRange` type
+* `Project::get_time_range`, `Project::get_loop_selection` and `Project::get_time_selection` now are returning `ReaperResult<Option<LoopRange>>`, with being `None` if there is no active loop or time selection
+* `Source::kength` now returns `SourceLength` enum, that represents or length in `Time` or length in quarter notes.
 
 ---
 

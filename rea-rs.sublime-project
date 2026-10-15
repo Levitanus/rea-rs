@@ -1,14 +1,14 @@
 {
 	"folders": [
 		{
-			"path": "."
+			"path": ".",
 		}
 	],
 	"build_systems": [
 		{
 			"name": "Build & Copy Integration Test",
 			"shell_cmd": "cargo build -p reaper-test-extension-plugin && mkdir -p ./target/reaper/reaper_linux_x86_64/REAPER/UserPlugins && cp ./target/debug/libreaper_test_extension_plugin.so ./target/reaper/reaper_linux_x86_64/REAPER/UserPlugins/reaper_test_extension_plugin.so",
-			"working_dir": "$project_path"
+			"working_dir": "$project_path",
 		},
 		{
 			"name": "Run REAPER",
@@ -17,19 +17,64 @@
 			"working_dir": "$project_path",
 			"env": {
 				"RUST_LOG": "trace,rea_rs::ext_state=info,glycin=warn",
-				"RUST_BACKTRACE": "full"
+				"RUST_BACKTRACE": "full",
 			},
-			"auto_close": false
+			"auto_close": false,
 		},
 		{
 			"name": "Update vendored SDK and WDL",
 			"shell_cmd": "cargo update-sdk",
-			"working_dir": "$project_path"
+			"working_dir": "$project_path",
 		},
 		{
 			"name": "Run REAPER Integration Test",
 			"shell_cmd": "cargo test -p reaper-test-extension-plugin --test integration_test",
-			"working_dir": "$project_path"
+			"working_dir": "$project_path",
 		}
-	]
+	],
+	"settings":
+	{
+		"TestManager":
+		{
+			"data_location": ".sublime-tests",
+			"test_suites":
+			[
+				{
+					"args":
+					[
+					],
+					"cargo": "cargo",
+					"cwd": null,
+					"discover_args":
+					[
+						"test",
+						"--",
+						"--list",
+						"--test-threads=1",
+						"--nocapture",
+						"--format=json",
+						"-Z",
+						"unstable-options"
+					],
+					"env":
+					{
+					},
+					"framework": "cargo",
+					"id": "cargo1",
+					"parser": "default",
+					"run_args":
+					[
+						"test",
+						"--",
+						"--test-threads=1",
+						"--nocapture",
+						"--exact",
+						"--format=json",
+						"-Z",
+						"unstable-options"
+					]
+				}
+			],
+		},
+	},
 }

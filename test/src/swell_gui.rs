@@ -72,6 +72,7 @@
 //! and renderers in `on_destroy` or `Drop`. Replace the gallery-specific track
 //! and MIDI code with the state owned by the extension.
 use log::{debug, info, trace, warn};
+use rea_rs::raw;
 use rea_rs::{
     db_to_linear, linear_to_db,
     swell_gui::{
@@ -86,7 +87,6 @@ use rea_rs::{
     SoloMode, Track, Trackbar, Volume, WindowHandler, WindowId, WindowSpec,
     WithReaperPtr,
 };
-use rea_rs::raw;
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, sync::Arc, time::Duration};
 
@@ -622,9 +622,9 @@ impl DemoWindow {
 
                 info!(
                     "cursor position is: measure: {}, beat: {}, seconds: {}",
-                    Measure::from_position(cursor_pos, &pr)?.index,
+                    Measure::from_time(cursor_pos, &pr)?.index,
                     cursor_pos.as_quarters(&pr)?,
-                    cursor_pos.as_secs_f64()
+                    cursor_pos.as_seconds_f64()
                 );
             }
             Ok(EventResponse::Handled)
@@ -820,9 +820,9 @@ impl DemoWindow {
     fn refresh_play_position(&self) {
         let project = Reaper::get().current_project();
         let ratio = match (project.play_position(), project.length()) {
-            (Ok(position), Ok(length)) if length.as_secs_f64() > 0.0 => {
+            (Ok(position), Ok(length)) if length.as_seconds_f64() > 0.0 => {
                 let position_seconds: f64 = position.into();
-                (position_seconds / length.as_secs_f64()).clamp(0.0, 1.0)
+                (position_seconds / length.as_seconds_f64()).clamp(0.0, 1.0)
             }
             _ => 0.0,
         };

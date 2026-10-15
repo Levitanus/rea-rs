@@ -265,12 +265,12 @@ use std::{ffi::NulError, str::Utf8Error, string::FromUtf8Error};
 
 use anyhow::Error;
 use base64::DecodeError;
-pub use chrono::Duration;
+pub use chrono::TimeDelta;
 pub use int_enum::IntEnum;
 pub use rea_rs_low::{
     bootstrap_extension_plugin, execute_plugin_destroy_hooks, raw,
-    register_swell_function_provider, static_extension_plugin_context, register_plugin_destroy_hook,
-    PluginContext,
+    register_plugin_destroy_hook, register_swell_function_provider,
+    static_extension_plugin_context, PluginContext,
 };
 
 pub mod reaper;
@@ -288,6 +288,9 @@ pub use hardware_functions::*;
 
 pub mod project;
 pub use project::*;
+
+pub mod time;
+pub use time::*;
 
 pub mod utils;
 pub use utils::WithReaperPtr;
@@ -392,6 +395,8 @@ pub enum ReaRsError {
     InvalidObject(&'static str),
     #[error("Unsuccessful operation: {0}")]
     UnsuccessfulOperation(&'static str),
+    #[error("Unsuccessful operation: {0}")]
+    UnsuccessfulOperationString(String),
     #[error("Error: {0}")]
     Str(&'static str),
     #[error("CString: can not convert string to CString")]

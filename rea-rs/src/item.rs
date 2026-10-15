@@ -1,12 +1,12 @@
 use crate::{
     ptr_wrappers::{MediaItem, MediaItemTake, MediaTrack, ReaProject},
     utils::string_from_buf,
-    Color, KnowsProject, Position, Project, ProjectContext, ReaRsError,
-    Reaper, ReaperResult, Take, TimeMode, Track, Volume, WithReaperPtr, GUID,
+    Color, KnowsProject, Project, ProjectContext, ReaRsError, Reaper,
+    ReaperResult, Take, Time, TimeMode, Track, Volume, WithReaperPtr, GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
-use std::{ffi::CString, time::Duration};
+use std::ffi::CString;
 
 #[derive(Debug, PartialEq)]
 pub struct Item {
@@ -128,13 +128,13 @@ impl Item {
         })
     }
 
-    pub fn position(&self) -> ReaperResult<Position> {
-        Position::from_host_seconds(self.get_info_value("D_POSITION")?)
+    pub fn position(&self) -> ReaperResult<Time> {
+        Time::from_seconds_f64(self.get_info_value("D_POSITION")?)
     }
-    pub fn length(&self) -> ReaperResult<Duration> {
-        Ok(Duration::from_secs_f64(self.get_info_value("D_LENGTH")?))
+    pub fn length(&self) -> ReaperResult<Time> {
+        Time::from_seconds_f64(self.get_info_value("D_LENGTH")?)
     }
-    pub fn end_position(&self) -> ReaperResult<Position> {
+    pub fn end_position(&self) -> ReaperResult<Time> {
         Ok(self.position()? + self.length()?)
     }
     pub fn is_muted(&self) -> ReaperResult<bool> {
@@ -173,14 +173,12 @@ impl Item {
     pub fn volume(&self) -> ReaperResult<Volume> {
         Volume::try_from(self.get_info_value("D_VOL")?)
     }
-    pub fn snap_offset(&self) -> ReaperResult<Duration> {
-        Ok(Duration::from_secs_f64(
-            self.get_info_value("D_SNAPOFFSET")?,
-        ))
+    pub fn snap_offset(&self) -> ReaperResult<Time> {
+        Time::from_seconds_f64(self.get_info_value("D_SNAPOFFSET")?)
     }
     pub fn fade_in(&self) -> ReaperResult<ItemFade> {
         let length =
-            Duration::from_secs_f64(self.get_info_value("D_FADEINLEN")?);
+            Time::from_seconds_f64(self.get_info_value("D_FADEINLEN")?)?;
         let curve = self.get_info_value("D_FADEINDIR")?;
         let shape = ItemFadeShape::from_int(
             self.get_info_value("C_FADEINSHAPE")? as i32,
@@ -198,9 +196,9 @@ impl Item {
         let auto_fade_length =
             self.get_info_value("D_FADEOUTLEN_AUTO")? != 0.0;
         let length = if auto_fade_length {
-            Duration::from_secs_f64(self.get_info_value("D_FADEOUTLEN_AUTO")?)
+            Time::from_seconds_f64(self.get_info_value("D_FADEOUTLEN_AUTO")?)?
         } else {
-            Duration::from_secs_f64(self.get_info_value("D_FADEOUTLEN")?)
+            Time::from_seconds_f64(self.get_info_value("D_FADEOUTLEN")?)?
         };
         let curve = self.get_info_value("D_FADEOUTDIR")?;
         let shape = ItemFadeShape::from_int(
@@ -309,7 +307,7 @@ impl Item {
 
     pub fn set_position(
         &mut self,
-        position: impl Into<Position>,
+        position: impl Into<Time>,
     ) -> ReaperResult<()> {
         unsafe {
             Reaper::get().low().SetMediaItemPosition(
@@ -320,11 +318,11 @@ impl Item {
         }
         Ok(())
     }
-    pub fn set_length(&mut self, length: Duration) -> ReaperResult<()> {
+    pub fn set_length(&mut self, length: impl Into<Time>) -> ReaperResult<()> {
         unsafe {
             Reaper::get().low().SetMediaItemLength(
                 self.get()?.as_ptr(),
-                length.as_secs_f64(),
+                length.into().as_seconds_f64(),
                 true,
             );
         }
@@ -332,14 +330,14 @@ impl Item {
     }
     pub fn set_end_position(
         &mut self,
-        end_position: impl Into<Position>,
+        end_position: impl Into<Time>,
     ) -> ReaperResult<()> {
         let end_position = end_position.into();
-        let length = end_position.get_length(self.position()?)?;
+        let length = end_position.checked_duration_since(self.position()?)?;
         unsafe {
             Reaper::get().low().SetMediaItemLength(
                 self.get()?.as_ptr(),
-                length.as_secs_f64(),
+                length.as_seconds_f64(),
                 true,
             );
         }
@@ -369,10 +367,7 @@ impl Item {
         self.set_selected(true)
     }
 
-    pub fn split(
-        self,
-        position: impl Into<Position>,
-    ) -> ReaperResult<ItemSplit> {
+    pub fn split(self, position: impl Into<Time>) -> ReaperResult<ItemSplit> {
         let position = position.into().as_seconds_f64();
         let ptr = unsafe {
             Reaper::get()
@@ -480,11 +475,11 @@ impl Item {
     pub fn set_volume(&mut self, volume: Volume) -> ReaperResult<()> {
         self.set_info_value("D_VOL", volume.get())
     }
-    pub fn set_snap_offset(&mut self, offset: Duration) -> ReaperResult<()> {
-        self.set_info_value("D_SNAPOFFSET", offset.as_secs_f64())
+    pub fn set_snap_offset(&mut self, offset: Time) -> ReaperResult<()> {
+        self.set_info_value("D_SNAPOFFSET", offset.as_seconds_f64())
     }
     pub fn set_fade_in(&mut self, fade: ItemFade) -> ReaperResult<()> {
-        self.set_info_value("D_FADEINLEN", fade.length.as_secs_f64())?;
+        self.set_info_value("D_FADEINLEN", fade.length.as_seconds_f64())?;
         self.set_info_value("D_FADEINDIR", fade.curve)?;
         self.set_info_value("C_FADEINSHAPE", fade.shape.int_value() as f64)?;
         self.set_info_value(
@@ -494,7 +489,7 @@ impl Item {
         Ok(())
     }
     pub fn set_fade_out(&mut self, fade: ItemFade) -> ReaperResult<()> {
-        self.set_info_value("D_FADEOUTLEN", fade.length.as_secs_f64())?;
+        self.set_info_value("D_FADEOUTLEN", fade.length.as_seconds_f64())?;
         self.set_info_value("D_FADEOUTDIR", fade.curve)?;
         self.set_info_value("C_FADEOUTSHAPE", fade.shape.int_value() as f64)?;
         self.set_info_value(
@@ -607,7 +602,7 @@ pub enum ItemSoloOverride {
 /// Item FadeIn\FadeOut parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ItemFade {
-    pub length: Duration,
+    pub length: Time,
     pub curve: f64,
     pub shape: ItemFadeShape,
     /// if true - length is not counted.
@@ -615,13 +610,13 @@ pub struct ItemFade {
 }
 impl ItemFade {
     pub fn new(
-        length: Duration,
+        length: impl Into<Time>,
         curve: f64,
         shape: ItemFadeShape,
         auto_fade_length: bool,
     ) -> Self {
         Self {
-            length,
+            length: length.into(),
             curve,
             shape,
             auto_fade_length,

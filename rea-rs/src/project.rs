@@ -3,40 +3,38 @@ use crate::{
     db_to_linear, linear_to_db,
     ptr_wrappers::{MediaItem, MediaTrack, ReaProject},
     utils::{string_from_buf, string_from_const_i8},
-    Color, CommandId, Item, MarkerRegionInfo, MarkerRegionIterator, PlayRate,
-    Position, ProjectContext, ReaRsError, Reaper, ReaperResult, TimeRange,
-    TimeRangeKind, TimeSignature, Track, UndoFlags,
+    Color, CommandId, Item, LoopRange, LoopRangeKind, MarkerRegionInfo,
+    MarkerRegionIterator, PlayRate, ProjectContext, ReaRsError, Reaper,
+    ReaperResult, Time, TimeRange, TimeSignature, Track, UndoFlags,
 };
 use bitflags::bitflags;
 use c_str_macro::c_str;
+use chrono::TimeDelta;
 use int_enum::IntEnum;
 use log::{debug, warn};
 use serde_derive::{Deserialize, Serialize};
-use std::{
-    ffi::CString, mem::MaybeUninit, path::PathBuf, ptr::NonNull,
-    time::Duration,
-};
+use std::{ffi::CString, mem::MaybeUninit, path::PathBuf, ptr::NonNull};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct FullRenderSettings {
     pub settings: Option<RenderSettings>,
-    pub bounds: Option<(Position, Position)>,
+    pub bounds: Option<TimeRange>,
     pub bounds_mode: Option<BoundsMode>,
     pub add_to_project: Option<bool>,
     pub dither: Option<RenderDitherFlags>,
     pub normalize: Option<RenderNormalize>,
     pub normalize_target: Option<f64>,
     pub brickwall: Option<f64>,
-    pub fade_in: Option<Duration>,
-    pub fade_out: Option<Duration>,
+    pub fade_in: Option<Time>,
+    pub fade_out: Option<Time>,
     pub fade_in_shape: Option<RenderFadeShape>,
     pub fade_out_shape: Option<RenderFadeShape>,
     pub fade_lpf: Option<RenderFadeLowPassFlags>,
-    pub pad_start: Option<Duration>,
-    pub pad_end: Option<Duration>,
+    pub pad_start: Option<Time>,
+    pub pad_end: Option<Time>,
     pub trim_start: Option<f64>,
     pub trim_end: Option<f64>,
-    pub delay: Option<Duration>,
+    pub delay: Option<Time>,
     pub channels_amount: Option<u32>,
     pub directory: Option<PathBuf>,
     pub file: Option<String>,
@@ -95,9 +93,9 @@ impl FullRenderSettings {
             debug!("set_render_settings");
             project.set_render_settings(settings)?;
         }
-        if let Some((start, end)) = self.bounds {
+        if let Some(range) = self.bounds {
             debug!("set_render_bounds");
-            project.set_render_bounds(start, end)?;
+            project.set_render_bounds(range)?;
         }
         if let Some(bounds_mode) = self.bounds_mode {
             debug!("set_render_bounds_mode");
@@ -435,23 +433,38 @@ impl<'a> Project {
         }
     }
 
-    pub fn length(&self) -> Result<Duration, ReaRsError> {
+    pub fn length(&self) -> ReaperResult<Time> {
         unsafe {
-            Ok(Duration::from_secs_f64(
+            Time::from_seconds_f64(
                 Reaper::get().low().GetProjectLength(self.get()?.as_ptr()),
-            ))
+            )
         }
     }
 
-    pub fn get_time_range(&'a self, kind: TimeRangeKind) -> TimeRange<'a> {
-        TimeRange::new(self, kind)
+    pub fn get_time_range(
+        &self,
+        kind: LoopRangeKind,
+    ) -> ReaperResult<Option<LoopRange>> {
+        LoopRange::load_from_project(self, kind)
+    }
+    pub fn get_loop_selection(&self) -> ReaperResult<Option<LoopRange>> {
+        LoopRange::load_from_project(self, LoopRangeKind::LoopSelection)
+    }
+    pub fn get_time_selection(&self) -> ReaperResult<Option<LoopRange>> {
+        LoopRange::load_from_project(self, LoopRangeKind::TimeSelection)
     }
 
-    pub fn get_loop_selection(&'a self) -> TimeRange<'a> {
-        TimeRange::new(self, TimeRangeKind::LoopSelection)
-    }
-    pub fn get_time_selection(&'a self) -> TimeRange<'a> {
-        TimeRange::new(self, TimeRangeKind::TimeSelection)
+    /// Get project time offset (from project settings).
+    pub fn get_time_offset(
+        &self,
+        round_to_frames: bool,
+    ) -> ReaperResult<Time> {
+        let seconds = unsafe {
+            Reaper::get()
+                .low()
+                .GetProjectTimeOffset(self.get()?.as_ptr(), round_to_frames)
+        };
+        Time::from_seconds_f64(seconds)
     }
 
     pub fn is_loop_enabled(&self) -> Result<bool, ReaRsError> {
@@ -501,7 +514,7 @@ impl<'a> Project {
     /// Get time signature and tempo (BPM) at given position.
     pub fn time_signature_at_position(
         &self,
-        position: Position,
+        position: Time,
     ) -> Result<(TimeSignature, f64), ReaRsError> {
         unsafe {
             let (mut num, mut denom, mut tempo) = (
@@ -539,7 +552,7 @@ impl<'a> Project {
     /// index is not an enum index, but user-index.
     pub fn add_marker(
         &mut self,
-        position: Position,
+        position: Time,
         name: Option<impl Into<String>>,
         color: impl Into<Option<Color>>,
         desired_index: impl Into<Option<usize>>,
@@ -550,7 +563,7 @@ impl<'a> Project {
             color,
             desired_index,
             position,
-            Position::default(),
+            Time::default(),
         )
     }
 
@@ -567,8 +580,8 @@ impl<'a> Project {
     /// index is not an enum index, but user-index.
     pub fn add_region(
         &mut self,
-        start: Position,
-        end: Position,
+        start: Time,
+        end: Time,
         name: Option<impl Into<String>>,
         color: impl Into<Option<Color>>,
         desired_index: impl Into<Option<usize>>,
@@ -582,8 +595,8 @@ impl<'a> Project {
         name: Option<impl Into<String>>,
         color: impl Into<Option<Color>>,
         desired_index: impl Into<Option<usize>>,
-        start: Position,
-        end: Position,
+        start: Time,
+        end: Time,
     ) -> anyhow::Result<usize> {
         let rpr = Reaper::get();
         let name = match name {
@@ -682,7 +695,7 @@ impl<'a> Project {
     ///     })
     ///     .transpose()?
     ///     .expect("marker with user index 2");
-    /// assert_eq!(marker.position.try_as_duration()?.as_secs_f64(), 4.0);
+    /// assert_eq!(marker.position.as_seconds_f64(), 4.0);
     /// # Ok(())
     /// # }
     /// ```
@@ -970,9 +983,9 @@ impl<'a> Project {
     /// Position of next audio block being processed.
     ///
     /// [Project::play_position]
-    pub fn next_buffer_position(&self) -> Result<Position, ReaRsError> {
+    pub fn next_buffer_position(&self) -> ReaperResult<Time> {
         unsafe {
-            Position::from_host_seconds(
+            Time::from_seconds_f64(
                 Reaper::get().low().GetPlayPosition2Ex(self.get()?.as_ptr()),
             )
         }
@@ -981,9 +994,9 @@ impl<'a> Project {
     /// Latency-compensated actual-what-you-hear position.
     ///
     /// [Project::next_buffer_position]
-    pub fn play_position(&self) -> Result<Position, ReaRsError> {
+    pub fn play_position(&self) -> ReaperResult<Time> {
         unsafe {
-            Position::from_host_seconds(
+            Time::from_seconds_f64(
                 Reaper::get().low().GetPlayPositionEx(self.get()?.as_ptr()),
             )
         }
@@ -1024,10 +1037,10 @@ impl<'a> Project {
     }
 
     /// Edit cursor position.
-    pub fn get_cursor_position(&self) -> Result<Position, ReaRsError> {
+    pub fn get_cursor_position(&self) -> Result<Time, ReaRsError> {
         let project = self.get()?;
         unsafe {
-            Position::from_host_seconds(
+            Time::from_seconds_f64(
                 Reaper::get().low().GetCursorPositionEx(project.as_ptr()),
             )
         }
@@ -1036,7 +1049,7 @@ impl<'a> Project {
     /// Set edit cursor position.
     pub fn set_cursor_position(
         &mut self,
-        position: Position,
+        position: Time,
         move_view: bool,
         seek_play: bool,
     ) -> ReaperResult<()> {
@@ -1431,7 +1444,7 @@ impl<'a> Project {
     /// Will return `PlayRate::from(1.0)` in normal conditions.
     pub fn get_play_rate(
         &self,
-        position: impl Into<Position>,
+        position: impl Into<Time>,
     ) -> ReaperResult<PlayRate> {
         let project = self.get()?;
         let position = position.into();
@@ -1672,28 +1685,31 @@ impl<'a> Project {
     /// Render fade-in duration.
     ///
     /// REAPER stores this as seconds internally, so the value is converted to
-    /// and from [Duration] at the API boundary.
-    pub fn get_render_fade_in(&self) -> ReaperResult<Duration> {
+    /// and from [Time] at the API boundary.
+    pub fn get_render_fade_in(&self) -> ReaperResult<Time> {
         let raw = self.get_info_value("RENDER_FADEIN")?;
-        Ok(Duration::from_secs_f64(raw))
+        Time::from_seconds_f64(raw)
     }
-    pub fn set_render_fade_in(&mut self, value: Duration) -> ReaperResult<()> {
-        self.set_info_value("RENDER_FADEIN", value.as_secs_f64())
+    pub fn set_render_fade_in(
+        &mut self,
+        value: impl Into<Time>,
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_FADEIN", value.into().as_seconds_f64())
     }
 
-    /// Render fade-out duration.
+    /// Render fade-out Time.
     ///
     /// REAPER stores this as seconds internally, so the value is converted to
-    /// and from [Duration] at the API boundary.
-    pub fn get_render_fade_out(&self) -> ReaperResult<Duration> {
+    /// and from [Time] at the API boundary.
+    pub fn get_render_fade_out(&self) -> ReaperResult<Time> {
         let raw = self.get_info_value("RENDER_FADEOUT")?;
-        Ok(Duration::from_secs_f64(raw))
+        Time::from_seconds_f64(raw)
     }
     pub fn set_render_fade_out(
         &mut self,
-        value: Duration,
+        value: impl Into<Time>,
     ) -> ReaperResult<()> {
-        self.set_info_value("RENDER_FADEOUT", value.as_secs_f64())
+        self.set_info_value("RENDER_FADEOUT", value.into().as_seconds_f64())
     }
 
     pub fn get_render_fade_in_shape(&self) -> ReaperResult<RenderFadeShape> {
@@ -1733,31 +1749,34 @@ impl<'a> Project {
         self.set_info_value("RENDER_FADELPF", flags.bits() as f64)
     }
 
-    /// Render padding before the start in duration.
+    /// Render padding before the start in Time.
     ///
     /// REAPER stores this as seconds internally, so the value is converted to
-    /// and from [Duration] at the API boundary.
-    pub fn get_render_pad_start(&self) -> ReaperResult<Duration> {
+    /// and from [Time] at the API boundary.
+    pub fn get_render_pad_start(&self) -> ReaperResult<Time> {
         let raw = self.get_info_value("RENDER_PADSTART")?;
-        Ok(Duration::from_secs_f64(raw))
+        Time::from_seconds_f64(raw)
     }
     pub fn set_render_pad_start(
         &mut self,
-        value: Duration,
+        value: impl Into<Time>,
     ) -> ReaperResult<()> {
-        self.set_info_value("RENDER_PADSTART", value.as_secs_f64())
+        self.set_info_value("RENDER_PADSTART", value.into().as_seconds_f64())
     }
 
-    /// Render padding after the end in duration.
+    /// Render padding after the end in Time.
     ///
     /// REAPER stores this as seconds internally, so the value is converted to
-    /// and from [Duration] at the API boundary.
-    pub fn get_render_pad_end(&self) -> ReaperResult<Duration> {
+    /// and from [Time] at the API boundary.
+    pub fn get_render_pad_end(&self) -> ReaperResult<Time> {
         let raw = self.get_info_value("RENDER_PADEND")?;
-        Ok(Duration::from_secs_f64(raw))
+        Time::from_seconds_f64(raw)
     }
-    pub fn set_render_pad_end(&mut self, value: Duration) -> ReaperResult<()> {
-        self.set_info_value("RENDER_PADEND", value.as_secs_f64())
+    pub fn set_render_pad_end(
+        &mut self,
+        value: impl Into<Time>,
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_PADEND", value.into().as_seconds_f64())
     }
 
     /// Trim threshold at the render start in decibels.
@@ -1787,13 +1806,16 @@ impl<'a> Project {
     /// Delay before the render starts.
     ///
     /// REAPER stores this as seconds internally, so the value is converted to
-    /// and from [Duration] at the API boundary.
-    pub fn get_render_delay(&self) -> ReaperResult<Duration> {
+    /// and from [Time] at the API boundary.
+    pub fn get_render_delay(&self) -> ReaperResult<Time> {
         let raw = self.get_info_value("RENDER_DELAY")?;
-        Ok(Duration::from_secs_f64(raw))
+        Time::from_seconds_f64(raw)
     }
-    pub fn set_render_delay(&mut self, value: Duration) -> ReaperResult<()> {
-        self.set_info_value("RENDER_DELAY", value.as_secs_f64())
+    pub fn set_render_delay(
+        &mut self,
+        value: impl Into<Time>,
+    ) -> ReaperResult<()> {
+        self.set_info_value("RENDER_DELAY", value.into().as_seconds_f64())
     }
 
     pub fn get_render_channels_amount(&self) -> ReaperResult<u32> {
@@ -1846,41 +1868,41 @@ impl<'a> Project {
     ///
     /// Valid only when [Project::get_render_bounds_mode] is
     /// [BoundsMode::Custom]
-    pub fn get_render_bounds(&self) -> ReaperResult<(Position, Position)> {
+    pub fn get_render_bounds(&self) -> ReaperResult<TimeRange> {
         let start = self.get_info_value("RENDER_STARTPOS")?;
         let end = self.get_info_value("RENDER_ENDPOS")?;
-        Ok((
-            Position::from_host_seconds(start)?,
-            Position::from_host_seconds(end)?,
-        ))
+        TimeRange::from_seconds_f64(start, end)
     }
     /// Valid only when [Project::get_render_bounds_mode] is
     /// [BoundsMode::Custom]
     pub fn set_render_bounds(
         &mut self,
-        start: impl Into<Position>,
-        end: impl Into<Position>,
+        bounds: impl Into<TimeRange>,
     ) -> ReaperResult<()> {
-        let start = start.into();
-        let end = end.into();
+        let bounds = bounds.into();
+        let start = bounds.start;
+        let end = bounds.end;
         self.set_info_value("RENDER_STARTPOS", start.as_seconds_f64())?;
         self.set_info_value("RENDER_ENDPOS", end.as_seconds_f64())
     }
 
     pub fn get_render_tail(&self) -> ReaperResult<RenderTail> {
-        let tail = Duration::from_millis(
-            self.get_info_value("RENDER_TAILMS")? as u64,
+        let tail = TimeDelta::milliseconds(
+            self.get_info_value("RENDER_TAILMS")? as i64,
         );
         let flags_raw = self.get_info_value("RENDER_TAILFLAG")?;
         let flags = RenderTailFlags::from_bits(flags_raw as u32)
             .ok_or(ReaRsError::InvalidObject("Can not get tail flags"))?;
-        Ok(RenderTail { tail, flags })
+        Ok(RenderTail {
+            tail: tail.into(),
+            flags,
+        })
     }
     pub fn set_render_tail(
         &mut self,
         render_tail: RenderTail,
     ) -> ReaperResult<()> {
-        let tail = render_tail.tail.as_millis() as f64;
+        let tail = render_tail.tail.get().num_milliseconds() as f64;
         let flags = render_tail.flags.bits();
         self.set_info_value("RENDER_TAILMS", tail)?;
         self.set_info_value("RENDER_TAILFLAG", flags as f64)
@@ -2095,11 +2117,11 @@ pub enum RenderMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderTail {
-    pub tail: Duration,
+    pub tail: Time,
     pub flags: RenderTailFlags,
 }
 impl RenderTail {
-    pub fn new(tail: Duration, flags: RenderTailFlags) -> Self {
+    pub fn new(tail: Time, flags: RenderTailFlags) -> Self {
         Self { tail, flags }
     }
 }
@@ -2529,12 +2551,14 @@ impl From<&str> for RenderFormat {
 
 #[cfg(test)]
 mod tests {
+    use crate::TimeRange;
+
+    use super::FullRenderSettings;
     use super::{
         BoundsMode, RenderDitherFlags, RenderFormat, RenderFormatSettings,
         RenderLimitMode, RenderMode, RenderMonoAdjustment, RenderNormalize,
         RenderNormalizeMode, RenderNormalizeTargetMode, RenderSettings,
     };
-    use super::{FullRenderSettings, Position};
     use std::path::PathBuf;
 
     #[test]
@@ -2618,10 +2642,7 @@ mod tests {
     fn full_render_settings_serialization_round_trip() {
         let settings = FullRenderSettings {
             settings: Some(RenderSettings::new(super::RenderMode::MasterMix)),
-            bounds: Some((
-                Position::try_from_seconds(1.0).unwrap(),
-                Position::try_from_seconds(2.0).unwrap(),
-            )),
+            bounds: Some(TimeRange::from_seconds_f64(1.0, 2.0).unwrap()),
             bounds_mode: Some(BoundsMode::TimeSelection),
             channels_amount: Some(2),
             directory: Some(PathBuf::from("/tmp/render")),

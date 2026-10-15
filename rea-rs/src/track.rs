@@ -15,11 +15,11 @@ use crate::{
     ptr_wrappers::{MediaItem, MediaTrack, ReaProject, TrackEnvelope},
     utils::{string_from_buf, string_from_const_i8},
     AudioAccessor, AutomationMode, Color, Envelope, EnvelopeSelector,
-    FXParent, GenericSend, GetLength, HardwareSend, HardwareSocket, Item,
-    KnowsProject, Pan, PanLaw, PanLawMode, Position, Project, ProjectContext,
-    ReaRsError, Reaper, ReaperResult, RecInput, RecMode, RecOutMode,
-    SendIntType, SoloMode, TimeMode, TrackFX, TrackFolderState, TrackReceive,
-    TrackSend, VUMode, Volume, WithReaperPtr, FX, GUID,
+    FXParent, GenericSend, HardwareSend, HardwareSocket, Item, KnowsProject,
+    Pan, PanLaw, PanLawMode, Project, ProjectContext, ReaRsError, Reaper,
+    ReaperResult, RecInput, RecMode, RecOutMode, SendIntType, SoloMode, Time,
+    TimeMode, TrackFX, TrackFolderState, TrackReceive, TrackSend, VUMode,
+    Volume, WithReaperPtr, FX, GUID,
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -1016,11 +1016,9 @@ impl Track {
     /// Item will not have any takes.
     pub fn add_item(
         &mut self,
-        start: impl Into<Position>,
-        length: impl GetLength,
+        start: impl Into<Time>,
+        length: impl Into<Time>,
     ) -> ReaperResult<Item> {
-        let start = start.into();
-        let length = length.get_length(start)?;
         let ptr = unsafe {
             Reaper::get()
                 .low()
@@ -1036,13 +1034,13 @@ impl Track {
 
     pub fn add_midi_item(
         &mut self,
-        start: impl Into<Position>,
-        length: impl GetLength,
+        start: impl Into<Time>,
+        length: impl Into<Time>,
     ) -> ReaperResult<Item> {
         let qn = MaybeUninit::new(false);
         let start = start.into();
-        let length = length.get_length(start)?;
-        let end = start.add_duration(length);
+        let length = length.into();
+        let end = start + length;
         let ptr = unsafe {
             Reaper::get().low().CreateNewMIDIItemInProj(
                 self.get()?.as_ptr(),
@@ -1629,9 +1627,9 @@ impl TrackGroupParam {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RazorEdit {
     /// start time
-    pub start: Position,
+    pub start: Time,
     /// end time
-    pub end: Position,
+    pub end: Time,
     /// If `None` → it's track selection,
     /// if Some([GUID]) → it's envelope selection.
     pub envelope_guid: Option<GUID>,
@@ -1683,8 +1681,8 @@ impl RazorEdit {
             ));
         }
         Ok(Self {
-            start: Position::try_from_seconds(start)?,
-            end: Position::try_from_seconds(end)?,
+            start: Time::try_from(start)?,
+            end: Time::try_from(end)?,
             envelope_guid,
             top_y_pos,
             bot_y_pos,

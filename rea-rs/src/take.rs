@@ -13,8 +13,8 @@ use crate::{
     utils::{string_from_buf, string_from_const_i8},
     AudioAccessor, Color, Envelope, FXParent, Item, KnowsProject, MidiEvent,
     MidiEventBuilder, MidiEventConsumer, MidiMessage, Pan, PanLaw, Pitch,
-    PlayRate, Position, Project, ProjectContext, RawMidiMessage, ReaRsError,
-    Reaper, ReaperResult, Source, TakeFX, Track, Volume, WithReaperPtr, FX,
+    PlayRate, Project, ProjectContext, RawMidiMessage, ReaRsError, Reaper,
+    ReaperResult, Source, TakeFX, Time, Track, Volume, WithReaperPtr, FX,
     GUID,
 };
 use int_enum::IntEnum;
@@ -355,8 +355,9 @@ impl Take {
         }
     }
 
-    pub fn start_offset(&self) -> ReaperResult<Position> {
-        Position::from_secs_f64(self.get_info_value("D_STARTOFFS")?)
+    /// Start offset of source media.
+    pub fn source_offset(&self) -> ReaperResult<Time> {
+        Time::from_seconds_f64(self.get_info_value("D_STARTOFFS")?)
     }
 
     pub fn volume(&self) -> ReaperResult<Volume> {
@@ -662,8 +663,8 @@ impl Take {
         }
     }
 
-    pub fn set_start_offset(&mut self, offset: Position) -> ReaperResult<()> {
-        self.set_info_value("D_STARTOFFS", offset.as_secs_f64())
+    pub fn set_source_offset(&mut self, offset: Time) -> ReaperResult<()> {
+        self.set_info_value("D_STARTOFFS", offset.as_seconds_f64())
     }
 
     pub fn set_volume(&mut self, volume: Volume) -> ReaperResult<()> {

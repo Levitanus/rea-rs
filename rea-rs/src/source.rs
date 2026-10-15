@@ -1,15 +1,12 @@
 use crate::{
     ptr_wrappers::{MediaItemTake, PcmSource},
     utils::string_from_buf,
-    KnowsProject, Position, Project, ProjectContext, ReaRsError, Reaper,
-    ReaperResult, Take, Volume, WithReaperPtr,
+    KnowsProject, Project, ProjectContext, ReaRsError, Reaper, ReaperResult,
+    Take, Time, Volume, WithReaperPtr,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
-use std::{
-    ffi::CString, mem::MaybeUninit, path::PathBuf, ptr::NonNull,
-    time::Duration,
-};
+use std::{ffi::CString, mem::MaybeUninit, path::PathBuf, ptr::NonNull};
 
 #[derive(Debug, PartialEq)]
 pub struct Source {
@@ -119,11 +116,8 @@ impl Source {
 
     /// Get source media length.
     ///
-    /// # Safety
-    ///
-    /// Reaper can return length as quarter notes. Since, there is no very good
-    /// way to determine length in qn as duration, it can fail sometimes.
-    pub fn length(&self) -> ReaperResult<Duration> {
+    /// If source is beat-based Reaper returns length in quarter notes
+    pub fn length(&self) -> ReaperResult<SourceLength> {
         let mut is_qn = MaybeUninit::zeroed();
         let result = unsafe {
             Reaper::get()
@@ -131,37 +125,14 @@ impl Source {
                 .GetMediaSourceLength(self.get()?.as_ptr(), is_qn.as_mut_ptr())
         };
         match unsafe { is_qn.assume_init() } {
-            true => {
-                let Some(take) = self.take()? else {
-                    return Err(ReaRsError::InvalidObject(
-                        "no take on source",
-                    ));
-                };
-                let item = take.parent_item()?;
-                let item_start = item.position()?;
-                let start_offset = take.start_offset()?;
-                let project = item.project();
-                let start = Position::from_host_seconds(
-                    item_start.as_seconds_f64() - start_offset.as_secs_f64(),
-                )?;
-                let start_in_qn = start.as_quarters(&project)?;
-                let end_in_qn = start_in_qn + result;
-                let end = Position::from_quarters(end_in_qn, &project)?;
-                let length = end.as_seconds_f64() - start.as_seconds_f64();
-                if !length.is_finite() || length < 0.0 {
-                    return Err(ReaRsError::UnsuccessfulOperation(
-                        "Invalid QN-based source length",
-                    ));
-                }
-                Ok(Duration::from_secs_f64(length))
-            }
+            true => Ok(SourceLength::Quarters(result)),
             false => {
                 if !result.is_finite() || result < 0.0 {
                     return Err(ReaRsError::UnsuccessfulOperation(
                         "Invalid source length returned by REAPER",
                     ));
                 }
-                Ok(Duration::from_secs_f64(result))
+                Ok(SourceLength::Time(Time::from_seconds_f64(result)?))
             }
         }
     }
@@ -237,8 +208,8 @@ impl Source {
         match result {
             false => Ok(None),
             true => Ok(Some(SourceSectionInfo {
-                offset: Duration::from_secs_f64(unsafe { ofst.assume_init() }),
-                length: Duration::from_secs_f64(unsafe { len.assume_init() }),
+                offset: Time::from_seconds_f64(unsafe { ofst.assume_init() })?,
+                length: Time::from_seconds_f64(unsafe { len.assume_init() })?,
                 reversed: unsafe { rev.assume_init() },
             })),
         }
@@ -248,16 +219,16 @@ impl Source {
         &self,
         units: SourceNoramlizeUnit,
         target: Volume,
-        start: Position,
-        end: Position,
+        start: Time,
+        end: Time,
     ) -> ReaperResult<Volume> {
         let result = unsafe {
             Reaper::get().low().CalculateNormalization(
                 self.get()?.as_ptr(),
                 units.int_value(),
                 target.get(),
-                start.as_secs_f64(),
-                end.as_secs_f64(),
+                start.as_seconds_f64(),
+                end.as_seconds_f64(),
             )
         };
         Volume::try_from(result)
@@ -272,8 +243,8 @@ impl Source {
 /// If a section/reverse block, retrieves offset/len/reverse.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceSectionInfo {
-    offset: Duration,
-    length: Duration,
+    offset: Time,
+    length: Time,
     reversed: bool,
 }
 
@@ -289,4 +260,10 @@ pub enum SourceNoramlizeUnit {
     TruePeak = 3,
     LUFS_M = 4,
     LUFS_S = 5,
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Copy, Clone)]
+pub enum SourceLength {
+    Time(Time),
+    Quarters(f64),
 }

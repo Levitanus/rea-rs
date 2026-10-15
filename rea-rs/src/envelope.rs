@@ -1,11 +1,10 @@
 use crate::{
-    ptr_wrappers::TrackEnvelope, utils::string_from_buf, GetLength,
-    KnowsProject, Position, ReaRsError, Reaper, ReaperResult, WithReaperPtr,
-    GUID,
+    ptr_wrappers::TrackEnvelope, utils::string_from_buf, KnowsProject,
+    ReaRsError, Reaper, ReaperResult, Time, WithReaperPtr, GUID,
 };
 use int_enum::IntEnum;
 use serde_derive::{Deserialize, Serialize};
-use std::{ffi::CString, mem::MaybeUninit, time::Duration};
+use std::{ffi::CString, mem::MaybeUninit};
 
 /// Can be either TrackEnvelope, or TakeEnvelope
 ///
@@ -198,9 +197,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         match result {
             true => unsafe {
                 Ok(EnvelopePoint {
-                    position: Position::new(Duration::from_secs_f64(
-                        time.assume_init(),
-                    )),
+                    position: Time::from_seconds_f64(time.assume_init())?,
                     value: self.scale_from(value.assume_init())?,
                     shape: EnvelopePointShape::from_int(shape.assume_init())
                         .map_err(|_| {
@@ -223,7 +220,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     /// Get the last point before the given time.
     pub fn get_point_by_time(
         &self,
-        position: impl Into<Position>,
+        position: impl Into<Time>,
     ) -> ReaperResult<EnvelopePoint> {
         self.get_point_by_time_ex(None, false, position)
     }
@@ -232,7 +229,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         &self,
         automation_item_index: Option<usize>,
         only_visible: bool,
-        position: impl Into<Position>,
+        position: impl Into<Time>,
     ) -> ReaperResult<EnvelopePoint> {
         let a_itm = automation_item_idx(only_visible, automation_item_index);
         let point_index = unsafe {
@@ -262,7 +259,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     /// See [Envelope::scaling_mode].
     pub fn evaluate(
         &self,
-        position: Position,
+        position: Time,
         samplerate: u32,
         samples_requested: usize,
     ) -> ReaperResult<EnvelopeEvaluateResult> {
@@ -547,10 +544,10 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
     pub fn add_automation_item(
         &'a mut self,
         pool_id: usize,
-        position: Position,
-        length: impl GetLength,
+        position: Time,
+        length: Time,
     ) -> ReaperResult<AutomationItem<'a, P>> {
-        let length: f64 = length.get_length(position)?.as_secs_f64();
+        let length: f64 = length.as_seconds_f64();
         let position = position.as_seconds_f64();
         let pool_id = match pool_id {
             0 => -1,
@@ -686,8 +683,8 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
 
     pub fn delete_point_range(
         &mut self,
-        start: impl Into<Position>,
-        end: impl Into<Position>,
+        start: impl Into<Time>,
+        end: impl Into<Time>,
     ) -> ReaperResult<()> {
         self.delete_point_range_ex(None, false, start, end)
     }
@@ -695,8 +692,8 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
         &self,
         automation_item_index: Option<usize>,
         only_visible: bool,
-        start: impl Into<Position>,
-        end: impl Into<Position>,
+        start: impl Into<Time>,
+        end: impl Into<Time>,
     ) -> ReaperResult<()> {
         let a_itm = automation_item_idx(only_visible, automation_item_index);
         let result = unsafe {
@@ -760,7 +757,7 @@ impl<'a, P: KnowsProject> Envelope<'a, P> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EnvelopePoint {
-    pub position: Position,
+    pub position: Time,
     pub value: f64,
     pub shape: EnvelopePointShape,
     // from -1.0 to 1.0
@@ -769,7 +766,7 @@ pub struct EnvelopePoint {
 }
 impl EnvelopePoint {
     pub fn new(
-        position: Position,
+        position: Time,
         value: f64,
         shape: EnvelopePointShape,
         tension: f64,
@@ -811,7 +808,7 @@ bitflags::bitflags! {
 /// Returned by [Envelope::evaluate].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EnvelopeEvaluateResult {
-    position: Position,
+    position: Time,
     /// How many samples beyond that time position that the returned values
     /// are valid.
     pub valid_for: usize,
@@ -875,7 +872,7 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
     pub fn get_point_by_time(
         &self,
         only_visible: bool,
-        position: impl Into<Position>,
+        position: impl Into<Time>,
     ) -> ReaperResult<EnvelopePoint> {
         self.envelope().get_point_by_time_ex(
             Some(self.index()),
@@ -907,16 +904,16 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
         Ok(self.get_info_value("D_POOL_ID")? as usize)
     }
 
-    pub fn position(&self) -> ReaperResult<Position> {
-        Position::from_host_seconds(self.get_info_value("D_POSITION")?)
+    pub fn position(&self) -> ReaperResult<Time> {
+        Time::from_seconds_f64(self.get_info_value("D_POSITION")?)
     }
 
-    pub fn length(&self) -> ReaperResult<Duration> {
-        Ok(Duration::from_secs_f64(self.get_info_value("D_LENGTH")?))
+    pub fn length(&self) -> ReaperResult<Time> {
+        Time::from_seconds_f64(self.get_info_value("D_LENGTH")?)
     }
 
-    pub fn start_offset(&self) -> ReaperResult<Duration> {
-        Ok(Duration::from_secs_f64(self.get_info_value("D_STARTOFFS")?))
+    pub fn start_offset(&self) -> ReaperResult<Time> {
+        Time::from_seconds_f64(self.get_info_value("D_STARTOFFS")?)
     }
 
     pub fn play_rate(&self) -> ReaperResult<f64> {
@@ -970,15 +967,12 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
         self.set_info_value("D_POOL_ID", id as f64)
     }
 
-    pub fn set_position(&mut self, position: Position) -> ReaperResult<()> {
+    pub fn set_position(&mut self, position: Time) -> ReaperResult<()> {
         self.set_info_value("D_POSITION", position.as_seconds_f64())
     }
 
-    pub fn set_length(&mut self, length: impl GetLength) -> ReaperResult<()> {
-        self.set_info_value(
-            "D_LENGTH",
-            length.get_length(self.position()?)?.as_secs_f64(),
-        )
+    pub fn set_length(&mut self, length: Time) -> ReaperResult<()> {
+        self.set_info_value("D_LENGTH", length.as_seconds_f64())
     }
 
     pub fn set_play_rate(&mut self, rate: f64) -> ReaperResult<()> {
@@ -1013,8 +1007,11 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
         self.set_info_value("D_AMPLITUDE", amplitude)
     }
 
-    pub fn set_start_offset(&mut self, offset: Duration) -> ReaperResult<()> {
-        self.set_info_value("D_STARTOFFS", offset.as_secs_f64())
+    pub fn set_start_offset(
+        &mut self,
+        offset: impl Into<Time>,
+    ) -> ReaperResult<()> {
+        self.set_info_value("D_STARTOFFS", offset.into().as_seconds_f64())
     }
 
     pub fn set_looped(&mut self, looped: bool) -> ReaperResult<()> {
@@ -1101,8 +1098,8 @@ impl<'a, P: KnowsProject> AutomationItem<'a, P> {
     pub fn delete_point_range(
         &mut self,
         only_visible: bool,
-        start: impl Into<Position>,
-        end: impl Into<Position>,
+        start: impl Into<Time>,
+        end: impl Into<Time>,
     ) -> ReaperResult<()> {
         let index = self.index();
         self.envelope().delete_point_range_ex(
