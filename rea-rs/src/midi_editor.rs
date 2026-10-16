@@ -110,13 +110,17 @@ impl MidiEditorViewTransform {
     pub fn y_for_pitch(
         &self,
         pitch: i32,
-        note_area_top: f64,
+        note_area_top: impl Into<Option<f64>>,
     ) -> ReaperResult<f64> {
         if !(0..=127).contains(&pitch) {
             return Err(ReaRsError::InvalidObject(
                 "MIDI pitch must be 0..=127",
             ));
         }
+        let note_area_top = match note_area_top.into() {
+            Some(t) => t,
+            None => 64.0,
+        };
         let top_pitch = 127 - self.vertical_position;
         let y = note_area_top
             + (f64::from(top_pitch - pitch) + 0.5)

@@ -263,7 +263,7 @@ impl DemoCSurf {
                 return;
             }
         };
-        let measure_start = match Measure::from_index(2, &take.project()) {
+        let measure_start = match Measure::from_index(1, &take.project()) {
             Ok(measure) => measure.start,
             Err(error) => {
                 warn!("MIDI overlay skipped: could not locate measure 2: {error}");
@@ -289,7 +289,7 @@ impl DemoCSurf {
         let height =
             client_rect.bottom.saturating_sub(client_rect.top).max(0) as u32;
         let overlay_hwnd = window.hwnd();
-        let font = match Font::new(FontSpec::new("Arial").set_size(12))
+        let mut font = match Font::new(FontSpec::new("Arial").set_size(12))
             .and_then(LiceFont::from_font)
         {
             Ok(font) => font,
@@ -298,6 +298,7 @@ impl DemoCSurf {
                 return;
             }
         };
+        font.set_text_color(Color::WHITE);
         let initial_horizontal_zoom = initial_view.horizontal_pixels_per_unit;
         let initial_pixels_per_pitch = initial_view.vertical_pixels_per_pitch;
         if let Err(error) = window.on_render(move |_info, surface| {
@@ -310,7 +311,7 @@ impl DemoCSurf {
             let x = view.x_for_ppq(measure_start_ppq, &take).ok();
             // This child is the piano-roll canvas; its client origin is the
             // note-row origin, not the top of the editor's ruler.
-            let y = view.y_for_pitch(MIDI_C3_PITCH, 0.0).ok();
+            let y = view.y_for_pitch(MIDI_C3_PITCH, 64.0).ok();
             if let (Some(x), Some(y)) = (x, y) {
                 let width_scale =
                     view.horizontal_pixels_per_unit / initial_horizontal_zoom;
