@@ -258,6 +258,10 @@ impl Time {
         Self::try_from(val)
     }
 
+    /// Get time from QN position, as it is returned by measure info.
+    ///
+    /// # Note
+    /// Partial measures are counted as full measures.
     pub fn from_quarters(
         quarters: f64,
         project: &Project,
@@ -275,9 +279,46 @@ impl Time {
         Self::try_from(seconds)
     }
 
+    /// Get time as QN position, as it is returned by measure info.
+    ///
+    /// # Note
+    /// Partial measures are counted as full measures.
     pub fn as_quarters(self, project: &Project) -> ReaperResult<f64> {
         let quarters = unsafe {
             Reaper::get().low().TimeMap2_timeToQN(
+                project.context().to_raw(),
+                self.as_seconds_f64(),
+            )
+        };
+        if quarters.is_finite() {
+            Ok(quarters)
+        } else {
+            Err(ReaRsError::InvalidObject("invalid quarter-note position"))
+        }
+    }
+
+    /// Get time from QN position, considering real length of partial measures.
+    pub fn from_quarters_abs(
+        quarters: f64,
+        project: &Project,
+    ) -> ReaperResult<Self> {
+        if !quarters.is_finite() {
+            return Err(ReaRsError::InvalidObject(
+                "quarter-note position must be finite",
+            ));
+        }
+        let seconds = unsafe {
+            Reaper::get()
+                .low()
+                .TimeMap_QNToTime_abs(project.context().to_raw(), quarters)
+        };
+        Self::try_from(seconds)
+    }
+
+    /// Get time as QN position, considering real length of partial measures.
+    pub fn as_quarters_abs(self, project: &Project) -> ReaperResult<f64> {
+        let quarters = unsafe {
+            Reaper::get().low().TimeMap_timeToQN_abs(
                 project.context().to_raw(),
                 self.as_seconds_f64(),
             )

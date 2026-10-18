@@ -30,6 +30,8 @@ use crate::{
 /// GUID or if there is no track with the given GUID in the Project. Make sure
 /// you count this at any serialization point. For example, with restoring
 /// tracks from the ExtState.
+///
+/// Serialized Track does not remember its project, so use it with care.
 #[derive(Debug, PartialEq, Clone)]
 pub struct Track {
     ptr: MediaTrack,

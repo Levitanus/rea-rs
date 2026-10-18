@@ -9,7 +9,7 @@ anyhow = {workspace = true}
 bitvec = "1.0"
 c_str_macro = "1.0.2"
 env_logger.workspace = true
-float_eq = "1.0"
+float_eq = {workspace=true}
 log = "0.4"
 rea-rs = {version = "=1.0.0", path = "../rea-rs"}
 rea-rs-macros = {version = "=1.0.0", path = "../macros"}

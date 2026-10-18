@@ -375,12 +375,16 @@ pub use swell_gui::{
 
 pub mod quantize;
 
+pub mod tempo_marker;
+pub use tempo_marker::*;
+
 #[derive(thiserror::Error, Debug)]
 pub enum ReaRsError {
     #[error("The pointer to {0} is null.")]
     NullPtr(&'static str),
     #[error("Unexpected API:\n{0}")]
     UnexpectedAPI(String),
+    /// No element with key '{0}'. Possible keys are:\n{1}
     #[error("No element with key '{0}'. Possible keys are:\n{1}")]
     Key(String, String),
     #[error("Socket error: {0}")]

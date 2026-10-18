@@ -8,6 +8,8 @@ There is a sense of reworking this API a bit
 * `Measure::get_ruler_index` for retriving visual measure index as it is displayed in ruler
 * `quantize` module, which can be used for easy quantisation of any time units.
 * serialization support for `Track`. It's quite experimental, but should work fine.
+* `TimeSigTempoMarker` and corresponded flags and enums, as well as `Project::iter_tempo_markers`
+* `Time::as_quarters_abs` and `Time::from_quarters_abs`
 
 ## Changed
 * renamed `Position` to `Time`, as it represents now all reaper-related time

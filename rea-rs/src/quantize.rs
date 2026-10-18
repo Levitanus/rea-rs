@@ -32,7 +32,7 @@ impl From<f64> for QuantizeStart {
 /// Quantize given position.
 ///
 /// Returns error if:
-/// * `start > position+interval`
+/// * `start > position+interval/2`
 /// * `start` is [QuantizeStart::Ppq]
 ///
 /// if project is None, current project will be used for quartes conversion and

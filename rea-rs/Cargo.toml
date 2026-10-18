@@ -27,6 +27,7 @@ chrono = { version = "0.4", features = ["serde"] }
 strum = { version = "0.26", features = ["derive"] }
 thiserror = {workspace = true}
 anyhow = {workspace = true}
+float_eq = {workspace=true}
 ws = "0.9.2"
 
 [features]

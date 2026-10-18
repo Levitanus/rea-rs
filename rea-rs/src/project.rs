@@ -5,7 +5,8 @@ use crate::{
     utils::{string_from_buf, string_from_const_i8},
     Color, CommandId, Item, LoopRange, LoopRangeKind, MarkerRegionInfo,
     MarkerRegionIterator, PlayRate, ProjectContext, ReaRsError, Reaper,
-    ReaperResult, Time, TimeRange, TimeSignature, Track, UndoFlags,
+    ReaperResult, TempoTimeSigMarker, Time, TimeRange, TimeSignature, Track,
+    UndoFlags,
 };
 use bitflags::bitflags;
 use c_str_macro::c_str;
@@ -741,6 +742,20 @@ impl<'a> Project {
                 .CountTempoTimeSigMarkers(self.get()?.as_ptr())
                 as usize)
         }
+    }
+
+    pub fn iter_tempo_markers(
+        &'a self,
+    ) -> impl Iterator<Item = TempoTimeSigMarker> + use<'a> {
+        let mut i = 0;
+        std::iter::from_fn(move || {
+            i += 1;
+            if let Some(m) = TempoTimeSigMarker::get(self, i).unwrap_or(None) {
+                Some(m)
+            } else {
+                None
+            }
+        })
     }
 
     pub fn n_markers(&self) -> Result<usize, ReaRsError> {

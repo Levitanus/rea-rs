@@ -18,6 +18,8 @@ use rea_rs::{
 };
 mod quantize;
 mod swell_gui;
+mod tempo_marker;
+
 use rea_rs_macros::reaper_extension_plugin;
 use rea_rs_test::{TestStep, TestStepResult};
 use std::collections::HashMap;
@@ -29,6 +31,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use crate::quantize::quantize;
+use crate::tempo_marker::tempo_marker;
 
 #[reaper_extension_plugin]
 fn test_main(context: PluginContext) -> TestStepResult {
@@ -69,6 +72,7 @@ pub fn create_test_steps() -> impl Iterator<Item = TestStep> {
         takes(),
         render_settings(),
         quantize(),
+        tempo_marker(),
     ]
     .into_iter();
     let _user_interaction =
