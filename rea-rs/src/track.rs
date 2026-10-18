@@ -8,7 +8,8 @@ use std::{
 use bitflags::bitflags;
 use int_enum::IntEnum;
 use log::debug;
-use serde_derive::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Serialize};
+// use serde_derive::{Deserialize, Serialize};
 
 use crate::swell_gui::layout::{SignedPoint, SignedRect};
 use crate::{
@@ -22,6 +23,13 @@ use crate::{
     Volume, WithReaperPtr, FX, GUID,
 };
 
+/// Represents Track in the [Project].
+///
+/// # Important note on serialization:
+/// deserizlization of track returns Error if the string can not be parsed as
+/// GUID or if there is no track with the given GUID in the Project. Make sure
+/// you count this at any serialization point. For example, with restoring
+/// tracks from the ExtState.
 #[derive(Debug, PartialEq, Clone)]
 pub struct Track {
     ptr: MediaTrack,
@@ -65,6 +73,52 @@ impl KnowsProject for Track {
             Some(ptr) => Project::new(ProjectContext::Proj(ptr)),
             None => Project::new(ProjectContext::CurrentProject),
         }
+    }
+}
+impl Serialize for Track {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let v = self.guid().map_err(|e| {
+            serde::ser::Error::custom(format!(
+                "can not get track GUID. Original error: {:?}",
+                e
+            ))
+        })?;
+        serializer.serialize_str(&v.to_string().map_err(|e| {
+            serde::ser::Error::custom(format!(
+                "can not convert track GUID to string. Original error: {:?}",
+                e
+            ))
+        })?)
+    }
+}
+impl<'de> Deserialize<'de> for Track {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let str_guid = String::deserialize(deserializer)?;
+        let guid = GUID::from_string(str_guid.clone()).map_err(|e| {
+            D::Error::custom(format!(
+                "String can not be deserialized as GUID. Original error: {:?}",
+                e
+            ))
+        })?;
+        let track = Track::from_guid(&Reaper::get().current_project(), guid)
+            .and_then(|opt| {
+                opt.ok_or(ReaRsError::InvalidObject(
+                    "no track with given GUID",
+                ))
+            })
+            .map_err(|e| {
+                D::Error::custom(format!(
+                "No track with the given GUID: {str_guid}. Original error: {:?}",
+                e
+            ))
+            })?;
+        Ok(track)
     }
 }
 impl Track {
