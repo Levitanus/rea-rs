@@ -2,7 +2,7 @@ use crate::{
     utils::string_from_buf, Project, ReaRsError, Reaper, ReaperResult,
 };
 use int_enum::IntEnum;
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::{ffi::CString, mem::MaybeUninit};
 
 /// Represents Audio\MIDI physical out pin.
@@ -323,5 +323,25 @@ impl GUID {
                 raw: ptr.assume_init(),
             }
         }
+    }
+}
+impl Serialize for GUID {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string().map_err(|_| {
+            serde::ser::Error::custom("can not convert GUID to string")
+        })?)
+    }
+}
+impl<'de> Deserialize<'de> for GUID {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Self::from_string(String::deserialize(deserializer)?).map_err(|_| {
+            serde::de::Error::custom("Can not convert string to GUID")
+        })
     }
 }

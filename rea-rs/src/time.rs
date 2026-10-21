@@ -351,18 +351,18 @@ impl Time {
         Self::from_seconds_f64(seconds)
     }
 
+    #[inline]
     pub fn as_beats_relative(
         &self,
         project: &Project,
     ) -> ReaperResult<(u32, f64)> {
-        let (_, relative, _) = self.time_to_beats_raw(project)?;
-        let relative = relative.relative(project)?;
+        let (_, relative, _) = self.time_to_beats_inner(project)?;
         Ok(relative)
     }
 
+    #[inline]
     pub fn as_beats_absolute(&self, project: &Project) -> ReaperResult<f64> {
-        let (absolute, _, _) = self.time_to_beats_raw(project)?;
-        let absolute = absolute.absolute(project)?;
+        let (absolute, _, _) = self.time_to_beats_inner(project)?;
         Ok(absolute)
     }
 
@@ -372,10 +372,26 @@ impl Time {
     /// absolute: `BeatsPosition::Absolute(f64)`,
     /// relative: `BeatsPosition::Relative{measure_index: u32, beats: f64}`,
     /// time_signature: `TimeSignature`
+    #[inline]
     pub fn time_to_beats_raw(
         &self,
         project: &Project,
     ) -> ReaperResult<(BeatsPosition, BeatsPosition, TimeSignature)> {
+        let (absolute, (measure_index, beats), time_signature) =
+            self.time_to_beats_inner(project)?;
+        Ok((
+            BeatsPosition::Absolute(absolute),
+            BeatsPosition::Relative {
+                measure_index,
+                beats,
+            },
+            time_signature,
+        ))
+    }
+    fn time_to_beats_inner(
+        &self,
+        project: &Project,
+    ) -> ReaperResult<(f64, (u32, f64), TimeSignature)> {
         let (mut measures, mut fullbeats, mut num, mut denom) = (
             MaybeUninit::uninit(),
             MaybeUninit::uninit(),
@@ -397,11 +413,8 @@ impl Time {
         let fullbeats = unsafe { fullbeats.assume_init() };
         let denom = unsafe { denom.assume_init() };
         Ok((
-            BeatsPosition::Absolute(fullbeats),
-            BeatsPosition::Relative {
-                measure_index: measures as u32,
-                beats,
-            },
+            fullbeats,
+            (measures as u32, beats),
             TimeSignature::new(num as u32, denom as u32),
         ))
     }

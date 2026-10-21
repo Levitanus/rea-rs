@@ -10,6 +10,7 @@ There is a sense of reworking this API a bit
 * serialization support for `Track`. It's quite experimental, but should work fine.
 * `TimeSigTempoMarker` and corresponded flags and enums, as well as `Project::iter_tempo_markers`
 * `Time::as_quarters_abs` and `Time::from_quarters_abs`
+* `Time::time_to_beats_raw`, `Time::as_beats_relative`, `Time::as_beats_absolue` and `BeatsPosition` enum
 
 ## Changed
 * renamed `Position` to `Time`, as it represents now all reaper-related time
