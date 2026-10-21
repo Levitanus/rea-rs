@@ -19,6 +19,7 @@ There is a sense of reworking this API a bit
 * for time selection and loop selection now is used `LoopRange` type
 * `Project::get_time_range`, `Project::get_loop_selection` and `Project::get_time_selection` now are returning `ReaperResult<Option<LoopRange>>`, with being `None` if there is no active loop or time selection
 * `Source::kength` now returns `SourceLength` enum, that represents or length in `Time` or length in quarter notes.
+* `Track::from_guid` now accepts `&GUID`
 
 ---
 

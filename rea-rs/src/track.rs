@@ -108,7 +108,7 @@ impl<'de> Deserialize<'de> for Track {
                 e
             ))
         })?;
-        let track = Track::from_guid(&Reaper::get().current_project(), guid)
+        let track = Track::from_guid(&Reaper::get().current_project(), &guid)
             .and_then(|opt| {
                 opt.ok_or(ReaRsError::InvalidObject(
                     "no track with given GUID",
@@ -176,10 +176,10 @@ impl Track {
     }
     pub fn from_guid(
         project: &Project,
-        guid: GUID,
+        guid: &GUID,
     ) -> ReaperResult<Option<Self>> {
         for track in project.iter_tracks() {
-            if track.guid()? == guid {
+            if &track.guid()? == guid {
                 return Ok(Some(Self::new(project.get_pointer(), track.ptr)));
             }
         }

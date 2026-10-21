@@ -655,7 +655,7 @@ fn tracks() -> TestStep {
             .get_track(1)?
             .ok_or(ReaRsError::Str("no track!"))?
             .guid()?;
-        let tr = Track::from_guid(&pr, guid)?
+        let tr = Track::from_guid(&pr, &guid)?
             .ok_or(ReaRsError::Str("no track!"))?;
         assert_eq!(tr.index()?, 1);
 
