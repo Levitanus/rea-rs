@@ -192,8 +192,8 @@ impl Take {
         event: MidiEvent<T>,
         buf_size_override: impl Into<Option<i32>>,
     ) -> ReaperResult<()> {
-        let msg = event.message().as_raw_message();
-        let event = MidiEvent::with_new_message(event, msg);
+        let (specs, msg) = event.into_raw_parts();
+        let event = MidiEvent::from_raw_parts(specs, msg.into_raw_message());
         self.insert_midi_events(vec![event], buf_size_override)
     }
 

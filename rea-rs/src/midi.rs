@@ -159,24 +159,58 @@
 use serde_derive::{Deserialize, Serialize};
 use std::{cmp::Ordering, fmt::Display, vec::IntoIter};
 
+use crate::ReaperResult;
+
+#[derive(Clone, PartialEq, PartialOrd, Debug, Eq, Serialize, Deserialize)]
+pub enum MidiMessageKind {
+    NoteOn(NoteOnMessage),
+    NoteOff(NoteOffMessage),
+    CC(CCMessage),
+    AfterTouch(AfterTouchMessage),
+    AllSys(AllSysMessage),
+    ChannelPressure(ChannelPressureMessage),
+    ProgramChange(ProgramChangeMessage),
+    PitchBend(PitchBendMessage),
+    Notation(NotationMessage),
+    Text(TextMessage),
+    Unknown(RawMidiMessage),
+}
+
 /// Basic MIDI Message functionality.
 pub trait MidiMessage: Display + Clone {
     /// Check if raw message is of `Self` type.
+    ///
+    /// combined with checking.
     fn from_raw(buf: Vec<u8>) -> Option<Self>
     where
         Self: Sized;
+    /// Return raw buffer
+    fn into_raw(self) -> Vec<u8>;
+    /// Convert into RawMidiMessage
+    fn into_raw_message(self) -> RawMidiMessage {
+        RawMidiMessage {
+            buf: self.into_raw(),
+        }
+    }
     /// Copy and return raw `Vec`
     fn get_raw(&self) -> Vec<u8>;
     /// Borrow raw `Vec`
     fn borrow_raw(&self) -> &Vec<u8>;
     /// Borrow raw `Vec` mutably
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8>;
-    /// Return raw representation of self.
+    /// Return raw representation of self. (clone underhood)
     fn as_raw_message(&self) -> RawMidiMessage {
         RawMidiMessage {
             buf: self.get_raw(),
         }
     }
+    /// Check if the message could be constructed from buffer.
+    fn check_buf(buf: &Vec<u8>) -> bool;
+    /// Construct message from raw buffer.
+    ///
+    /// # Safety
+    /// Use [MidiMessage::check_buf] for ensuring it's safe.
+    unsafe fn from_raw_unchecked(buf: Vec<u8>) -> Self;
 }
 
 #[derive(
@@ -199,6 +233,15 @@ impl MidiMessage for RawMidiMessage {
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
         &mut self.buf
     }
+    fn into_raw(self) -> Vec<u8> {
+        self.buf
+    }
+    fn check_buf(buf: &Vec<u8>) -> bool {
+        !buf.is_empty()
+    }
+    unsafe fn from_raw_unchecked(buf: Vec<u8>) -> Self {
+        Self { buf }
+    }
 }
 impl RawMidiMessage {
     /// Construct a new `RawMidiMessage` from any other message type.
@@ -207,6 +250,66 @@ impl RawMidiMessage {
     pub fn from_msg<T: MidiMessage>(value: T) -> Self {
         Self {
             buf: value.get_raw(),
+        }
+    }
+    /// Get typed MidiMessageEnum
+    pub fn parse(self) -> ReaperResult<MidiMessageKind> {
+        if NoteOnMessage::check_buf(self.borrow_raw()) {
+            return Ok(MidiMessageKind::NoteOn(unsafe {
+                NoteOnMessage::from_raw_unchecked(self.into_raw())
+            }));
+        }
+        if NoteOffMessage::check_buf(self.borrow_raw()) {
+            return Ok(MidiMessageKind::NoteOff(unsafe {
+                NoteOffMessage::from_raw_unchecked(self.into_raw())
+            }));
+        }
+        if CCMessage::check_buf(self.borrow_raw()) {
+            return Ok(MidiMessageKind::CC(unsafe {
+                CCMessage::from_raw_unchecked(self.into_raw())
+            }));
+        }
+        if AfterTouchMessage::check_buf(self.borrow_raw()) {
+            return Ok(MidiMessageKind::AfterTouch(unsafe {
+                AfterTouchMessage::from_raw_unchecked(self.into_raw())
+            }));
+        }
+        if AllSysMessage::check_buf(self.borrow_raw()) {
+            return Ok(MidiMessageKind::AllSys(unsafe {
+                AllSysMessage::from_raw_unchecked(self.into_raw())
+            }));
+        }
+        if ChannelPressureMessage::check_buf(self.borrow_raw()) {
+            return Ok(MidiMessageKind::ChannelPressure(unsafe {
+                ChannelPressureMessage::from_raw_unchecked(self.into_raw())
+            }));
+        }
+        if ProgramChangeMessage::check_buf(self.borrow_raw()) {
+            return Ok(MidiMessageKind::ProgramChange(unsafe {
+                ProgramChangeMessage::from_raw_unchecked(self.into_raw())
+            }));
+        }
+        if PitchBendMessage::check_buf(self.borrow_raw()) {
+            return Ok(MidiMessageKind::PitchBend(unsafe {
+                PitchBendMessage::from_raw_unchecked(self.into_raw())
+            }));
+        }
+        if NotationMessage::check_buf(self.borrow_raw()) {
+            return Ok(MidiMessageKind::Notation(unsafe {
+                NotationMessage::from_raw_unchecked(self.into_raw())
+            }));
+        }
+        if TextMessage::check_buf(self.borrow_raw()) {
+            return Ok(MidiMessageKind::Text(unsafe {
+                TextMessage::from_raw_unchecked(self.into_raw())
+            }));
+        }
+        if Self::check_buf(&self.buf) {
+            return Ok(MidiMessageKind::Unknown(unsafe {
+                RawMidiMessage::from_raw_unchecked(self.into_raw())
+            }));
+        } else {
+            Err(crate::ReaRsError::InvalidObject("Message buffer is empty"))
         }
     }
 }
@@ -289,11 +392,13 @@ pub trait HasBeizer: MidiMessage {
         tension.append(&mut data.to_vec());
         self.set_beizer_buf(tension)
     }
+    /// Get message and beizer tension buffers separatelly.
+    fn into_raw_parts(self) -> (Vec<u8>, Vec<u8>);
 }
 
 /// ControlCange Message
 #[derive(
-    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize, Eq,
 )]
 pub struct CCMessage {
     msg_buf: Vec<u8>,
@@ -310,24 +415,17 @@ impl HasBeizer for CCMessage {
     fn set_beizer_buf(&mut self, buf: Vec<u8>) {
         self.beizer_buf = buf
     }
+    fn into_raw_parts(self) -> (Vec<u8>, Vec<u8>) {
+        (self.msg_buf, self.beizer_buf)
+    }
 }
 impl MidiMessage for CCMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        if buf.len() < 3 || !(0xb0..0xc0).contains(&buf[0]) {
-            return None;
+        if Self::check_buf(&buf) {
+            Some(unsafe { Self::from_raw_unchecked(buf) })
+        } else {
+            None
         }
-        if buf[1] > 127 || buf[2] > 127 {
-            return None;
-        }
-        let beizer_buf = match buf.len() {
-            3 => vec![],
-            _ => Vec::from(&buf[3..]),
-        };
-        let cc_buf = Vec::from(&buf[..3]);
-        Some(Self {
-            msg_buf: cc_buf,
-            beizer_buf,
-        })
     }
     fn get_raw(&self) -> Vec<u8> {
         let mut buf = self.msg_buf.clone();
@@ -340,6 +438,29 @@ impl MidiMessage for CCMessage {
     }
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
         &mut self.msg_buf
+    }
+    fn into_raw(self) -> Vec<u8> {
+        self.msg_buf
+    }
+    fn check_buf(buf: &Vec<u8>) -> bool {
+        if buf.len() < 3 || !(0xb0..0xc0).contains(&buf[0]) {
+            return false;
+        }
+        if buf[1] > 127 || buf[2] > 127 {
+            return false;
+        }
+        true
+    }
+    unsafe fn from_raw_unchecked(buf: Vec<u8>) -> Self {
+        let beizer_buf = match buf.len() {
+            3 => vec![],
+            _ => Vec::from(&buf[3..]),
+        };
+        let cc_buf = Vec::from(&buf[..3]);
+        Self {
+            msg_buf: cc_buf,
+            beizer_buf,
+        }
     }
 }
 impl ShortMessage for CCMessage {
@@ -387,7 +508,7 @@ impl Display for CCMessage {
 }
 
 #[derive(
-    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize, Eq,
 )]
 pub struct NoteOnMessage {
     buf: Vec<u8>,
@@ -425,12 +546,10 @@ impl ShortMessage for NoteOnMessage {
 }
 impl MidiMessage for NoteOnMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        Self::is_short(&buf)?;
-        Self::starts_with_message(&buf)?;
-        if buf[1] > 127 || buf[2] > 127 {
-            return None;
+        match Self::check_buf(&buf) {
+            true => Some(unsafe { Self::from_raw_unchecked(buf) }),
+            false => None,
         }
-        Some(Self { buf })
     }
     fn get_raw(&self) -> Vec<u8> {
         self.buf.clone()
@@ -440,6 +559,24 @@ impl MidiMessage for NoteOnMessage {
     }
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
         &mut self.buf
+    }
+    fn into_raw(self) -> Vec<u8> {
+        self.buf
+    }
+    fn check_buf(buf: &Vec<u8>) -> bool {
+        if Self::is_short(&buf).is_none() {
+            return false;
+        };
+        if Self::starts_with_message(&buf).is_some() {
+            return false;
+        };
+        if buf[1] > 127 || buf[2] > 127 {
+            return false;
+        }
+        true
+    }
+    unsafe fn from_raw_unchecked(buf: Vec<u8>) -> Self {
+        Self { buf }
     }
 }
 impl Display for NoteOnMessage {
@@ -459,7 +596,7 @@ impl Display for NoteOnMessage {
 }
 
 #[derive(
-    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize, Eq,
 )]
 pub struct NoteOffMessage {
     buf: Vec<u8>,
@@ -496,12 +633,10 @@ impl ShortMessage for NoteOffMessage {
 }
 impl MidiMessage for NoteOffMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        Self::is_short(&buf)?;
-        Self::starts_with_message(&buf)?;
-        if buf[1] > 127 || buf[2] > 127 {
-            return None;
+        match Self::check_buf(&buf) {
+            true => Some(unsafe { Self::from_raw_unchecked(buf) }),
+            false => None,
         }
-        Some(Self { buf })
     }
     fn get_raw(&self) -> Vec<u8> {
         self.buf.clone()
@@ -511,6 +646,24 @@ impl MidiMessage for NoteOffMessage {
     }
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
         &mut self.buf
+    }
+    fn into_raw(self) -> Vec<u8> {
+        self.buf
+    }
+    fn check_buf(buf: &Vec<u8>) -> bool {
+        if Self::is_short(&buf).is_none() {
+            return false;
+        };
+        if Self::starts_with_message(&buf).is_none() {
+            return false;
+        };
+        if buf[1] > 127 || buf[2] > 127 {
+            return false;
+        }
+        true
+    }
+    unsafe fn from_raw_unchecked(buf: Vec<u8>) -> Self {
+        Self { buf }
     }
 }
 impl Display for NoteOffMessage {
@@ -530,7 +683,7 @@ impl Display for NoteOffMessage {
 }
 
 #[derive(
-    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize, Eq,
 )]
 pub struct PitchBendMessage {
     buf: Vec<u8>,
@@ -589,22 +742,45 @@ impl ShortMessage for PitchBendMessage {
     }
 }
 impl MidiMessage for PitchBendMessage {
+    #[inline]
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        Self::is_short(&buf)?;
-        Self::starts_with_message(&buf)?;
-        if buf[1] > 127 || buf[2] > 127 {
-            return None;
+        match Self::check_buf(&buf) {
+            true => Some(unsafe { Self::from_raw_unchecked(buf) }),
+            false => None,
         }
-        Some(Self { buf })
     }
+    #[inline]
     fn get_raw(&self) -> Vec<u8> {
         self.buf.clone()
     }
+    #[inline]
     fn borrow_raw(&self) -> &Vec<u8> {
         &self.buf
     }
+    #[inline]
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
         &mut self.buf
+    }
+    #[inline]
+    fn into_raw(self) -> Vec<u8> {
+        self.buf
+    }
+    #[inline]
+    fn check_buf(buf: &Vec<u8>) -> bool {
+        if Self::is_short(&buf).is_none() {
+            return false;
+        };
+        if Self::starts_with_message(&buf).is_none() {
+            return false;
+        };
+        if buf[1] > 127 || buf[2] > 127 {
+            return false;
+        }
+        true
+    }
+    #[inline]
+    unsafe fn from_raw_unchecked(buf: Vec<u8>) -> Self {
+        Self { buf }
     }
 }
 impl Display for PitchBendMessage {
@@ -624,7 +800,7 @@ impl Display for PitchBendMessage {
 }
 
 #[derive(
-    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize, Eq,
 )]
 pub struct AfterTouchMessage {
     buf: Vec<u8>,
@@ -656,12 +832,10 @@ impl ShortMessage for AfterTouchMessage {
 }
 impl MidiMessage for AfterTouchMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        Self::is_short(&buf)?;
-        Self::starts_with_message(&buf)?;
-        if buf[1] > 127 || buf[2] > 127 {
-            return None;
+        match Self::check_buf(&buf) {
+            true => Some(unsafe { Self::from_raw_unchecked(buf) }),
+            false => None,
         }
-        Some(Self { buf })
     }
     fn get_raw(&self) -> Vec<u8> {
         self.buf.clone()
@@ -671,6 +845,24 @@ impl MidiMessage for AfterTouchMessage {
     }
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
         &mut self.buf
+    }
+    fn into_raw(self) -> Vec<u8> {
+        self.buf
+    }
+    fn check_buf(buf: &Vec<u8>) -> bool {
+        if Self::is_short(&buf).is_none() {
+            return false;
+        };
+        if Self::starts_with_message(&buf).is_none() {
+            return false;
+        };
+        if buf[1] > 127 || buf[2] > 127 {
+            return false;
+        }
+        true
+    }
+    unsafe fn from_raw_unchecked(buf: Vec<u8>) -> Self {
+        Self { buf }
     }
 }
 impl Display for AfterTouchMessage {
@@ -690,7 +882,7 @@ impl Display for AfterTouchMessage {
 }
 
 #[derive(
-    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize, Eq,
 )]
 pub struct ProgramChangeMessage {
     buf: Vec<u8>,
@@ -716,12 +908,10 @@ impl ShortMessage for ProgramChangeMessage {
 }
 impl MidiMessage for ProgramChangeMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        Self::is_short(&buf)?;
-        Self::starts_with_message(&buf)?;
-        if buf[1] > 127 {
-            return None;
+        match Self::check_buf(&buf) {
+            true => Some(unsafe { Self::from_raw_unchecked(buf) }),
+            false => None,
         }
-        Some(Self { buf })
     }
     fn get_raw(&self) -> Vec<u8> {
         self.buf.clone()
@@ -731,6 +921,24 @@ impl MidiMessage for ProgramChangeMessage {
     }
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
         &mut self.buf
+    }
+    fn into_raw(self) -> Vec<u8> {
+        self.buf
+    }
+    fn check_buf(buf: &Vec<u8>) -> bool {
+        if Self::is_short(&buf).is_none() {
+            return false;
+        };
+        if Self::starts_with_message(&buf).is_none() {
+            return false;
+        };
+        if buf[1] > 127 {
+            return false;
+        }
+        true
+    }
+    unsafe fn from_raw_unchecked(buf: Vec<u8>) -> Self {
+        Self { buf }
     }
 }
 impl Display for ProgramChangeMessage {
@@ -751,17 +959,17 @@ impl Display for ProgramChangeMessage {
 ///
 /// Later it can be differentiated to Notation, Lyrics, Text etc.
 #[derive(
-    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize, Eq,
 )]
 pub struct AllSysMessage {
     buf: Vec<u8>,
 }
 impl MidiMessage for AllSysMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        if buf[0] < 0xf0 {
-            return None;
+        match Self::check_buf(&buf) {
+            true => Some(unsafe { Self::from_raw_unchecked(buf) }),
+            false => None,
         }
-        Some(Self { buf })
     }
     fn get_raw(&self) -> Vec<u8> {
         self.buf.clone()
@@ -772,6 +980,18 @@ impl MidiMessage for AllSysMessage {
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
         &mut self.buf
     }
+    fn into_raw(self) -> Vec<u8> {
+        self.buf
+    }
+    fn check_buf(buf: &Vec<u8>) -> bool {
+        if buf[0] < 0xf0 {
+            return false;
+        }
+        true
+    }
+    unsafe fn from_raw_unchecked(buf: Vec<u8>) -> Self {
+        Self { buf }
+    }
 }
 impl Display for AllSysMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -781,7 +1001,7 @@ impl Display for AllSysMessage {
 
 /// Represents Text messages `0xf0, 0x01`
 #[derive(
-    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize, Eq,
 )]
 pub struct TextMessage {
     buf: Vec<u8>,
@@ -802,13 +1022,9 @@ impl TextMessage {
 }
 impl MidiMessage for TextMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        if buf.len() < 2 || buf[0] < 0xf0 {
-            return None;
-        }
-        if buf[1] == 0x01 {
-            Some(Self { buf })
-        } else {
-            None
+        match Self::check_buf(&buf) {
+            true => Some(unsafe { Self::from_raw_unchecked(buf) }),
+            false => None,
         }
     }
     fn get_raw(&self) -> Vec<u8> {
@@ -820,6 +1036,22 @@ impl MidiMessage for TextMessage {
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
         &mut self.buf
     }
+    fn into_raw(self) -> Vec<u8> {
+        self.buf
+    }
+    fn check_buf(buf: &Vec<u8>) -> bool {
+        if buf.len() < 2 || buf[0] < 0xf0 {
+            return false;
+        }
+        if buf[1] == 0x01 {
+            true
+        } else {
+            false
+        }
+    }
+    unsafe fn from_raw_unchecked(buf: Vec<u8>) -> Self {
+        Self { buf }
+    }
 }
 impl Display for TextMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -828,14 +1060,14 @@ impl Display for TextMessage {
 }
 
 /// Represents Notation messages `0xf0, 0x0f`
-#[derive(Clone, PartialEq, PartialOrd, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, PartialOrd, Debug, Serialize, Deserialize, Eq)]
 pub struct NotationMessage {
     buf: Vec<u8>,
     // notation: Notation,
 }
 
 /// Partially parsed notation.
-#[derive(Clone, PartialEq, PartialOrd, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, PartialOrd, Debug, Serialize, Deserialize, Eq)]
 pub enum Notation {
     /// Note notation: channel(1-based), note, tokens
     Note {
@@ -982,13 +1214,9 @@ impl NotationMessage {
 }
 impl MidiMessage for NotationMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        if buf.len() < 2 || buf[0] < 0xff {
-            return None;
-        }
-        if buf[1] == 0x0f {
-            Some(Self { buf })
-        } else {
-            None
+        match Self::check_buf(&buf) {
+            true => Some(unsafe { Self::from_raw_unchecked(buf) }),
+            false => None,
         }
     }
     fn get_raw(&self) -> Vec<u8> {
@@ -999,6 +1227,22 @@ impl MidiMessage for NotationMessage {
     }
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
         &mut self.buf
+    }
+    fn into_raw(self) -> Vec<u8> {
+        self.buf
+    }
+    fn check_buf(buf: &Vec<u8>) -> bool {
+        if buf.len() < 2 || buf[0] < 0xff {
+            return false;
+        }
+        if buf[1] == 0x0f {
+            true
+        } else {
+            false
+        }
+    }
+    unsafe fn from_raw_unchecked(buf: Vec<u8>) -> Self {
+        Self { buf }
     }
 }
 impl Display for NotationMessage {
@@ -1029,7 +1273,7 @@ impl Display for Notation {
 }
 
 #[derive(
-    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize,
+    Clone, PartialEq, PartialOrd, Debug, Default, Serialize, Deserialize, Eq,
 )]
 pub struct ChannelPressureMessage {
     msg: Vec<u8>,
@@ -1046,25 +1290,16 @@ impl HasBeizer for ChannelPressureMessage {
     fn set_beizer_buf(&mut self, buf: Vec<u8>) {
         self.beizer_buf = buf
     }
+    fn into_raw_parts(self) -> (Vec<u8>, Vec<u8>) {
+        (self.msg, self.beizer_buf)
+    }
 }
 impl MidiMessage for ChannelPressureMessage {
     fn from_raw(buf: Vec<u8>) -> Option<Self> {
-        if buf.len() < 2 {
-            return None;
+        match Self::check_buf(&buf) {
+            true => Some(unsafe { Self::from_raw_unchecked(buf) }),
+            false => None,
         }
-        Self::starts_with_message(&buf)?;
-        if buf[1] > 127 {
-            return None;
-        }
-        let beizer_buf = match buf.len() {
-            2 => vec![],
-            _ => Vec::from(&buf[2..]),
-        };
-        let cc_buf = Vec::from(&buf[..2]);
-        Some(Self {
-            msg: cc_buf,
-            beizer_buf,
-        })
     }
     fn get_raw(&self) -> Vec<u8> {
         let mut buf = self.msg.clone();
@@ -1077,6 +1312,34 @@ impl MidiMessage for ChannelPressureMessage {
     }
     fn borrow_raw_mut(&mut self) -> &mut Vec<u8> {
         &mut self.msg
+    }
+    fn into_raw(mut self) -> Vec<u8> {
+        let mut buf = self.msg;
+        buf.append(&mut self.beizer_buf);
+        buf
+    }
+    fn check_buf(buf: &Vec<u8>) -> bool {
+        if buf.len() < 2 {
+            return false;
+        }
+        if Self::starts_with_message(&buf).is_none() {
+            return false;
+        };
+        if buf[1] > 127 {
+            return false;
+        }
+        true
+    }
+    unsafe fn from_raw_unchecked(buf: Vec<u8>) -> Self {
+        let beizer_buf = match buf.len() {
+            2 => vec![],
+            _ => Vec::from(&buf[2..]),
+        };
+        let cc_buf = Vec::from(&buf[..2]);
+        Self {
+            msg: cc_buf,
+            beizer_buf,
+        }
     }
 }
 impl ShortMessage for ChannelPressureMessage {
@@ -1115,13 +1378,18 @@ impl Display for ChannelPressureMessage {
     }
 }
 
-/// Generic Midi event, that easily converted to the binary format.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct MidiEvent<T: MidiMessage> {
+pub struct MidiEventSpecs {
     position_in_ppq: u32,
     is_selected: bool,
     is_muted: bool,
     cc_shape_kind: CcShapeKind,
+}
+
+/// Generic Midi event, that easily converted to the binary format.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct MidiEvent<T: MidiMessage> {
+    specs: MidiEventSpecs,
     /// Message can be as ordinary 3-bytes midi-message,
     /// as well as SysEx and custom messages, including lyrics and text.
     message: T,
@@ -1129,6 +1397,7 @@ pub struct MidiEvent<T: MidiMessage> {
 impl<T: MidiMessage> MidiEvent<T> {
     /// Position in ppq depends on Take. You can convert by the
     /// [crate::Position::as_ppq].
+    #[inline]
     pub fn new(
         position_in_ppq: u32,
         is_selected: bool,
@@ -1136,58 +1405,69 @@ impl<T: MidiMessage> MidiEvent<T> {
         cc_shape_kind: CcShapeKind,
         message: T,
     ) -> Self {
-        Self {
+        let specs = MidiEventSpecs {
             position_in_ppq,
             is_selected,
             is_muted,
             cc_shape_kind,
-            message,
-        }
+        };
+        Self { specs, message }
     }
+    #[inline]
     /// Morph Event to be of other type, replacing original message. Other
     /// contents are no moved and copied.
-    pub fn with_new_message<S: MidiMessage>(
-        event: MidiEvent<S>,
-        message: T,
-    ) -> Self {
+    pub fn from_raw_parts(event_specs: MidiEventSpecs, message: T) -> Self {
         Self {
-            position_in_ppq: event.ppq_position(),
-            is_selected: event.selected(),
-            is_muted: event.muted(),
-            cc_shape_kind: event.cc_shape_kind(),
+            specs: event_specs,
             message,
         }
     }
+
+    pub fn into_raw_parts(self) -> (MidiEventSpecs, T) {
+        (self.specs, self.message)
+    }
+
+    #[inline]
     pub fn ppq_position(&self) -> u32 {
-        self.position_in_ppq
+        self.specs.position_in_ppq
     }
+    #[inline]
     pub fn set_ppq_position(&mut self, position: u32) {
-        self.position_in_ppq = position;
+        self.specs.position_in_ppq = position;
     }
+    #[inline]
     pub fn selected(&self) -> bool {
-        self.is_selected
+        self.specs.is_selected
     }
+    #[inline]
     pub fn set_selected(&mut self, selected: bool) {
-        self.is_selected = selected;
+        self.specs.is_selected = selected;
     }
+    #[inline]
     pub fn muted(&self) -> bool {
-        self.is_muted
+        self.specs.is_muted
     }
+    #[inline]
     pub fn set_muted(&mut self, muted: bool) {
-        self.is_muted = muted;
+        self.specs.is_muted = muted;
     }
+    #[inline]
     pub fn cc_shape_kind(&self) -> CcShapeKind {
-        self.cc_shape_kind
+        self.specs.cc_shape_kind
     }
+    #[inline]
     pub fn set_cc_shape_kind(&mut self, cc_shape_kind: CcShapeKind) {
-        self.cc_shape_kind = cc_shape_kind;
+        self.specs.cc_shape_kind = cc_shape_kind;
     }
+    #[inline]
     pub fn message(&self) -> &T {
         &self.message
     }
+    #[inline]
     pub fn message_mut(&mut self) -> &mut T {
         &mut self.message
     }
+    #[inline]
     pub fn set_message(&mut self, message: T) {
         self.message = message;
     }
@@ -1243,10 +1523,10 @@ impl<T: MidiMessage> Display for MidiEvent<T> {
 
 impl<T: MidiMessage> PartialEq for MidiEvent<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.position_in_ppq == other.position_in_ppq
-            && self.is_selected == other.is_selected
-            && self.is_muted == other.is_muted
-            && self.cc_shape_kind == other.cc_shape_kind
+        self.ppq_position() == other.ppq_position()
+            && self.selected() == other.selected()
+            && self.muted() == other.muted()
+            && self.cc_shape_kind() == other.cc_shape_kind()
             && self.message.get_raw() == other.message.get_raw()
     }
 }
@@ -1361,28 +1641,20 @@ impl MidiNoteEvent {
     pub fn to_raw_parts(
         &self,
     ) -> (MidiEvent<NoteOnMessage>, MidiEvent<NoteOffMessage>) {
-        let on = MidiEvent {
-            position_in_ppq: self.start_in_ppq,
-            is_selected: self.is_selected,
-            is_muted: self.is_muted,
-            cc_shape_kind: CcShapeKind::Square,
-            message: NoteOnMessage::new(
-                self.channel,
-                self.note,
-                self.on_velocity,
-            ),
-        };
-        let off = MidiEvent {
-            position_in_ppq: self.end_in_ppq,
-            is_selected: self.is_selected,
-            is_muted: self.is_muted,
-            cc_shape_kind: CcShapeKind::Square,
-            message: NoteOffMessage::new(
-                self.channel,
-                self.note,
-                self.off_velocity,
-            ),
-        };
+        let on = MidiEvent::new(
+            self.start_in_ppq,
+            self.is_selected,
+            self.is_muted,
+            CcShapeKind::Square,
+            NoteOnMessage::new(self.channel, self.note, self.on_velocity),
+        );
+        let off = MidiEvent::new(
+            self.end_in_ppq,
+            self.is_selected,
+            self.is_muted,
+            CcShapeKind::Square,
+            NoteOffMessage::new(self.channel, self.note, self.off_velocity),
+        );
         (on, off)
     }
 }
@@ -1537,16 +1809,16 @@ where
         }
         self.current_ppq += offset;
         let buf = self.buf.by_ref().take(length as usize);
-        let result = Some(MidiEvent {
-            position_in_ppq: self.current_ppq,
-            cc_shape_kind: CcShapeKind::from_raw(flag & 0b11110000)
+        let result = Some(MidiEvent::new(
+            self.current_ppq,
+            (flag & 1) != 0,
+            (flag & 2) != 0,
+            CcShapeKind::from_raw(flag & 0b11110000)
                 .expect("Can not infer CcShapeKind, received from take."),
-            is_selected: (flag & 1) != 0,
-            is_muted: (flag & 2) != 0,
-            message: RawMidiMessage {
+            RawMidiMessage {
                 buf: Vec::from_iter(buf),
             },
-        });
+        ));
         result
     }
 }
@@ -1560,7 +1832,7 @@ pub fn to_raw_midi_events<T: MidiMessage>(
 ) -> impl Iterator<Item = MidiEvent<RawMidiMessage>> {
     iter.map(|i| {
         let msg = i.message().as_raw_message();
-        MidiEvent::with_new_message(i, msg)
+        MidiEvent::from_raw_parts(i.specs, msg)
     })
 }
 
@@ -1604,35 +1876,36 @@ impl<T: Iterator<Item = MidiEvent<RawMidiMessage>>> MidiEventConsumer<T> {
 
     /// Checks if some events are left and builds new buf for iteration.
     fn next_buf(&mut self) -> Option<u8> {
-        match self.events.next() {
-            None => None,
-            Some(mut event) => {
-                let size = event.message().get_raw().len() + 9;
-                let pos = event.ppq_position();
-                let mut offset = (pos - self.last_ppq).to_le_bytes().to_vec();
-                self.last_ppq = pos;
-                let muted = match event.muted() {
-                    true => 2,
-                    false => 0,
-                };
-                let flag = (event.selected() as u8)
-                    | muted
-                    | event.cc_shape_kind().to_raw();
-                let mut length = (event.message().get_raw().len() as i32)
-                    .to_le_bytes()
-                    .to_vec();
-                //
-                let mut buf = Vec::with_capacity(size);
-                buf.append(&mut offset);
-                buf.push(flag);
-                buf.append(&mut length);
-                buf.append(&mut event.message_mut().get_raw());
-                //
-                self.buf = Some(buf.into_iter());
-                // Some(i8)
-                Some(self.buf.as_mut().unwrap().next().unwrap())
+        if let Some(buf) = self.buf.as_mut() {
+            if let Some(byte) = buf.next() {
+                return Some(byte);
             }
         }
+
+        let event = self.events.next()?;
+
+        let msg_length = event.message().borrow_raw().len();
+        let pos = event.ppq_position();
+
+        let offset = (pos - self.last_ppq).to_le_bytes();
+        self.last_ppq = pos;
+
+        let muted = if event.muted() { 2 } else { 0 };
+        let flag =
+            (event.selected() as u8) | muted | event.cc_shape_kind().to_raw();
+
+        let length = (msg_length as i32).to_le_bytes();
+
+        let mut buf = Vec::with_capacity(msg_length + 9);
+        buf.extend_from_slice(&offset);
+        buf.push(flag);
+        buf.extend_from_slice(&length);
+        buf.extend(event.message.into_raw());
+
+        self.buf = Some(buf.into_iter());
+
+        // Возвращаем первый байт нового события.
+        self.buf.as_mut()?.next()
     }
 }
 
@@ -1734,24 +2007,26 @@ where
     type Item = MidiEvent<CCMessage>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let item = self.midi_events.next()?;
-        let buf = match item.cc_shape_kind() {
-            CcShapeKind::Beizer => {
-                let mut buf = item.message().get_raw();
-                let beizer = self
-                    .midi_events
-                    .next()
-                    .expect("should be beizer tension value");
-                buf.append(&mut beizer.message().get_raw());
-                buf
-            }
-            _ => item.message().get_raw(),
-        };
-        let message = match CCMessage::from_raw(buf) {
-            None => return self.next(),
-            Some(m) => m,
-        };
-        Some(MidiEvent::with_new_message(item, message))
+        let mut item = self.midi_events.next()?;
+        if item.cc_shape_kind() == CcShapeKind::Beizer {
+            let beizer = self
+                .midi_events
+                .next()
+                .expect("should be beizer tension value");
+            item.message
+                .borrow_raw_mut()
+                .append(&mut beizer.message.into_raw());
+        }
+        if !CCMessage::check_buf(&item.message().borrow_raw()) {
+            return self.next();
+        }
+        let (specs, message) = item.into_raw_parts();
+        Some(MidiEvent {
+            specs,
+            message: unsafe {
+                CCMessage::from_raw_unchecked(message.into_raw())
+            },
+        })
     }
 }
 
@@ -1778,11 +2053,16 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.midi_events.next()?;
-        let message = match NoteOnMessage::from_raw(item.message().get_raw()) {
-            None => return self.next(),
-            Some(m) => m,
-        };
-        Some(MidiEvent::with_new_message(item, message))
+        if !NoteOnMessage::check_buf(&item.message().borrow_raw()) {
+            return self.next();
+        }
+        let (specs, message) = item.into_raw_parts();
+        Some(MidiEvent {
+            specs,
+            message: unsafe {
+                NoteOnMessage::from_raw_unchecked(message.into_raw())
+            },
+        })
     }
 }
 
@@ -1809,12 +2089,16 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.midi_events.next()?;
-        let message = match NoteOffMessage::from_raw(item.message().get_raw())
-        {
-            None => return self.next(),
-            Some(m) => m,
-        };
-        Some(MidiEvent::with_new_message(item, message))
+        if !NoteOffMessage::check_buf(&item.message().borrow_raw()) {
+            return self.next();
+        }
+        let (specs, message) = item.into_raw_parts();
+        Some(MidiEvent {
+            specs,
+            message: unsafe {
+                NoteOffMessage::from_raw_unchecked(message.into_raw())
+            },
+        })
     }
 }
 
@@ -1841,12 +2125,16 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.midi_events.next()?;
-        let message =
-            match PitchBendMessage::from_raw(item.message().get_raw()) {
-                None => return self.next(),
-                Some(m) => m,
-            };
-        Some(MidiEvent::with_new_message(item, message))
+        if !PitchBendMessage::check_buf(&item.message().borrow_raw()) {
+            return self.next();
+        }
+        let (specs, message) = item.into_raw_parts();
+        Some(MidiEvent {
+            specs,
+            message: unsafe {
+                PitchBendMessage::from_raw_unchecked(message.into_raw())
+            },
+        })
     }
 }
 
@@ -1873,12 +2161,16 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.midi_events.next()?;
-        let message =
-            match AfterTouchMessage::from_raw(item.message().get_raw()) {
-                None => return self.next(),
-                Some(m) => m,
-            };
-        Some(MidiEvent::with_new_message(item, message))
+        if !AfterTouchMessage::check_buf(&item.message().borrow_raw()) {
+            return self.next();
+        }
+        let (specs, message) = item.into_raw_parts();
+        Some(MidiEvent {
+            specs,
+            message: unsafe {
+                AfterTouchMessage::from_raw_unchecked(message.into_raw())
+            },
+        })
     }
 }
 
@@ -1904,24 +2196,26 @@ where
     type Item = MidiEvent<ChannelPressureMessage>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let item = self.midi_events.next()?;
-        let buf = match item.cc_shape_kind() {
-            CcShapeKind::Beizer => {
-                let mut buf = item.message().get_raw();
-                let beizer = self
-                    .midi_events
-                    .next()
-                    .expect("should be beizer tension value");
-                buf.append(&mut beizer.message().get_raw());
-                buf
-            }
-            _ => item.message().get_raw(),
-        };
-        let message = match ChannelPressureMessage::from_raw(buf) {
-            None => return self.next(),
-            Some(m) => m,
-        };
-        Some(MidiEvent::with_new_message(item, message))
+        let mut item = self.midi_events.next()?;
+        if item.cc_shape_kind() == CcShapeKind::Beizer {
+            let beizer = self
+                .midi_events
+                .next()
+                .expect("should be beizer tension value");
+            item.message
+                .borrow_raw_mut()
+                .append(&mut beizer.message.into_raw());
+        }
+        if !ChannelPressureMessage::check_buf(&item.message().borrow_raw()) {
+            return self.next();
+        }
+        let (specs, message) = item.into_raw_parts();
+        Some(MidiEvent {
+            specs,
+            message: unsafe {
+                ChannelPressureMessage::from_raw_unchecked(message.into_raw())
+            },
+        })
     }
 }
 
@@ -1948,12 +2242,16 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.midi_events.next()?;
-        let message =
-            match ProgramChangeMessage::from_raw(item.message().get_raw()) {
-                None => return self.next(),
-                Some(m) => m,
-            };
-        Some(MidiEvent::with_new_message(item, message))
+        if !ProgramChangeMessage::check_buf(&item.message().borrow_raw()) {
+            return self.next();
+        }
+        let (specs, message) = item.into_raw_parts();
+        Some(MidiEvent {
+            specs,
+            message: unsafe {
+                ProgramChangeMessage::from_raw_unchecked(message.into_raw())
+            },
+        })
     }
 }
 
@@ -1980,9 +2278,9 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.midi_events.next()?;
-        let message = match AllSysMessage::from_raw(item.message().get_raw()) {
-            None => return self.next(),
-            Some(m) => {
+        let (specs, message) = item.into_raw_parts();
+        let message = match message.parse().ok()? {
+            MidiMessageKind::AllSys(m) => {
                 // Filter Beizer Curve messages
                 let s = &m.borrow_raw()[..6];
                 if s == [255, 15, 67, 67, 66, 90] {
@@ -1990,8 +2288,9 @@ where
                 }
                 m
             }
+            _ => return self.next(),
         };
-        Some(MidiEvent::with_new_message(item, message))
+        Some(MidiEvent::from_raw_parts(specs, message))
     }
 }
 
@@ -2023,29 +2322,24 @@ impl<T: Iterator<Item = MidiEvent<RawMidiMessage>>> Iterator
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.midi_events.next()?;
-        let raw_msg = item.message().get_raw();
-        match NoteOnMessage::from_raw(raw_msg.clone()) {
-            None => (),
-            Some(msg) => {
-                self.note_ons.push(MidiEvent::with_new_message(item, msg));
-                return self.next();
+        let (specs, raw_msg) = item.into_raw_parts();
+        match raw_msg.parse().ok()? {
+            MidiMessageKind::NoteOn(note_on) => {
+                self.note_ons
+                    .push(MidiEvent::from_raw_parts(specs, note_on));
+                self.next()
             }
-        }
-        match NoteOffMessage::from_raw(raw_msg) {
-            None => return self.next(),
-            Some(msg) => {
-                let off =
-                    MidiEvent::with_new_message(item.clone(), msg.clone());
+            MidiMessageKind::NoteOff(msg) => {
                 let on = match self.note_ons.iter().position(|i| {
-                    i.message().note() == off.message().note()
+                    i.message().note() == msg.note()
                         && i.message().channel_private()
-                            == off.message().channel_private()
+                            == msg.channel_private()
                 }) {
                     Some(on) => self.note_ons.swap_remove(on),
                     None => {
-                        eprintln!("No Note On for note-off: {:?}", off);
-                        let mut on = MidiEvent::with_new_message(
-                            item,
+                        eprintln!("No Note On for note-off: {:?}", msg);
+                        let mut on = MidiEvent::from_raw_parts(
+                            specs.clone(),
                             NoteOnMessage::new(
                                 msg.channel_private(),
                                 msg.note(),
@@ -2056,8 +2350,10 @@ impl<T: Iterator<Item = MidiEvent<RawMidiMessage>>> Iterator
                         on
                     }
                 };
+                let off = MidiEvent::from_raw_parts(specs, msg);
                 Some(MidiNoteEvent::from_raw_parts(on, off))
             }
+            _ => self.next(),
         }
     }
 }
@@ -2095,22 +2391,24 @@ pub fn flatten_events_with_beizer_curve(
 ) -> impl Iterator<Item = MidiEvent<RawMidiMessage>> {
     iter.flat_map(|i| {
         let mut out: Vec<MidiEvent<RawMidiMessage>> = Vec::new();
-        let msg = i.message();
-        out.push(MidiEvent::with_new_message(
-            i.clone(),
-            RawMidiMessage::from_raw(msg.msg_buf().clone()).unwrap(),
-        ));
-        match msg.beizer_buf().len() != 0 {
-            false => (),
+        let (specs, msg) = i.into_raw_parts();
+        let (msg, beizer) = msg.into_raw_parts();
+        let beizer_event = match beizer.len() != 0 {
+            false => None,
             true => {
-                let buf = msg.beizer_buf().clone();
-                let mut evt = MidiEvent::with_new_message(
-                    i,
-                    RawMidiMessage::from_raw(buf).unwrap(),
-                );
+                let mut evt =
+                    MidiEvent::from_raw_parts(specs.clone(), unsafe {
+                        RawMidiMessage::from_raw_unchecked(beizer)
+                    });
                 evt.set_cc_shape_kind(CcShapeKind::Square);
-                out.push(evt);
+                Some(evt)
             }
+        };
+        out.push(MidiEvent::from_raw_parts(specs, unsafe {
+            RawMidiMessage::from_raw_unchecked(msg)
+        }));
+        if let Some(evt) = beizer_event {
+            out.push(evt);
         }
         out.into_iter()
     })

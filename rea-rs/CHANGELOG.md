@@ -5,22 +5,25 @@
 There is a sense of reworking this API a bit
 * `Take::insert_midi_event` and `Take::insert_midi_events` for easier inserting of single events into Take
 * `Time::format_timestr`, `Time::parse_timestr`, `Time::format_timestr_len`, `Time::parse_timestr_len` and `TimeRange::format_timestr_len` as well as `TimeStringFormattingMode` enum for getting and parsing ruler time string representation.
-* `Measure::get_ruler_index` for retriving visual measure index as it is displayed in ruler
-* `quantize` module, which can be used for easy quantisation of any time units.
+* `Measure::get_ruler_index` for retrieving visual measure index as it is displayed in ruler
+* `quantize` module, which can be used for easy quantization of any time units.
 * serialization support for `Track`. It's quite experimental, but should work fine.
 * `TimeSigTempoMarker` and corresponded flags and enums, as well as `Project::iter_tempo_markers`
 * `Time::as_quarters_abs` and `Time::from_quarters_abs`
 * `Time::time_to_beats_raw`, `Time::as_beats_relative`, `Time::as_beats_absolue` and `BeatsPosition` enum
+* `MidiMessageKind` and `RawMidiMessage::parse` for easier midi message matching
+* several methods for `MidiMessage` trait, that allow transmuting them more efficiently. In general, `MidiEventBuilder` is now better memory-managed and the best way of iterating through midi messages is to parse them from RawMidiMessage.
 
 ## Changed
 * renamed `Position` to `Time`, as it represents now all reaper-related time
 * reduced usage of `std::Duration` (left only in timer functions)
 * all functions that previously used `Duration` or `GetLength` nor are using `Time`
-* `TimeRange` type now corresponds to `Time` interval and will be future-developed ofr easier time-range manipulation (various boundaries, items manipulation etc.)
+* `TimeRange` type now corresponds to `Time` interval and will be future-developed or easier time-range manipulation (various boundaries, items manipulation etc.)
 * for time selection and loop selection now is used `LoopRange` type
 * `Project::get_time_range`, `Project::get_loop_selection` and `Project::get_time_selection` now are returning `ReaperResult<Option<LoopRange>>`, with being `None` if there is no active loop or time selection
-* `Source::kength` now returns `SourceLength` enum, that represents or length in `Time` or length in quarter notes.
+* `Source::length` now returns `SourceLength` enum, that represents or length in `Time` or length in quarter notes.
 * `Track::from_guid` now accepts `&GUID`
+* 
 
 ---
 
