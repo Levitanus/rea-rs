@@ -567,7 +567,7 @@ impl MidiMessage for NoteOnMessage {
         if Self::is_short(&buf).is_none() {
             return false;
         };
-        if Self::starts_with_message(&buf).is_some() {
+        if Self::starts_with_message(&buf).is_none() {
             return false;
         };
         if buf[1] > 127 || buf[2] > 127 {
@@ -604,7 +604,7 @@ pub struct NoteOffMessage {
 impl NoteOffMessage {
     pub fn new(channel: u8, note: u8, velocity: u8) -> Self {
         Self {
-            buf: vec![0x80 + channel - 1, note, velocity],
+            buf: vec![0x80 + (channel - 1), note, velocity],
         }
     }
     pub fn channel(&self) -> u8 {
@@ -1831,8 +1831,8 @@ pub fn to_raw_midi_events<T: MidiMessage>(
     iter: impl Iterator<Item = MidiEvent<T>>,
 ) -> impl Iterator<Item = MidiEvent<RawMidiMessage>> {
     iter.map(|i| {
-        let msg = i.message().as_raw_message();
-        MidiEvent::from_raw_parts(i.specs, msg)
+        let (specs, msg) = i.into_raw_parts();
+        MidiEvent::from_raw_parts(specs, msg.into_raw_message())
     })
 }
 
@@ -2329,28 +2329,28 @@ impl<T: Iterator<Item = MidiEvent<RawMidiMessage>>> Iterator
                     .push(MidiEvent::from_raw_parts(specs, note_on));
                 self.next()
             }
-            MidiMessageKind::NoteOff(msg) => {
+            MidiMessageKind::NoteOff(note_off) => {
                 let on = match self.note_ons.iter().position(|i| {
-                    i.message().note() == msg.note()
+                    i.message().note() == note_off.note()
                         && i.message().channel_private()
-                            == msg.channel_private()
+                            == note_off.channel_private()
                 }) {
                     Some(on) => self.note_ons.swap_remove(on),
                     None => {
-                        eprintln!("No Note On for note-off: {:?}", msg);
+                        eprintln!("No Note On for note-off: {:?}", note_off);
                         let mut on = MidiEvent::from_raw_parts(
                             specs.clone(),
                             NoteOnMessage::new(
-                                msg.channel_private(),
-                                msg.note(),
-                                msg.velocity(),
+                                note_off.channel_private(),
+                                note_off.note(),
+                                note_off.velocity(),
                             ),
                         );
                         on.set_ppq_position(0);
                         on
                     }
                 };
-                let off = MidiEvent::from_raw_parts(specs, msg);
+                let off = MidiEvent::from_raw_parts(specs, note_off);
                 Some(MidiNoteEvent::from_raw_parts(on, off))
             }
             _ => self.next(),
@@ -2371,14 +2371,14 @@ pub fn flatten_midi_notes(
             i.is_selected,
             i.is_muted,
             CcShapeKind::Square,
-            on_msg.as_raw_message(),
+            on_msg.into_raw_message(),
         );
         let off = MidiEvent::new(
             i.end_in_ppq,
             i.is_selected,
             i.is_muted,
             CcShapeKind::Square,
-            off_msg.as_raw_message(),
+            off_msg.into_raw_message(),
         );
         out = [on, off];
         out.into_iter()
