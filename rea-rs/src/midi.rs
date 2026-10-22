@@ -1385,6 +1385,40 @@ pub struct MidiEventSpecs {
     is_muted: bool,
     cc_shape_kind: CcShapeKind,
 }
+impl MidiEventSpecs {
+    #[inline]
+    pub fn ppq_position(&self) -> u32 {
+        self.position_in_ppq
+    }
+    #[inline]
+    pub fn set_ppq_position(&mut self, position: u32) {
+        self.position_in_ppq = position;
+    }
+    #[inline]
+    pub fn selected(&self) -> bool {
+        self.is_selected
+    }
+    #[inline]
+    pub fn set_selected(&mut self, selected: bool) {
+        self.is_selected = selected;
+    }
+    #[inline]
+    pub fn muted(&self) -> bool {
+        self.is_muted
+    }
+    #[inline]
+    pub fn set_muted(&mut self, muted: bool) {
+        self.is_muted = muted;
+    }
+    #[inline]
+    pub fn cc_shape_kind(&self) -> CcShapeKind {
+        self.cc_shape_kind
+    }
+    #[inline]
+    pub fn set_cc_shape_kind(&mut self, cc_shape_kind: CcShapeKind) {
+        self.cc_shape_kind = cc_shape_kind;
+    }
+}
 
 /// Generic Midi event, that easily converted to the binary format.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1422,42 +1456,50 @@ impl<T: MidiMessage> MidiEvent<T> {
             message,
         }
     }
-
+    #[inline]
     pub fn into_raw_parts(self) -> (MidiEventSpecs, T) {
         (self.specs, self.message)
+    }
+    #[inline]
+    /// Morph event to be of type [MidiEvent<RawMidiMessage>]
+    pub fn into_raw_event(self) -> MidiEvent<RawMidiMessage> {
+        MidiEvent {
+            specs: self.specs,
+            message: self.message.into_raw_message(),
+        }
     }
 
     #[inline]
     pub fn ppq_position(&self) -> u32 {
-        self.specs.position_in_ppq
+        self.specs.ppq_position()
     }
     #[inline]
     pub fn set_ppq_position(&mut self, position: u32) {
-        self.specs.position_in_ppq = position;
+        self.specs.set_ppq_position(position)
     }
     #[inline]
     pub fn selected(&self) -> bool {
-        self.specs.is_selected
+        self.specs.selected()
     }
     #[inline]
     pub fn set_selected(&mut self, selected: bool) {
-        self.specs.is_selected = selected;
+        self.specs.set_selected(selected)
     }
     #[inline]
     pub fn muted(&self) -> bool {
-        self.specs.is_muted
+        self.specs.muted()
     }
     #[inline]
     pub fn set_muted(&mut self, muted: bool) {
-        self.specs.is_muted = muted;
+        self.specs.set_muted(muted)
     }
     #[inline]
     pub fn cc_shape_kind(&self) -> CcShapeKind {
-        self.specs.cc_shape_kind
+        self.specs.cc_shape_kind()
     }
     #[inline]
     pub fn set_cc_shape_kind(&mut self, cc_shape_kind: CcShapeKind) {
-        self.specs.cc_shape_kind = cc_shape_kind;
+        self.specs.set_cc_shape_kind(cc_shape_kind)
     }
     #[inline]
     pub fn message(&self) -> &T {
