@@ -114,6 +114,74 @@ mod tests {
     }
 
     #[test]
+    fn window_commands_and_control_events_build_wm_command_messages() {
+        let menu_message = WindowCommand::Menu { id: SwellId(42) }
+            .to_raw_window_message()
+            .unwrap();
+        assert_eq!(
+            menu_message,
+            WindowMessage::Raw {
+                message: raw::WM_COMMAND,
+                wparam: 42,
+                lparam: 0,
+            }
+        );
+
+        let control_message = ControlEvent::ButtonClicked {
+            control: SwellId(7),
+        }
+        .to_raw_window_message()
+        .unwrap();
+        assert_eq!(
+            control_message,
+            WindowMessage::Raw {
+                message: raw::WM_COMMAND,
+                wparam: 7,
+                lparam: 0,
+            }
+        );
+
+        assert!(ControlEvent::Scroll {
+            control: SwellId(7),
+            code: 1,
+        }
+        .to_raw_window_message()
+        .is_err());
+    }
+
+    #[test]
+    fn window_event_builds_native_mouse_message_and_rejects_contextual_events()
+    {
+        let event = WindowEvent::Mouse {
+            message: events::MouseMessage::Down(events::MouseButton::Left),
+            position: layout::Point { x: 13, y: 24 },
+            buttons: events::MouseButtons::LEFT,
+        };
+        assert_eq!(
+            event.to_raw_window_message().unwrap(),
+            WindowMessage::Raw {
+                message: raw::WM_LBUTTONDOWN,
+                wparam: events::MouseButtons::LEFT.bits() as usize,
+                lparam: ((24_u32 << 16) | 13) as isize,
+            }
+        );
+
+        assert!(WindowEvent::Wheel {
+            horizontal: false,
+            delta: 120,
+            position: layout::Point { x: 13, y: 24 },
+        }
+        .to_raw_window_message()
+        .is_err());
+
+        assert!(WindowEvent::FilesDropped {
+            paths: vec!["/tmp/example.txt".into()],
+        }
+        .to_raw_window_message()
+        .is_err());
+    }
+
+    #[test]
     fn drawing_options_are_semantic_and_default_to_left_top() {
         assert!(DrawTextOptions::default()
             .alignment

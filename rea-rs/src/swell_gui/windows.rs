@@ -278,7 +278,8 @@ pub trait WindowHandler: 'static {
     fn on_timer(&mut self, _id: SwellId) -> anyhow::Result<()> {
         Ok(())
     }
-    /// Called for general window input. Return `true` to mark it handled.
+    /// Called for general window input, including dropped files. Return
+    /// `true` to mark it handled.
     fn on_event(
         &mut self,
         _event: super::events::WindowEvent,
@@ -2006,6 +2007,7 @@ impl ReaperWindow {
         Ok(())
     }
 
+    /// Find [ControlHandle] by its ID
     pub fn control(&self, id: SwellId) -> Option<ControlHandle> {
         self.controls.borrow().get(id)
     }

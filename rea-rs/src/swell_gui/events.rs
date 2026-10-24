@@ -7,10 +7,13 @@
 use super::layout::Point;
 use super::scroll::ScrollOffset;
 use super::widgets::{ControlKind, SwellId};
+use super::windowing::WindowMessage;
 use super::windows::ReaperWindow;
 use crate::keys::{KeyStroke, VKeys};
+use crate::{ReaRsError, ReaperResult};
+use int_enum::IntEnum;
 use rea_rs_low::raw;
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 /// A decoded `WM_COMMAND` notification code.
 #[derive(
@@ -62,6 +65,53 @@ pub enum WindowCommand {
         id: SwellId,
         notification: CommandNotification,
     },
+}
+
+impl WindowCommand {
+    /// Converts this decoded command into its native `WM_COMMAND` parameters.
+    ///
+    /// Control commands use a zero `lParam` here;
+    /// [`ReaperWindow::send_message`] and [`ReaperWindow::post_message`]
+    /// replace it with the registered control's HWND. Menu commands retain
+    /// the native zero `lParam`.
+    pub fn to_raw_window_message(&self) -> ReaperResult<WindowMessage> {
+        let (id, notification) = match *self {
+            Self::Menu { id } => (id, None),
+            Self::Control { id, notification } => (id, Some(notification)),
+        };
+        let id = u16::try_from(id.0).map_err(|_| {
+            ReaRsError::UnsuccessfulOperation(
+                "command ID exceeds WM_COMMAND range",
+            )
+        })?;
+        let notification = notification.map_or(Ok(0), |notification| {
+            u16::try_from(notification_code(notification)).map_err(|_| {
+                ReaRsError::UnsuccessfulOperation(
+                    "notification code exceeds WM_COMMAND range",
+                )
+            })
+        })?;
+        Ok(WindowMessage::Raw {
+            message: raw::WM_COMMAND,
+            wparam: ((notification as usize) << 16) | id as usize,
+            lparam: 0,
+        })
+    }
+}
+
+fn notification_code(notification: CommandNotification) -> i32 {
+    match notification {
+        CommandNotification::Clicked => 0,
+        CommandNotification::SetFocus => 256,
+        CommandNotification::KillFocus => 512,
+        CommandNotification::EditChange => 768,
+        CommandNotification::ComboSelectionChanged => 1,
+        CommandNotification::ComboEditChanged => 5,
+        CommandNotification::ComboDropDown => 7,
+        CommandNotification::ComboCloseUp => 8,
+        CommandNotification::ListDoubleClick => 2,
+        CommandNotification::Other(code) => code,
+    }
 }
 
 #[derive(
@@ -162,6 +212,54 @@ pub enum ControlEvent {
         control: SwellId,
         notification: CommandNotification,
     },
+}
+
+impl ControlEvent {
+    /// Converts a `WM_COMMAND`-based control event to native message
+    /// parameters. Events needing a notification structure or scroll payload
+    /// cannot be represented by a bare `WM_COMMAND` and return an error.
+    pub fn to_raw_window_message(&self) -> ReaperResult<WindowMessage> {
+        let (control, notification) = match *self {
+            Self::ButtonClicked { control }
+            | Self::CheckBoxChanged { control }
+            | Self::RadioButtonChanged { control } => {
+                (control, CommandNotification::Clicked)
+            }
+            Self::EditChanged { control } => {
+                (control, CommandNotification::EditChange)
+            }
+            Self::ComboSelectionChanged { control }
+            | Self::ListSelectionChanged { control } => {
+                (control, CommandNotification::ComboSelectionChanged)
+            }
+            Self::ComboEditChanged { control } => {
+                (control, CommandNotification::ComboEditChanged)
+            }
+            Self::ListDoubleClick { control } => {
+                (control, CommandNotification::ListDoubleClick)
+            }
+            Self::FocusGained { control } => {
+                (control, CommandNotification::SetFocus)
+            }
+            Self::FocusLost { control } => {
+                (control, CommandNotification::KillFocus)
+            }
+            Self::OtherCommand {
+                control,
+                notification,
+            } => (control, notification),
+            _ => {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "control event requires a native notification payload",
+                ));
+            }
+        };
+        WindowCommand::Control {
+            id: control,
+            notification,
+        }
+        .to_raw_window_message()
+    }
 }
 
 /// The semantic source of a ScrollView movement.
@@ -329,6 +427,8 @@ bitflags::bitflags! {
 }
 
 /// General window input/lifecycle event, independent of native controls.
+///
+/// Mouse and wheel positions are non-negative client-area coordinates.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WindowEvent {
     Canvas {
@@ -353,6 +453,147 @@ pub enum WindowEvent {
     },
     Text(char),
     Focus(bool),
+    /// Files delivered through the native `WM_DROPFILES` message.
+    FilesDropped {
+        paths: Vec<PathBuf>,
+    },
+}
+
+impl WindowEvent {
+    /// Converts directly representable window events to native message
+    /// parameters. Canvas routing and wheel coordinates require window
+    /// context, while file-drop payloads require a native drop handle; use
+    /// `WindowMessage::Raw` for those messages.
+    pub fn to_raw_window_message(&self) -> ReaperResult<WindowMessage> {
+        let (message, wparam, lparam) = match self {
+            Self::Canvas { .. }
+            | Self::Wheel { .. }
+            | Self::FilesDropped { .. } => {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "window event requires native window context",
+                ));
+            }
+            Self::Mouse {
+                message,
+                position,
+                buttons,
+            } => {
+                let x = i16::try_from(position.x).map_err(|_| {
+                    ReaRsError::UnsuccessfulOperation(
+                        "mouse x coordinate exceeds native message range",
+                    )
+                })?;
+                let y = i16::try_from(position.y).map_err(|_| {
+                    ReaRsError::UnsuccessfulOperation(
+                        "mouse y coordinate exceeds native message range",
+                    )
+                })?;
+                let lparam =
+                    (((y as u16 as u32) << 16) | x as u16 as u32) as isize;
+                let mut wparam = buttons.bits() as usize;
+                let message = match message {
+                    MouseMessage::Move => raw::WM_MOUSEMOVE,
+                    MouseMessage::Down(button)
+                    | MouseMessage::Up(button)
+                    | MouseMessage::DoubleClick(button) => {
+                        let double_click =
+                            matches!(message, MouseMessage::DoubleClick(_));
+                        let up = matches!(message, MouseMessage::Up(_));
+                        match button {
+                            MouseButton::Left if double_click => {
+                                raw::WM_LBUTTONDBLCLK
+                            }
+                            MouseButton::Left if up => raw::WM_LBUTTONUP,
+                            MouseButton::Left => raw::WM_LBUTTONDOWN,
+                            MouseButton::Right if double_click => {
+                                raw::WM_RBUTTONDBLCLK
+                            }
+                            MouseButton::Right if up => raw::WM_RBUTTONUP,
+                            MouseButton::Right => raw::WM_RBUTTONDOWN,
+                            MouseButton::Middle if double_click => {
+                                raw::WM_MBUTTONDBLCLK
+                            }
+                            MouseButton::Middle if up => raw::WM_MBUTTONUP,
+                            MouseButton::Middle => raw::WM_MBUTTONDOWN,
+                            MouseButton::X1 | MouseButton::X2 => {
+                                let x_button = if *button == MouseButton::X1 {
+                                    1
+                                } else {
+                                    2
+                                };
+                                wparam |= (x_button as usize) << 16;
+                                if double_click {
+                                    0x020D
+                                } else if up {
+                                    0x020C
+                                } else {
+                                    0x020B
+                                }
+                            }
+                        }
+                    }
+                    MouseMessage::Wheel { .. } => {
+                        return Err(ReaRsError::UnsuccessfulOperation(
+                            "mouse wheel event requires a wheel delta",
+                        ));
+                    }
+                };
+                (message, wparam, lparam)
+            }
+            Self::Key {
+                message,
+                key,
+                stroke,
+                modifiers,
+            } => {
+                let (message, alt) = match message {
+                    KeyMessage::Down => (raw::WM_KEYDOWN, false),
+                    KeyMessage::Up => (raw::WM_KEYUP, false),
+                    KeyMessage::SystemDown => (raw::WM_SYSKEYDOWN, true),
+                    KeyMessage::SystemUp => (raw::WM_SYSKEYUP, true),
+                };
+                if modifiers.bits()
+                    != if alt {
+                        KeyModifiers::ALT.bits()
+                    } else {
+                        KeyModifiers::empty().bits()
+                    }
+                {
+                    return Err(ReaRsError::UnsuccessfulOperation(
+                        "key modifiers cannot be represented by a key message",
+                    ));
+                }
+                let key = match key {
+                    NativeKey::Known(key) => key.int_value(),
+                    NativeKey::Other(key) => *key,
+                };
+                (message, key as usize, stroke.raw as isize)
+            }
+            Self::Text(character) => {
+                let character =
+                    u16::try_from(*character as u32).map_err(|_| {
+                        ReaRsError::UnsuccessfulOperation(
+                        "text character requires multiple WM_CHAR messages",
+                    )
+                    })?;
+                (raw::WM_CHAR, character as usize, 0)
+            }
+            Self::Focus(focused) => (
+                if *focused {
+                    raw::WM_SETFOCUS
+                } else {
+                    raw::WM_KILLFOCUS
+                },
+                0,
+                0,
+            ),
+        };
+        Ok(WindowMessage::Raw {
+            message,
+            wparam,
+            lparam,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

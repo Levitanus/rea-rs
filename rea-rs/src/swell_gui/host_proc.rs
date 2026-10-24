@@ -460,7 +460,140 @@ pub(super) fn decode_window_event(
         }
         raw::WM_SETFOCUS => Some(WindowEvent::Focus(true)),
         raw::WM_KILLFOCUS => Some(WindowEvent::Focus(false)),
+        raw::WM_DROPFILES => decode_file_drop(lparam as *mut std::ffi::c_void),
         _ => None,
+    }
+}
+
+#[cfg(target_family = "unix")]
+fn decode_file_drop(
+    drop_handle: *mut std::ffi::c_void,
+) -> Option<super::events::WindowEvent> {
+    use std::ffi::CStr;
+    use std::os::unix::ffi::OsStringExt;
+
+    let swell = Reaper::get().swell();
+    let paths = (|| {
+        let file_count = unsafe {
+            swell.DragQueryFile(drop_handle, u32::MAX, std::ptr::null_mut(), 0)
+        };
+        let mut paths = Vec::new();
+        paths
+            .try_reserve_exact(file_count as usize)
+            .map_err(|_| "unable to allocate dropped-file list")?;
+
+        for index in 0..file_count {
+            let length = unsafe {
+                swell.DragQueryFile(
+                    drop_handle,
+                    index,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            };
+            let capacity = (length as usize)
+                .checked_add(1)
+                .ok_or("dropped-file path length overflow")?;
+            let buffer_length = u32::try_from(capacity)
+                .map_err(|_| "dropped-file path exceeds native range")?;
+            let mut path = Vec::new();
+            path.try_reserve_exact(capacity)
+                .map_err(|_| "unable to allocate dropped-file path")?;
+            path.resize(capacity, 0);
+            let copied = unsafe {
+                swell.DragQueryFile(
+                    drop_handle,
+                    index,
+                    path.as_mut_ptr().cast(),
+                    buffer_length,
+                )
+            };
+            if copied != length {
+                return Err("unable to read dropped-file path");
+            }
+            let path =
+                unsafe { CStr::from_ptr(path.as_ptr().cast()) }.to_bytes();
+            paths.push(std::path::PathBuf::from(
+                std::ffi::OsString::from_vec(path.to_vec()),
+            ));
+        }
+        Ok(paths)
+    })();
+    unsafe { swell.DragFinish(drop_handle) };
+
+    match paths {
+        Ok(paths) => Some(super::events::WindowEvent::FilesDropped { paths }),
+        Err(error) => {
+            log::error!("failed to decode WM_DROPFILES payload: {error}");
+            None
+        }
+    }
+}
+
+#[cfg(target_family = "windows")]
+fn decode_file_drop(
+    drop_handle: *mut std::ffi::c_void,
+) -> Option<super::events::WindowEvent> {
+    use std::os::windows::ffi::OsStringExt;
+
+    #[link(name = "shell32")]
+    extern "system" {
+        fn DragQueryFileW(
+            drop_handle: *mut std::ffi::c_void,
+            file_index: u32,
+            file_name: *mut u16,
+            buffer_length: u32,
+        ) -> u32;
+        fn DragFinish(drop_handle: *mut std::ffi::c_void);
+    }
+
+    let paths = (|| {
+        let file_count = unsafe {
+            DragQueryFileW(drop_handle, u32::MAX, std::ptr::null_mut(), 0)
+        };
+        let mut paths = Vec::new();
+        paths
+            .try_reserve_exact(file_count as usize)
+            .map_err(|_| "unable to allocate dropped-file list")?;
+
+        for index in 0..file_count {
+            let length = unsafe {
+                DragQueryFileW(drop_handle, index, std::ptr::null_mut(), 0)
+            };
+            let capacity = (length as usize)
+                .checked_add(1)
+                .ok_or("dropped-file path length overflow")?;
+            let buffer_length = u32::try_from(capacity)
+                .map_err(|_| "dropped-file path exceeds native range")?;
+            let mut path = Vec::new();
+            path.try_reserve_exact(capacity)
+                .map_err(|_| "unable to allocate dropped-file path")?;
+            path.resize(capacity, 0);
+            let copied = unsafe {
+                DragQueryFileW(
+                    drop_handle,
+                    index,
+                    path.as_mut_ptr(),
+                    buffer_length,
+                )
+            };
+            if copied != length {
+                return Err("unable to read dropped-file path");
+            }
+            paths.push(std::path::PathBuf::from(
+                std::ffi::OsString::from_wide(&path[..copied as usize]),
+            ));
+        }
+        Ok(paths)
+    })();
+    unsafe { DragFinish(drop_handle) };
+
+    match paths {
+        Ok(paths) => Some(super::events::WindowEvent::FilesDropped { paths }),
+        Err(error) => {
+            log::error!("failed to decode WM_DROPFILES payload: {error}");
+            None
+        }
     }
 }
 
@@ -797,6 +930,11 @@ pub(crate) unsafe extern "C" fn window_proc(
                     return 0;
                 }
             }
+            #[cfg(any(target_family = "unix", target_family = "windows"))]
+            if msg == raw::WM_DROPFILES {
+                restore_borrowed_handler(&host_id, hwnd, handler);
+                return 0;
+            }
         }
         let result =
             call_saved_host_proc(hwnd, msg, wparam, lparam).unwrap_or(0);
@@ -1126,6 +1264,10 @@ pub(crate) unsafe extern "C" fn window_proc(
         if handled {
             return 0;
         }
+    }
+    #[cfg(any(target_family = "unix", target_family = "windows"))]
+    if msg == raw::WM_DROPFILES {
+        return 0;
     }
     let swell = reaper.swell() as *const rea_rs_low::Swell;
     match msg {

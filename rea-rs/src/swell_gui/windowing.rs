@@ -1,4 +1,5 @@
-use super::widgets::SwellId;
+use super::events::{ControlEvent, WindowCommand, WindowEvent};
+use super::widgets::{ReaperControl, SwellId};
 use super::windows::{DockPosition, ReaperWindow, WindowPlacement};
 use crate::ptr_wrappers::ReaperHwnd;
 use crate::{ExtState, ReaRsError, Reaper, ReaperResult};
@@ -10,6 +11,155 @@ use std::{
 };
 
 const WINDOW_STATE_SECTION: &str = "rea-rs.window";
+
+/// A typed message that can be sent to or posted to a SWELL/Win32 window.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WindowMessage {
+    /// Requests that the window close.
+    Close,
+    /// Sends a menu or control `WM_COMMAND` notification.
+    Command(WindowCommand),
+    /// Delivers a `WM_TIMER` notification.
+    Timer(SwellId),
+    /// Converts a supported semantic control event to its native message.
+    ///
+    /// Only events represented by `WM_COMMAND` are supported. Events that
+    /// require native notification structures or scroll payloads return an
+    /// error when sent or posted.
+    ControlEvent(ControlEvent),
+    /// Converts a directly representable native window event to its message.
+    WindowEvent(WindowEvent),
+    /// Sends arbitrary native parameters. The caller is responsible for
+    /// message-specific values and pointer validity/lifetimes.
+    Raw {
+        message: raw::UINT,
+        wparam: raw::WPARAM,
+        lparam: raw::LPARAM,
+    },
+}
+
+impl WindowMessage {
+    fn native_parameters(
+        &self,
+        window: &ReaperWindow,
+    ) -> ReaperResult<(raw::UINT, raw::WPARAM, raw::LPARAM)> {
+        match self {
+            Self::Close => Ok((raw::WM_CLOSE, 0, 0)),
+            Self::Timer(id) => Ok((raw::WM_TIMER, id.0 as usize, 0)),
+            Self::Raw {
+                message,
+                wparam,
+                lparam,
+            } => Ok((*message, *wparam, *lparam)),
+            Self::Command(command) => {
+                let message = command.to_raw_window_message()?;
+                let (message, wparam, lparam) = raw_parameters(message)?;
+                match command {
+                    WindowCommand::Menu { .. } => {
+                        Ok((message, wparam, lparam))
+                    }
+                    WindowCommand::Control { id, .. } => {
+                        Ok((message, wparam, control_lparam(window, *id)?))
+                    }
+                }
+            }
+            Self::ControlEvent(event) => {
+                let message = event.to_raw_window_message()?;
+                let (message, wparam, _) = raw_parameters(message)?;
+                let id = SwellId((wparam & 0xffff) as u32);
+                Ok((message, wparam, control_lparam(window, id)?))
+            }
+            Self::WindowEvent(WindowEvent::Wheel {
+                horizontal,
+                delta,
+                position,
+            }) => wheel_parameters(window, *horizontal, *delta, *position),
+            Self::WindowEvent(event) => {
+                raw_parameters(event.to_raw_window_message()?)
+            }
+        }
+    }
+}
+
+fn raw_parameters(
+    message: WindowMessage,
+) -> ReaperResult<(raw::UINT, raw::WPARAM, raw::LPARAM)> {
+    match message {
+        WindowMessage::Raw {
+            message,
+            wparam,
+            lparam,
+        } => Ok((message, wparam, lparam)),
+        _ => Err(ReaRsError::UnsuccessfulOperation(
+            "event conversion did not produce a raw message",
+        )),
+    }
+}
+
+fn control_lparam(
+    window: &ReaperWindow,
+    id: SwellId,
+) -> ReaperResult<raw::LPARAM> {
+    let control =
+        window.control(id).ok_or(ReaRsError::UnsuccessfulOperation(
+            "control is not registered with this window",
+        ))?;
+    let hwnd = ReaperControl::new(control).hwnd();
+    if hwnd.is_null() || !unsafe { ReaperWindow::swell()?.IsWindow(hwnd) } {
+        Err(ReaRsError::UnsuccessfulOperation(
+            "control window is invalid",
+        ))
+    } else {
+        Ok(hwnd as raw::LPARAM)
+    }
+}
+
+fn wheel_parameters(
+    window: &ReaperWindow,
+    horizontal: bool,
+    delta: i32,
+    position: super::layout::Point,
+) -> ReaperResult<(raw::UINT, raw::WPARAM, raw::LPARAM)> {
+    let delta = i16::try_from(delta).map_err(|_| {
+        ReaRsError::UnsuccessfulOperation(
+            "wheel delta exceeds native message range",
+        )
+    })?;
+    let mut position = raw::POINT {
+        x: i32::try_from(position.x).map_err(|_| {
+            ReaRsError::UnsuccessfulOperation(
+                "wheel x coordinate exceeds native range",
+            )
+        })?,
+        y: i32::try_from(position.y).map_err(|_| {
+            ReaRsError::UnsuccessfulOperation(
+                "wheel y coordinate exceeds native range",
+            )
+        })?,
+    };
+    unsafe {
+        ReaperWindow::swell()?.ClientToScreen(window.hwnd(), &mut position)
+    };
+    let x = i16::try_from(position.x).map_err(|_| {
+        ReaRsError::UnsuccessfulOperation(
+            "wheel screen x coordinate exceeds native message range",
+        )
+    })?;
+    let y = i16::try_from(position.y).map_err(|_| {
+        ReaRsError::UnsuccessfulOperation(
+            "wheel screen y coordinate exceeds native message range",
+        )
+    })?;
+    Ok((
+        if horizontal {
+            raw::WM_MOUSEHWHEEL
+        } else {
+            raw::WM_MOUSEWHEEL
+        },
+        (delta as u16 as usize) << 16,
+        (((y as u16 as u32) << 16) | x as u16 as u32) as isize,
+    ))
+}
 
 fn timer_interval_ms(interval: Duration) -> ReaperResult<u32> {
     let millis = interval.as_millis();
@@ -479,32 +629,27 @@ impl ReaperWindow {
         }
     }
 
-    /// Sends a message synchronously and returns the window procedure's
+    /// Sends a typed message synchronously and returns the window procedure's
     /// result. The caller blocks until the target window processes the
     /// message, so this is appropriate when the result is needed immediately
     /// and re-entrant callback execution is acceptable.
     pub fn send_message(
         &self,
-        msg: raw::UINT,
-        wparam: raw::WPARAM,
-        lparam: raw::LPARAM,
+        message: WindowMessage,
     ) -> ReaperResult<raw::LRESULT> {
         self.check_window()?;
+        let (msg, wparam, lparam) = message.native_parameters(self)?;
         Ok(unsafe {
             Self::swell()?.SendMessage(self.hwnd(), msg, wparam, lparam)
         })
     }
 
-    /// Posts a message asynchronously and returns after it has been queued.
-    /// The target window processes it later on the host message loop; there is
-    /// no return value from the target procedure.
-    pub fn post_message(
-        &self,
-        msg: raw::UINT,
-        wparam: raw::WPARAM,
-        lparam: raw::LPARAM,
-    ) -> ReaperResult<()> {
+    /// Posts a typed message asynchronously and returns after it has been
+    /// queued. The target window processes it later on the host message loop;
+    /// there is no return value from the target procedure.
+    pub fn post_message(&self, message: WindowMessage) -> ReaperResult<()> {
         self.check_window()?;
+        let (msg, wparam, lparam) = message.native_parameters(self)?;
         let ok = unsafe {
             Self::swell()?.PostMessage(self.hwnd(), msg, wparam, lparam)
         };
@@ -513,6 +658,21 @@ impl ReaperWindow {
         } else {
             Ok(())
         }
+    }
+
+    /// Sends a supported `WM_COMMAND`-based control event synchronously.
+    /// Events requiring a `WM_NOTIFY` structure or scroll payload are
+    /// rejected.
+    pub fn send_control_event(&self, event: ControlEvent) -> ReaperResult<()> {
+        self.send_message(WindowMessage::ControlEvent(event))
+            .map(|_| ())
+    }
+
+    /// Posts a supported `WM_COMMAND`-based control event asynchronously.
+    /// Events requiring a `WM_NOTIFY` structure or scroll payload are
+    /// rejected.
+    pub fn post_control_event(&self, event: ControlEvent) -> ReaperResult<()> {
+        self.post_message(WindowMessage::ControlEvent(event))
     }
 
     /// Starts a periodic timer that delivers `WM_TIMER` to this window.
