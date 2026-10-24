@@ -352,26 +352,7 @@ pub use control_surface::*;
 pub mod socket;
 
 pub mod swell_gui;
-pub use swell_gui::{
-    capture_window, client_to_screen, default_logfont, screen_to_client,
-    Bitmap, Brush, Button, Canvas, CheckBox, ComboBox, ComboBoxOptions,
-    CommandNotification, ContainerEvent, ControlEvent, ControlHandle,
-    ControlKind, ControlRect, DockPosition, DrawTextFlags, DrawTextOptions,
-    EditField, EventResponse, Font, FontCharset, FontSpec, GroupBox, Icon,
-    ImageList, ImageSize, KeyMessage, KeyModifiers, LiceBitmap,
-    LiceBitmapKind, LiceBlitOptions, LiceCombineMode, LiceFont, LicePoint,
-    LiceRect, LiceSurface, LiceTextOptions, ListBox, ListBoxOptions, ListView,
-    ListViewImageListKind, ListViewOptions, MouseButton, MouseButtons,
-    MouseMessage, NativeContainer, NativeKey, PaintInfo, Panel, PanelContext,
-    PanelLayout, PanelRects, PanelSizes, Pen, PenStyle, ProgressBar,
-    ProgressBarOptions, RadioButton, RadioButtonOptions, ReaperControl,
-    ReaperWindow, ScrollCommand, ScrollMetrics, ScrollOffset, ScrollState,
-    ScrollView, ScrollViewEvent, ScrollViewEventSource, ScrollbarRenderer,
-    ScrollbarVisibility, SignedPoint, StaticLabel, SwellId, TabControl,
-    TabControlOptions, Trackbar, TrackbarOptions, TreeView, TreeViewOptions,
-    WidgetEventCallback, WindowCommand, WindowEvent, WindowEventCallback,
-    WindowHandler, WindowId, WindowSpec,
-};
+pub use swell_gui::*;
 
 pub mod quantize;
 
