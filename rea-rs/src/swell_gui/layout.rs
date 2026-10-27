@@ -261,6 +261,27 @@ pub struct Insets {
 }
 
 impl Insets {
+    /// Make uniform inset padding.
+    pub fn uniform(pad: u32) -> Self {
+        Self {
+            left: pad,
+            top: pad,
+            right: pad,
+            bottom: pad,
+        }
+    }
+    /// Apply horizontal inset padding to self.
+    pub fn with_horizontal(mut self, pad: u32) -> Self {
+        self.left = pad;
+        self.right = pad;
+        self
+    }
+    /// Apply vertical inset padding to self.
+    pub fn with_vertical(mut self, pad: u32) -> Self {
+        self.top = pad;
+        self.bottom = pad;
+        self
+    }
     /// Returns the combined left and right insets, saturating on overflow.
     pub const fn horizontal(self) -> u32 {
         self.left.saturating_add(self.right)
