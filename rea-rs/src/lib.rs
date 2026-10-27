@@ -390,6 +390,8 @@ pub enum ReaRsError {
     CString(#[from] NulError),
     #[error("Utf8Error: can not convert pointer to String")]
     Utf8Error(#[from] Utf8Error),
+    #[error("IoError")]
+    IoError(#[from] std::io::Error),
     #[error("DecodeError: can not convert base64 string")]
     DecodeError(#[from] DecodeError),
     #[error("FromUtf8Error: can not convert base64 string")]
