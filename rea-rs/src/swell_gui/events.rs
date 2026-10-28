@@ -156,18 +156,38 @@ pub enum ControlEvent {
     },
     ListViewItemChanged {
         control: SwellId,
+        item: Option<SwellId>,
+        row_index: Option<usize>,
+        selected: bool,
     },
     ListViewColumnClicked {
         control: SwellId,
+        column: usize,
+    },
+    ListViewClicked {
+        control: SwellId,
+        row_index: Option<usize>,
+        column: Option<usize>,
+        double_click: bool,
+        position: Point,
     },
     TreeSelectionChanged {
         control: SwellId,
+        item: Option<SwellId>,
+    },
+    TreeClick {
+        control: SwellId,
+        row_index: Option<usize>,
+        double_click: bool,
     },
     TreeItemExpanding {
         control: SwellId,
+        item: Option<SwellId>,
+        expanding: bool,
     },
     TreeBeginDrag {
         control: SwellId,
+        item: Option<SwellId>,
     },
     /// Experimental virtual-control notification; virtual controls are not
     /// fully debugged and these event shapes may change before stabilization.
@@ -827,6 +847,21 @@ impl EventRegistry {
         self.container_parent.insert(container, parent);
     }
 
+    pub(super) fn remove_widgets(
+        &mut self,
+        ids: &std::collections::HashSet<SwellId>,
+    ) {
+        self.widget_callbacks.retain(|id, _| !ids.contains(id));
+        self.scroll_view_callbacks.retain(|id, _| !ids.contains(id));
+        self.container_callbacks.retain(|id, _| !ids.contains(id));
+        self.direct_container.retain(|child, container| {
+            !ids.contains(child) && !ids.contains(container)
+        });
+        self.container_parent.retain(|container, parent| {
+            !ids.contains(container) && !ids.contains(parent)
+        });
+    }
+
     pub(super) fn clear(&mut self) {
         self.widget_callbacks.clear();
         self.scroll_view_callbacks.clear();
@@ -978,11 +1013,6 @@ impl ControlEvent {
             | Self::ListDoubleClick { control }
             | Self::TrackbarChanged { control }
             | Self::TabSelectionChanged { control }
-            | Self::ListViewItemChanged { control }
-            | Self::ListViewColumnClicked { control }
-            | Self::TreeSelectionChanged { control }
-            | Self::TreeItemExpanding { control }
-            | Self::TreeBeginDrag { control }
             | Self::VirtualButtonClicked { control }
             | Self::VirtualSliderChanged { control }
             | Self::VirtualComboSelectionChanged { control }
@@ -993,10 +1023,18 @@ impl ControlEvent {
             | Self::FocusGained { control }
             | Self::FocusLost { control }
             | Self::OtherCommand { control, .. } => control,
+            Self::ListViewItemChanged { control, .. }
+            | Self::ListViewColumnClicked { control, .. }
+            | Self::ListViewClicked { control, .. }
+            | Self::TreeSelectionChanged { control, .. }
+            | Self::TreeClick { control, .. }
+            | Self::TreeItemExpanding { control, .. }
+            | Self::TreeBeginDrag { control, .. } => control,
         }
     }
 }
 
+#[cfg(test)]
 pub(super) fn decode_notify_event(
     kind: ControlKind,
     id: SwellId,
@@ -1007,19 +1045,113 @@ pub(super) fn decode_notify_event(
             ControlEvent::TabSelectionChanged { control: id }
         }
         (ControlKind::ListView, raw::LVN_ITEMCHANGED) => {
-            ControlEvent::ListViewItemChanged { control: id }
+            ControlEvent::ListViewItemChanged {
+                control: id,
+                item: None,
+                row_index: None,
+                selected: false,
+            }
         }
         (ControlKind::ListView, raw::LVN_COLUMNCLICK) => {
-            ControlEvent::ListViewColumnClicked { control: id }
+            ControlEvent::ListViewColumnClicked {
+                control: id,
+                column: 0,
+            }
         }
         (ControlKind::TreeView, raw::TVN_SELCHANGED) => {
-            ControlEvent::TreeSelectionChanged { control: id }
+            ControlEvent::TreeSelectionChanged {
+                control: id,
+                item: None,
+            }
         }
         (ControlKind::TreeView, raw::TVN_ITEMEXPANDING) => {
-            ControlEvent::TreeItemExpanding { control: id }
+            ControlEvent::TreeItemExpanding {
+                control: id,
+                item: None,
+                expanding: false,
+            }
         }
         (ControlKind::TreeView, raw::TVN_BEGINDRAG) => {
-            ControlEvent::TreeBeginDrag { control: id }
+            ControlEvent::TreeBeginDrag {
+                control: id,
+                item: None,
+            }
+        }
+        _ => ControlEvent::Notified { control: id, code },
+    }
+}
+
+pub(super) fn decode_notify_payload(
+    kind: ControlKind,
+    id: SwellId,
+    notification: *const std::ffi::c_void,
+) -> ControlEvent {
+    let header = unsafe { &*(notification as *const NotifyHeader) };
+    let code = header.code;
+    match (kind, code) {
+        (ControlKind::Tab, raw::TCN_SELCHANGE) => {
+            ControlEvent::TabSelectionChanged { control: id }
+        }
+        (ControlKind::ListView, raw::LVN_ITEMCHANGED) => {
+            let data = unsafe { &*(notification as *const ListViewNotify) };
+            ControlEvent::ListViewItemChanged {
+                control: id,
+                // NMLISTVIEW carries only the transient row index, not its
+                // LVITEM::lParam. Resolve stable IDs through the control
+                // synchronously if needed; never read beyond this struct.
+                item: None,
+                row_index: usize::try_from(data.item_index).ok(),
+                selected: data.new_state as u32 & raw::LVIS_SELECTED != 0,
+            }
+        }
+        (ControlKind::ListView, raw::LVN_COLUMNCLICK) => {
+            let data = unsafe { &*(notification as *const ListViewNotify) };
+            ControlEvent::ListViewColumnClicked {
+                control: id,
+                column: data.sub_item.max(0) as usize,
+            }
+        }
+        (ControlKind::ListView, raw::NM_CLICK | raw::NM_DBLCLK) => {
+            let data = unsafe { &*(notification as *const ListViewNotify) };
+            ControlEvent::ListViewClicked {
+                control: id,
+                row_index: usize::try_from(data.item_index).ok(),
+                column: usize::try_from(data.sub_item).ok(),
+                double_click: code == raw::NM_DBLCLK,
+                position: Point {
+                    x: data.point.x.max(0) as u32,
+                    y: data.point.y.max(0) as u32,
+                },
+            }
+        }
+        (ControlKind::TreeView, raw::NM_CLICK | raw::NM_DBLCLK) => {
+            let data = unsafe { &*(notification as *const ListViewNotify) };
+            ControlEvent::TreeClick {
+                control: id,
+                row_index: usize::try_from(data.item_index).ok(),
+                double_click: code == raw::NM_DBLCLK,
+            }
+        }
+        (ControlKind::TreeView, raw::TVN_SELCHANGED) => {
+            let data = unsafe { &*(notification as *const TreeViewNotify) };
+            ControlEvent::TreeSelectionChanged {
+                control: id,
+                item: tree_item_id(data.new_item.lParam),
+            }
+        }
+        (ControlKind::TreeView, raw::TVN_ITEMEXPANDING) => {
+            let data = unsafe { &*(notification as *const TreeViewNotify) };
+            ControlEvent::TreeItemExpanding {
+                control: id,
+                item: tree_item_id(data.new_item.lParam),
+                expanding: data.action() == raw::TVE_EXPAND as u32,
+            }
+        }
+        (ControlKind::TreeView, raw::TVN_BEGINDRAG) => {
+            ControlEvent::TreeBeginDrag {
+                control: id,
+                item: None,
+            }
         }
         _ => ControlEvent::Notified { control: id, code },
     }
@@ -1039,6 +1171,36 @@ pub(super) struct NotifyHeader {
     pub hwnd_from: raw::HWND,
     pub id_from: usize,
     pub code: u32,
+}
+
+#[repr(C)]
+struct ListViewNotify {
+    header: NotifyHeader,
+    item_index: i32,
+    sub_item: i32,
+    new_state: u32,
+    old_state: u32,
+    changed: u32,
+    point: raw::POINT,
+}
+
+#[repr(C)]
+struct TreeViewNotify {
+    header: NotifyHeader,
+    action: u32,
+    old_item: raw::TVITEM,
+    new_item: raw::TVITEM,
+    point: raw::POINT,
+}
+
+impl TreeViewNotify {
+    fn action(&self) -> u32 {
+        self.action
+    }
+}
+
+fn tree_item_id(value: raw::LPARAM) -> Option<SwellId> {
+    u32::try_from(value).ok().map(SwellId)
 }
 
 pub(super) fn decode_virtual_event(

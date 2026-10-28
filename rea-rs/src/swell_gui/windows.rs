@@ -27,7 +27,7 @@ use serde_derive::{Deserialize, Serialize};
 use std::{
     cell::Cell,
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ptr::NonNull,
     rc::Rc,
     sync::{
@@ -477,6 +477,8 @@ pub(super) struct LayoutNode {
     pub(super) spacing: u32,
     pub(super) policy: OverflowPolicy,
     pub(super) insets: Insets,
+    pub(super) horizontal_alignment: Align,
+    pub(super) vertical_alignment: Align,
 }
 
 pub(super) struct WindowLayout {
@@ -489,6 +491,21 @@ pub(super) struct WindowLayout {
     pub(super) panel_entries: HashMap<Panel, Vec<PanelLayoutEntry>>,
 }
 
+fn collect_layout_descendants(
+    container: SwellId,
+    layout: &WindowLayout,
+    descendants: &mut HashSet<SwellId>,
+) {
+    let Some(node) = layout.groups.get(&container) else {
+        return;
+    };
+    for entry in &node.entries {
+        if descendants.insert(entry.id) {
+            collect_layout_descendants(entry.id, layout, descendants);
+        }
+    }
+}
+
 impl Default for WindowLayout {
     fn default() -> Self {
         Self {
@@ -498,6 +515,8 @@ impl Default for WindowLayout {
                 spacing: 8,
                 policy: OverflowPolicy::WrapScroll,
                 insets: Insets::default(),
+                horizontal_alignment: Align::default(),
+                vertical_alignment: Align::default(),
             },
             groups: HashMap::new(),
             structural: HashMap::new(),
@@ -1248,6 +1267,240 @@ impl ReaperWindow {
         Ok(CreationContext::new(self))
     }
 
+    /// Rebuilds the descendants of a managed container, retaining its native
+    /// window and leaving its siblings untouched. The target must be a
+    /// GroupBox, row, ScrollView, or layout-enabled Canvas. Descendant
+    /// callbacks and controls are removed before `build` runs; if it fails,
+    /// the target remains empty. Call on REAPER's UI thread.
+    pub fn build_ui_for(
+        &self,
+        container_id: SwellId,
+        build: impl FnOnce(&CreationContext<'_>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        self.check_window()?;
+        if self.active_callbacks.get() != 0 {
+            anyhow::bail!(
+                "cannot rebuild a container during callback dispatch"
+            );
+        }
+
+        let (target_hwnd, target_parent, descendants) = {
+            let layout = self.layout.borrow();
+            if !layout.groups.contains_key(&container_id) {
+                anyhow::bail!("target is not a managed layout container");
+            }
+            let target_hwnd = layout
+                .structural
+                .get(&container_id)
+                .copied()
+                .or_else(|| {
+                    self.control(container_id).map(|control| control.hwnd)
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!("target has no native window")
+                })?;
+            if target_hwnd.is_null()
+                || !unsafe { Reaper::get().swell().IsWindow(target_hwnd) }
+            {
+                anyhow::bail!("target container window is no longer valid");
+            }
+            let target_parent = self
+                .scroll_views
+                .borrow()
+                .values()
+                .find(|runtime| runtime.id == container_id)
+                .map_or(target_hwnd, |runtime| runtime.content);
+            let mut descendants = HashSet::new();
+            collect_layout_descendants(
+                container_id,
+                &layout,
+                &mut descendants,
+            );
+            (target_hwnd, target_parent, descendants)
+        };
+
+        self.remove_layout_descendants(&descendants, container_id);
+        if let Some(node) =
+            self.layout.borrow_mut().groups.get_mut(&container_id)
+        {
+            node.entries.clear();
+        }
+        let context = CreationContext {
+            window: self,
+            parent: target_parent,
+            container: Some(container_id),
+            panel: None,
+        };
+        if let Err(error) = build(&context) {
+            let mut partial = HashSet::new();
+            let layout = self.layout.borrow();
+            if let Some(node) = layout.groups.get(&container_id) {
+                for entry in &node.entries {
+                    partial.insert(entry.id);
+                    collect_layout_descendants(
+                        entry.id,
+                        &layout,
+                        &mut partial,
+                    );
+                }
+            }
+            drop(layout);
+            self.remove_layout_descendants(&partial, container_id);
+            if let Some(node) =
+                self.layout.borrow_mut().groups.get_mut(&container_id)
+            {
+                node.entries.clear();
+            }
+            return Err(error);
+        }
+
+        let mut client = raw::RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        unsafe {
+            Reaper::get()
+                .swell()
+                .GetClientRect(target_hwnd, &mut client)
+        };
+        let layout = self.layout.borrow();
+        let wraps = self
+            .scroll_views
+            .borrow()
+            .values()
+            .find(|runtime| runtime.id == container_id)
+            .is_some_and(|_| {
+                client.right - client.left > client.bottom - client.top
+            });
+        self.apply_container_layout(
+            container_id,
+            Rect::new(
+                0,
+                0,
+                (client.right - client.left).max(0) as u32,
+                (client.bottom - client.top).max(0) as u32,
+            ),
+            &layout,
+            wraps,
+        )?;
+        Ok(())
+    }
+
+    fn remove_layout_descendants(
+        &self,
+        descendants: &HashSet<SwellId>,
+        target: SwellId,
+    ) {
+        let mut layout = self.layout.borrow_mut();
+        let structural: Vec<_> = layout
+            .structural
+            .iter()
+            .filter(|(id, _)| descendants.contains(id))
+            .map(|(id, hwnd)| (*id, *hwnd))
+            .collect();
+        let controls: Vec<_> = descendants
+            .iter()
+            .filter_map(|id| self.control(*id))
+            .collect();
+        let mut scroll_views = self.scroll_views.borrow_mut();
+        let removed_scrolls: Vec<_> = scroll_views
+            .iter()
+            .filter(|(_, runtime)| descendants.contains(&runtime.id))
+            .map(|(key, runtime)| {
+                (
+                    *key,
+                    runtime.scrollbar_hwnd,
+                    runtime.renderer,
+                    runtime.clip,
+                    runtime.content,
+                )
+            })
+            .collect();
+        for (key, _, _, _, _) in &removed_scrolls {
+            scroll_views.remove(key);
+        }
+        drop(scroll_views);
+
+        let removed_scroll_children: Vec<_> = removed_scrolls
+            .iter()
+            .flat_map(|(_, _, _, clip, content)| [*clip, *content])
+            .collect();
+
+        if Reaper::is_available() {
+            let reaper = Reaper::get();
+            for (_, hwnd, renderer, _, _) in &removed_scrolls {
+                if *renderer == ScrollbarRenderer::CoolSb
+                    && reaper.low().supports_cool_scrollbars()
+                    && !hwnd.is_null()
+                    && unsafe { reaper.swell().IsWindow(*hwnd) }
+                {
+                    unsafe { reaper.low().UninitializeCoolSB(*hwnd) };
+                }
+            }
+            if let Some(registry) = CONTAINER_WINDOW_PROCS.get() {
+                if let Ok(mut registry) = registry.lock() {
+                    for (_, hwnd) in &structural {
+                        registry.remove(&(*hwnd as usize));
+                    }
+                    for hwnd in &removed_scroll_children {
+                        registry.remove(&(*hwnd as usize));
+                    }
+                }
+            }
+            let mut hwnds: Vec<_> =
+                controls.iter().map(|control| control.hwnd).collect();
+            hwnds.extend(structural.iter().map(|(_, hwnd)| *hwnd));
+            hwnds.extend(removed_scrolls.iter().flat_map(
+                |(_, hwnd, _, clip, content)| [*hwnd, *clip, *content],
+            ));
+            hwnds.sort_unstable_by_key(|hwnd| *hwnd as usize);
+            hwnds.dedup();
+            for hwnd in hwnds {
+                if !hwnd.is_null() && unsafe { reaper.swell().IsWindow(hwnd) }
+                {
+                    unsafe { reaper.swell().DestroyWindow(hwnd) };
+                }
+            }
+        }
+
+        for id in descendants {
+            self.unregister_control(*id);
+        }
+        layout
+            .root
+            .entries
+            .retain(|entry| !descendants.contains(&entry.id));
+        for node in layout.groups.values_mut() {
+            node.entries
+                .retain(|entry| !descendants.contains(&entry.id));
+        }
+        layout.groups.retain(|id, _| !descendants.contains(id));
+        layout.structural.retain(|id, _| !descendants.contains(id));
+        layout
+            .virtual_controls
+            .retain(|id, _| !descendants.contains(id));
+        layout.virtual_parents.retain(|child, parent| {
+            !descendants.contains(child)
+                && (*child == target
+                    || (*parent != target && !descendants.contains(parent)))
+        });
+        for entries in layout.panel_entries.values_mut() {
+            entries.retain(|entry| !descendants.contains(&entry.entry.id));
+        }
+        drop(layout);
+
+        self.events.borrow_mut().remove_widgets(descendants);
+        self.virtual_command_queue.borrow_mut().retain(
+            |(_, _, _, source_id)| {
+                !descendants.contains(&SwellId(*source_id as u32))
+            },
+        );
+        let mut hosts = self.virtual_hosts.borrow_mut();
+        hosts.retain(|id, _| !descendants.contains(id) && *id != target);
+    }
+
     pub(super) fn reset_ui(&self) {
         let scroll_views: Vec<_> = self
             .scroll_views
@@ -1425,12 +1678,14 @@ impl ReaperWindow {
             .iter()
             .map(|entry| LayoutItem { size: entry.size })
             .collect();
-        let output = layout::layout_flow(
+        let output = layout::layout_flow_aligned(
             bounds,
             node.axis,
             &items,
             node.spacing,
             policy,
+            node.horizontal_alignment,
+            node.vertical_alignment,
         );
         for placement in &output.placements {
             if let Some(entry) = node.entries.get(placement.index) {
@@ -1758,6 +2013,8 @@ impl ReaperWindow {
             spacing: layout.root.spacing,
             policy: layout.root.policy,
             insets: layout.root.insets,
+            horizontal_alignment: layout.root.horizontal_alignment,
+            vertical_alignment: layout.root.vertical_alignment,
         };
         let output = self.apply_layout_node(bounds, &root, root.policy)?;
         for placement in output.placements {
@@ -1786,12 +2043,15 @@ impl ReaperWindow {
                 };
                 let registered =
                     panel_entries.get(&panel).cloned().unwrap_or_default();
-                let output = layout::layout_flow(
+                let alignment = panel_layout.alignment(panel);
+                let output = layout::layout_flow_aligned(
                     panel_layout.insets.apply(panel_bounds),
                     panel.axis(),
                     panel_layout.items(panel),
                     8,
                     OverflowPolicy::WrapScroll,
+                    alignment.horizontal,
+                    alignment.vertical,
                 );
                 let layout = self.layout.borrow();
                 for placement in output.placements {
@@ -1854,6 +2114,16 @@ impl ReaperWindow {
             }
         }
         Ok(())
+    }
+
+    /// Applies the current managed layout to the whole window immediately.
+    ///
+    /// Call this after building controls when the window is already visible
+    /// or when automatic resize layout has not yet run. Later resize and
+    /// docking changes continue to reapply layout automatically.
+    pub fn apply_layout(&self) -> ReaperResult<()> {
+        self.check_window()?;
+        self.apply_default_layout()
     }
 
     pub(crate) fn owned(

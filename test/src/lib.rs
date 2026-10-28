@@ -19,6 +19,7 @@ use rea_rs::{
 mod quantize;
 mod swell_gui;
 mod tempo_marker;
+mod widget_gallery;
 
 use rea_rs_macros::reaper_extension_plugin;
 use rea_rs_test::{TestStep, TestStepResult};
@@ -39,6 +40,7 @@ fn test_main(context: PluginContext) -> TestStepResult {
     let test =
         rea_rs_test::ReaperTest::setup(context, "rea-rs integration test");
     swell_gui::register_actions(Reaper::get_mut())?;
+    widget_gallery::register_actions(Reaper::get_mut())?;
     let steps = create_test_steps();
     for step in steps {
         test.push_test_step(step);

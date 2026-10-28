@@ -1744,10 +1744,10 @@ pub(crate) unsafe extern "C" fn window_proc(
             let header = &*(lparam as *const super::events::NotifyHeader);
             let control_id = super::widgets::SwellId(header.id_from as u32);
             if let Some(control) = handler.window().control(control_id) {
-                let event = super::events::decode_notify_event(
+                let event = super::events::decode_notify_payload(
                     control.kind,
                     control_id,
-                    header.code,
+                    lparam as *const std::ffi::c_void,
                 );
                 let result = handler.window().dispatch_control_event(event);
                 log::debug!("control notification dispatch: event={event:?} result={result:?}");

@@ -804,6 +804,75 @@ pub struct PanelLayout {
     pub sizes: PanelSizes,
     /// Insets applied within each region before its children flow.
     pub insets: Insets,
+    /// Per-panel horizontal and vertical alignment.
+    #[serde(default)]
+    pub alignments: PanelAlignments,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Horizontal and vertical child alignment within one panel.
+pub struct PanelAlignment {
+    /// Horizontal placement of panel children.
+    pub horizontal: Align,
+    /// Vertical placement of panel children.
+    pub vertical: Align,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+/// Alignment configuration for all panels.
+pub struct PanelAlignments {
+    /// Central panel alignment.
+    pub central: PanelAlignment,
+    /// Top panel alignment.
+    pub top: PanelAlignment,
+    /// Bottom panel alignment.
+    pub bottom: PanelAlignment,
+    /// Left panel alignment.
+    pub left: PanelAlignment,
+    /// Right panel alignment.
+    pub right: PanelAlignment,
+}
+
+impl PanelAlignments {
+    /// Returns the alignment for `panel`.
+    pub const fn get(self, panel: Panel) -> PanelAlignment {
+        match panel {
+            Panel::Central => self.central,
+            Panel::Top => self.top,
+            Panel::Bottom => self.bottom,
+            Panel::Left => self.left,
+            Panel::Right => self.right,
+        }
+    }
+
+    /// Sets the alignment for `panel`.
+    pub fn set(&mut self, panel: Panel, alignment: PanelAlignment) {
+        match panel {
+            Panel::Central => self.central = alignment,
+            Panel::Top => self.top = alignment,
+            Panel::Bottom => self.bottom = alignment,
+            Panel::Left => self.left = alignment,
+            Panel::Right => self.right = alignment,
+        }
+    }
 }
 
 impl PanelLayout {
@@ -835,6 +904,28 @@ impl PanelLayout {
     pub fn with_insets(mut self, insets: Insets) -> Self {
         self.insets = insets;
         self
+    }
+
+    /// Sets horizontal and vertical alignment for one panel.
+    pub fn with_alignment(
+        mut self,
+        panel: Panel,
+        horizontal: Align,
+        vertical: Align,
+    ) -> Self {
+        self.alignments.set(
+            panel,
+            PanelAlignment {
+                horizontal,
+                vertical,
+            },
+        );
+        self
+    }
+
+    /// Returns the alignment configured for `panel`, defaulting to center.
+    pub fn alignment(&self, panel: Panel) -> PanelAlignment {
+        self.alignments.get(panel)
     }
 
     /// Returns the ordered child size specifications for `panel`.
@@ -882,12 +973,14 @@ impl PanelLayout {
         let Some(panel_bounds) = allocation.get(panel) else {
             return LayoutOutput::empty();
         };
-        layout_flow(
+        layout_flow_aligned(
             insets.apply(self.insets.apply(panel_bounds)),
             panel.axis(),
             self.items(panel),
             spacing,
             policy,
+            self.alignment(panel).horizontal,
+            self.alignment(panel).vertical,
         )
     }
 }
@@ -998,18 +1091,21 @@ pub fn allocate_panels_for(layout: &PanelLayout, bounds: Rect) -> PanelRects {
     Clone,
     Copy,
     Debug,
+    Default,
     PartialEq,
     Eq,
     serde_derive::Serialize,
     serde_derive::Deserialize,
 )]
-/// Alignment used by [`layout_row`] for free horizontal and vertical space.
+/// Alignment used by managed flow layouts for free horizontal and vertical
+/// space.
 pub enum Align {
     /// Distribute remaining horizontal space between items.
     Spread,
     /// Align items to the leading edge.
     Start,
     /// Center items within the available space.
+    #[default]
     Center,
     /// Align items to the trailing edge.
     End,
@@ -1443,6 +1539,155 @@ pub fn layout_flow(
     output
 }
 
+/// Places items in a flow and aligns each lane on both physical axes.
+///
+/// Primary-axis alignment is applied independently to each lane. Cross-axis
+/// alignment positions items within their lane and aligns the lane stack in
+/// the available cross-axis space. `Spread` distributes surplus between
+/// items on a lane or between lanes; a single item/lane remains start-aligned.
+pub fn layout_flow_aligned(
+    bounds: Rect,
+    axis: Axis,
+    items: &[LayoutItem],
+    spacing: u32,
+    policy: OverflowPolicy,
+    align_x: Align,
+    align_y: Align,
+) -> LayoutOutput {
+    let mut output = layout_flow(bounds, axis, items, spacing, policy);
+    if output.placements.is_empty() {
+        return output;
+    }
+
+    let main_align = if axis == Axis::X { align_x } else { align_y };
+    let cross_align = if axis == Axis::X { align_y } else { align_x };
+    let main_origin = if axis == Axis::X { bounds.x } else { bounds.y };
+    let cross_origin = if axis == Axis::X { bounds.y } else { bounds.x };
+    let main_available = axis_value(bounds.size(), axis);
+    let cross_available = axis_value(bounds.size(), axis.cross());
+
+    // `layout_flow` emits lanes in order. Group placements by lane origin.
+    let mut lanes: Vec<Vec<usize>> = Vec::new();
+    let mut lane_origins: Vec<u32> = Vec::new();
+    for (placement_index, placement) in output.placements.iter().enumerate() {
+        let origin = if axis == Axis::X {
+            placement.rect.y
+        } else {
+            placement.rect.x
+        };
+        if lane_origins.last().copied() != Some(origin) {
+            lane_origins.push(origin);
+            lanes.push(Vec::new());
+        }
+        lanes
+            .last_mut()
+            .expect("lane was just created")
+            .push(placement_index);
+    }
+
+    let lane_sizes: Vec<u32> = lanes
+        .iter()
+        .map(|lane| {
+            lane.iter().fold(0, |size, index| {
+                let rect = output.placements[*index].rect;
+                size.max(axis_value(rect.size(), axis.cross()))
+            })
+        })
+        .collect();
+    let lane_gaps =
+        spacing.saturating_mul(lanes.len().saturating_sub(1) as u32);
+    let lane_extent = lane_sizes
+        .iter()
+        .fold(0u32, |total, size| total.saturating_add(*size))
+        .saturating_add(lane_gaps);
+    let lane_surplus = cross_available.saturating_sub(lane_extent);
+    let cross_leading = if lanes.len() == 1 {
+        0
+    } else {
+        match cross_align {
+            Align::Start | Align::Spread => 0,
+            Align::Center => lane_surplus / 2,
+            Align::End => lane_surplus,
+        }
+    };
+    let cross_gap = if cross_align == Align::Spread && lanes.len() > 1 {
+        spacing.saturating_add(lane_surplus / (lanes.len() as u32 - 1))
+    } else {
+        spacing
+    };
+
+    let mut cross_cursor = cross_origin.saturating_add(cross_leading);
+    for (lane_index, lane) in lanes.iter().enumerate() {
+        let lane_size = if lanes.len() == 1 {
+            cross_available
+        } else {
+            lane_sizes[lane_index]
+        };
+        let main_used = lane
+            .iter()
+            .fold(0u32, |total, index| {
+                let rect = output.placements[*index].rect;
+                total.saturating_add(axis_value(rect.size(), axis))
+            })
+            .saturating_add(
+                spacing.saturating_mul(lane.len().saturating_sub(1) as u32),
+            );
+        let main_surplus = main_available.saturating_sub(main_used);
+        let main_leading = match main_align {
+            Align::Start | Align::Spread => 0,
+            Align::Center => main_surplus / 2,
+            Align::End => main_surplus,
+        };
+        let main_gap = if main_align == Align::Spread && lane.len() > 1 {
+            spacing.saturating_add(main_surplus / (lane.len() as u32 - 1))
+        } else {
+            spacing
+        };
+        let mut main_cursor = main_origin.saturating_add(main_leading);
+
+        for placement_index in lane {
+            let placement = &mut output.placements[*placement_index];
+            let rect = &mut placement.rect;
+            let item_cross = axis_value(rect.size(), axis.cross());
+            let item_cross_offset = match cross_align {
+                Align::Start | Align::Spread => 0,
+                Align::Center => lane_size.saturating_sub(item_cross) / 2,
+                Align::End => lane_size.saturating_sub(item_cross),
+            };
+            if axis == Axis::X {
+                rect.x = main_cursor;
+                rect.y = cross_cursor.saturating_add(item_cross_offset);
+            } else {
+                rect.y = main_cursor;
+                rect.x = cross_cursor.saturating_add(item_cross_offset);
+            }
+            main_cursor = main_cursor
+                .saturating_add(axis_value(rect.size(), axis))
+                .saturating_add(main_gap);
+        }
+
+        cross_cursor = cross_cursor
+            .saturating_add(lane_size)
+            .saturating_add(cross_gap);
+    }
+
+    let mut right = bounds.x;
+    let mut bottom = bounds.y;
+    for placement in &output.placements {
+        right =
+            right.max(placement.rect.x.saturating_add(placement.rect.width));
+        bottom =
+            bottom.max(placement.rect.y.saturating_add(placement.rect.height));
+    }
+    output.content_extent = Size {
+        x: right.saturating_sub(bounds.x),
+        y: bottom.saturating_sub(bounds.y),
+    };
+    output.overflow_x |= output.content_extent.x > bounds.width;
+    output.overflow_y |= output.content_extent.y > bounds.height;
+    output
+}
+
 /// Places a single horizontal row and aligns it within `bounds`.
 ///
 /// `align_x` controls horizontal distribution/position and `align_y` controls
@@ -1627,8 +1872,8 @@ mod tests {
             4,
             OverflowPolicy::Clip,
         );
-        assert_eq!(top.placements[0].rect, Rect::new(15, 22, 20, 10));
-        assert_eq!(top.placements[1].rect, Rect::new(39, 22, 30, 10));
+        assert_eq!(top.placements[0].rect, Rect::new(33, 24, 20, 10));
+        assert_eq!(top.placements[1].rect, Rect::new(57, 24, 30, 10));
 
         let central = layout.layout_panel(
             Rect::new(10, 20, 100, 80),
@@ -1637,7 +1882,92 @@ mod tests {
             0,
             OverflowPolicy::WrapScroll,
         );
-        assert_eq!(central.placements[0].rect, Rect::new(10, 40, 40, 15));
+        assert_eq!(central.placements[0].rect, Rect::new(40, 62, 40, 15));
+    }
+
+    #[test]
+    fn aligned_flow_positions_children_on_both_axes() {
+        let items = [
+            LayoutItem {
+                size: WidgetSize::fixed(20, 10),
+            },
+            LayoutItem {
+                size: WidgetSize::fixed(20, 20),
+            },
+        ];
+        let output = layout_flow_aligned(
+            Rect::new(10, 20, 100, 60),
+            Axis::X,
+            &items,
+            0,
+            OverflowPolicy::Clip,
+            Align::Center,
+            Align::End,
+        );
+        assert_eq!(output.placements[0].rect, Rect::new(40, 70, 20, 10));
+        assert_eq!(output.placements[1].rect, Rect::new(60, 60, 20, 20));
+    }
+
+    #[test]
+    fn aligned_flow_spreads_items_in_each_lane() {
+        let item = LayoutItem {
+            size: WidgetSize::fixed(20, 10),
+        };
+        let output = layout_flow_aligned(
+            Rect::new(0, 0, 100, 40),
+            Axis::X,
+            &[item, item],
+            4,
+            OverflowPolicy::Clip,
+            Align::Spread,
+            Align::Start,
+        );
+        assert_eq!(output.placements[0].rect.x, 0);
+        assert_eq!(output.placements[1].rect.x, 80);
+    }
+
+    #[test]
+    fn panel_alignments_are_independent_and_default_to_center() {
+        let layout = PanelLayout::new()
+            .with_widget(
+                Panel::Top,
+                LayoutItem {
+                    size: WidgetSize::fixed(20, 10),
+                },
+            )
+            .with_widget(
+                Panel::Central,
+                LayoutItem {
+                    size: WidgetSize::fixed(20, 10),
+                },
+            )
+            .with_sizes(PanelSizes {
+                top: 30,
+                ..PanelSizes::default()
+            })
+            .with_alignment(Panel::Top, Align::End, Align::Center);
+
+        let top = layout.layout_panel(
+            Rect::new(0, 0, 100, 100),
+            Panel::Top,
+            Insets::default(),
+            0,
+            OverflowPolicy::Clip,
+        );
+        let central = layout.layout_panel(
+            Rect::new(0, 0, 100, 100),
+            Panel::Central,
+            Insets::default(),
+            0,
+            OverflowPolicy::Clip,
+        );
+        assert_eq!(top.placements[0].rect, Rect::new(80, 10, 20, 10));
+        assert_eq!(central.placements[0].rect, Rect::new(40, 60, 20, 10));
+    }
+
+    #[test]
+    fn center_is_the_default_alignment() {
+        assert_eq!(Align::default(), Align::Center);
     }
 
     #[test]

@@ -2,7 +2,9 @@ use super::layout::WidgetSize;
 use super::ReaperWindow;
 use crate::{
     swell_gui::{
-        layout::{Axis, OverflowPolicy, Panel, PanelLayout, PanelRects},
+        layout::{
+            Align, Axis, OverflowPolicy, Panel, PanelLayout, PanelRects,
+        },
         windows::{LayoutNode, ScrollViewRuntime},
     },
     ReaRsError, Reaper, ReaperHwnd, ReaperResult, ScrollState,
@@ -77,6 +79,22 @@ impl SwellId {
         Self(Self::allocate_from(&NEXT_TIMER_ID))
     }
 
+    /// Allocates a zero-based logical ListView row ID.
+    ///
+    /// The ID is stable across native row reordering but scoped to the
+    /// ListView that created it. It is not a native row index.
+    pub fn new_list_item() -> Self {
+        Self(Self::allocate_from(&NEXT_LIST_ITEM_ID))
+    }
+
+    /// Allocates a zero-based logical TreeView node ID.
+    ///
+    /// The ID is stable across native tree traversal but scoped to the
+    /// TreeView that created it. It is not a native tree handle.
+    pub fn new_tree_item() -> Self {
+        Self(Self::allocate_from(&NEXT_TREE_ITEM_ID))
+    }
+
     /// Returns the native 32-bit representation.
     pub const fn as_u32(self) -> u32 {
         self.0
@@ -84,7 +102,21 @@ impl SwellId {
 
     fn allocate_from(counter: &std::sync::atomic::AtomicU32) -> u32 {
         use std::sync::atomic::Ordering;
-        counter.fetch_add(1, Ordering::Relaxed)
+        let mut current = counter.load(Ordering::Relaxed);
+        loop {
+            if current == u32::MAX {
+                return current;
+            }
+            match counter.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return current,
+                Err(actual) => current = actual,
+            }
+        }
     }
 }
 
@@ -94,6 +126,10 @@ static NEXT_MENU_ID: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0x4000);
 static NEXT_TIMER_ID: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(1);
+static NEXT_LIST_ITEM_ID: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+static NEXT_TREE_ITEM_ID: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
 impl From<u32> for SwellId {
     fn from(value: u32) -> Self {
         Self(value)
@@ -935,6 +971,1055 @@ impl ListView {
         }
         Ok(Self(control))
     }
+
+    /// Appends a report-view column.
+    pub fn add_column(&self, column: &ListViewColumn) -> ReaperResult<usize> {
+        let text = CString::new(column.title.as_str())?;
+        #[cfg(target_family = "unix")]
+        let index = unsafe {
+            let swell = ReaperWindow::swell()?;
+            let header = swell.ListView_GetHeader(self.hwnd());
+            if header.is_null() {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "ListView header is unavailable",
+                ));
+            }
+            swell.Header_GetItemCount(header).max(0) as usize
+        };
+        #[cfg(target_family = "windows")]
+        let index = {
+            let header =
+                self.control().send_message(raw::LVM_GETHEADER, 0, 0)?
+                    as raw::HWND;
+            if header.is_null() {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "ListView header is unavailable",
+                ));
+            }
+            unsafe {
+                ReaperWindow::swell()?.SendMessage(
+                    header,
+                    raw::HDM_GETITEMCOUNT,
+                    0,
+                    0,
+                )
+            }
+            .max(0) as usize
+        };
+        #[cfg(target_family = "unix")]
+        let native = raw::LVCOLUMN {
+            mask: raw::LVCF_TEXT | raw::LVCF_WIDTH | raw::LVCF_FMT,
+            fmt: raw::LVCFMT_LEFT,
+            cx: column.width.max(1),
+            pszText: text.as_ptr() as *mut _,
+            cchTextMax: text.as_bytes().len() as i32,
+            iSubItem: index as i32,
+        };
+        #[cfg(target_family = "windows")]
+        let mut native = raw::LVCOLUMN {
+            mask: raw::LVCF_TEXT | raw::LVCF_WIDTH | raw::LVCF_FMT,
+            fmt: raw::LVCFMT_LEFT,
+            cx: column.width.max(1),
+            pszText: text.as_ptr() as *mut _,
+            cchTextMax: text.as_bytes().len() as i32,
+            iSubItem: index as i32,
+        };
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_InsertColumn(
+                self.hwnd(),
+                index as i32,
+                &native,
+            );
+            Ok(index)
+        }
+        #[cfg(target_family = "windows")]
+        {
+            let result = self.control().send_message(
+                raw::LVM_INSERTCOLUMNA,
+                index,
+                &mut native as *mut _ as isize,
+            )?;
+            if result < 0 {
+                Err(ReaRsError::UnsuccessfulOperation(
+                    "ListView column insertion",
+                ))
+            } else {
+                Ok(result as usize)
+            }
+        }
+    }
+
+    /// Inserts an owned row and returns its stable ID. The ID is stored in
+    /// the native item data and remains valid when rows are reordered.
+    pub fn insert_row(&self, row: &ListViewRow) -> ReaperResult<SwellId> {
+        let id = SwellId::new_list_item();
+        let text = row.cells.first().map(String::as_str).unwrap_or("");
+        let text = CString::new(text)?;
+        #[cfg(target_family = "unix")]
+        let native = raw::LVITEM {
+            mask: raw::LVIF_TEXT | raw::LVIF_PARAM,
+            iItem: self.native_item_count()? as i32,
+            iSubItem: 0,
+            pszText: text.as_ptr() as *mut _,
+            cchTextMax: text.as_bytes().len() as i32,
+            lParam: id.0 as isize,
+            ..Default::default()
+        };
+        #[cfg(target_family = "windows")]
+        let mut native = raw::LVITEM {
+            mask: raw::LVIF_TEXT | raw::LVIF_PARAM,
+            iItem: self.native_item_count()? as i32,
+            iSubItem: 0,
+            pszText: text.as_ptr() as *mut _,
+            cchTextMax: text.as_bytes().len() as i32,
+            lParam: id.0 as isize,
+            ..Default::default()
+        };
+        let index = self.native_insert_item(&native)? as isize;
+        if index < 0 {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "ListView row insertion",
+            ));
+        }
+        for (column, cell) in row.cells.iter().enumerate().skip(1) {
+            self.set_cell_text(id, column, cell)?;
+        }
+        if let Some(image) = row.image_index {
+            self.set_image(id, Some(image))?;
+        }
+        Ok(id)
+    }
+
+    /// Returns the number of native rows.
+    pub fn item_count(&self) -> ReaperResult<usize> {
+        Ok(self.native_item_count()?.max(0) as usize)
+    }
+
+    /// Returns the stable logical ID for the row currently at zero-based
+    /// `index`. The index is transient and changes when rows are reordered.
+    pub fn item_id_at(&self, index: usize) -> ReaperResult<Option<SwellId>> {
+        if index >= self.item_count()? {
+            return Ok(None);
+        }
+        self.item_id(index)
+    }
+
+    /// Sets a cell's text using a stable row ID and zero-based column.
+    pub fn set_cell_text(
+        &self,
+        id: SwellId,
+        column: usize,
+        value: &str,
+    ) -> ReaperResult<()> {
+        let index = self.item_index(id)?.ok_or(ReaRsError::InvalidObject(
+            "ListView item ID is not present",
+        ))?;
+        let text = CString::new(value)?;
+        let column = i32::try_from(column).map_err(|_| {
+            ReaRsError::UnsuccessfulOperation("ListView column index")
+        })?;
+        self.native_set_item_text(index as i32, column, &text)
+    }
+
+    /// Reads a cell's text into an owned string.
+    pub fn cell_text(
+        &self,
+        id: SwellId,
+        column: usize,
+    ) -> ReaperResult<String> {
+        let index = self.item_index(id)?.ok_or(ReaRsError::InvalidObject(
+            "ListView item ID is not present",
+        ))?;
+        let mut buffer = vec![0i8; 4096];
+        #[cfg(target_family = "windows")]
+        let mut native = raw::LVITEM {
+            mask: raw::LVIF_TEXT,
+            iItem: index as i32,
+            iSubItem: i32::try_from(column).map_err(|_| {
+                ReaRsError::UnsuccessfulOperation("ListView column index")
+            })?,
+            pszText: buffer.as_mut_ptr(),
+            cchTextMax: buffer.len() as i32,
+            ..Default::default()
+        };
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_GetItemText(
+                self.hwnd(),
+                index as i32,
+                column as i32,
+                buffer.as_mut_ptr(),
+                buffer.len() as i32,
+            );
+        }
+        #[cfg(target_family = "windows")]
+        if !self.native_get_item(&mut native)? {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "ListView cell text retrieval",
+            ));
+        }
+        Ok(unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) }
+            .to_string_lossy()
+            .into_owned())
+    }
+
+    /// Removes a row by stable ID.
+    pub fn remove_item(&self, id: SwellId) -> ReaperResult<()> {
+        let index = self.item_index(id)?.ok_or(ReaRsError::InvalidObject(
+            "ListView item ID is not present",
+        ))?;
+        if self.native_delete_item(index as i32)? {
+            Ok(())
+        } else {
+            Err(ReaRsError::UnsuccessfulOperation("ListView item removal"))
+        }
+    }
+
+    /// Removes all rows without changing the configured columns.
+    pub fn clear_items(&self) -> ReaperResult<()> {
+        self.native_delete_all_items()
+    }
+
+    /// Returns selected rows as stable IDs, not native row indices.
+    pub fn selected_items(&self) -> ReaperResult<Vec<SwellId>> {
+        let mut result = Vec::new();
+        let mut index = -1isize;
+        loop {
+            index = self
+                .native_next_item(index as i32, raw::LVNI_SELECTED as i32)?
+                as isize;
+            if index < 0 {
+                break;
+            }
+            if let Some(id) = self.item_id(index as usize)? {
+                result.push(id);
+            }
+        }
+        Ok(result)
+    }
+
+    /// Selects or clears a row without exposing its native index.
+    pub fn set_selected(
+        &self,
+        id: SwellId,
+        selected: bool,
+    ) -> ReaperResult<()> {
+        self.set_item_state(
+            id,
+            raw::LVIS_SELECTED,
+            if selected { raw::LVIS_SELECTED } else { 0 },
+        )
+    }
+
+    /// Sets keyboard focus to a row and ensures it is visible.
+    pub fn set_focused(&self, id: SwellId) -> ReaperResult<()> {
+        self.set_item_state(id, raw::LVIS_FOCUSED, raw::LVIS_FOCUSED)?;
+        let index = self.item_index(id)?.ok_or(ReaRsError::InvalidObject(
+            "ListView item ID is not present",
+        ))?;
+        self.native_ensure_visible(index as i32)
+    }
+
+    /// Sets a row's small-image-list index; `None` removes its image.
+    pub fn set_image(
+        &self,
+        id: SwellId,
+        image: Option<i32>,
+    ) -> ReaperResult<()> {
+        let index = self.item_index(id)?.ok_or(ReaRsError::InvalidObject(
+            "ListView item ID is not present",
+        ))?;
+        let mut native = raw::LVITEM {
+            mask: raw::LVIF_IMAGE,
+            iItem: index as i32,
+            iImage: image.unwrap_or(-1),
+            ..Default::default()
+        };
+        self.native_set_item(&mut native).map(|_| ())
+    }
+
+    fn set_item_state(
+        &self,
+        id: SwellId,
+        mask: u32,
+        state: u32,
+    ) -> ReaperResult<()> {
+        let index = self.item_index(id)?.ok_or(ReaRsError::InvalidObject(
+            "ListView item ID is not present",
+        ))?;
+        let mut native = raw::LVITEM {
+            state: state as i32,
+            stateMask: mask as i32,
+            ..Default::default()
+        };
+        self.native_set_item_state(index as i32, &mut native)
+    }
+
+    fn item_index(&self, wanted: SwellId) -> ReaperResult<Option<usize>> {
+        for index in 0..self.item_count()? {
+            if self.item_id(index)? == Some(wanted) {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
+    }
+
+    fn item_id(&self, index: usize) -> ReaperResult<Option<SwellId>> {
+        let mut native = raw::LVITEM {
+            mask: raw::LVIF_PARAM,
+            iItem: index as i32,
+            ..Default::default()
+        };
+        if !self.native_get_item(&mut native)? {
+            return Ok(None);
+        }
+        Ok(u32::try_from(native.lParam).ok().map(SwellId))
+    }
+
+    /// Decodes the native item-state bitfield into `(selected, focused)`.
+    pub fn item_state(&self, id: SwellId) -> ReaperResult<(bool, bool)> {
+        let index = self.item_index(id)?.ok_or(ReaRsError::InvalidObject(
+            "ListView item ID is not present",
+        ))?;
+        #[cfg(target_family = "unix")]
+        let state = unsafe {
+            ReaperWindow::swell()?.ListView_GetItemState(
+                self.hwnd(),
+                index as i32,
+                raw::LVIS_SELECTED | raw::LVIS_FOCUSED,
+            ) as u32
+        };
+        #[cfg(target_family = "windows")]
+        let state = self.control().send_message(
+            raw::LVM_GETITEMSTATE,
+            index,
+            (raw::LVIS_SELECTED | raw::LVIS_FOCUSED) as isize,
+        )? as u32;
+        Ok((
+            state & raw::LVIS_SELECTED != 0,
+            state & raw::LVIS_FOCUSED != 0,
+        ))
+    }
+
+    fn native_item_count(&self) -> ReaperResult<i32> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?.ListView_GetItemCount(self.hwnd()))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(raw::LVM_GETITEMCOUNT, 0, 0)?
+                as i32)
+        }
+    }
+
+    fn native_insert_item(&self, item: &raw::LVITEM) -> ReaperResult<i32> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?.ListView_InsertItem(self.hwnd(), item))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::LVM_INSERTITEMA,
+                0,
+                item as *const _ as isize,
+            )? as i32)
+        }
+    }
+
+    fn native_get_item(&self, item: &mut raw::LVITEM) -> ReaperResult<bool> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?.ListView_GetItem(self.hwnd(), item))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::LVM_GETITEMA,
+                0,
+                item as *mut _ as isize,
+            )? != 0)
+        }
+    }
+
+    fn native_set_item(&self, item: &mut raw::LVITEM) -> ReaperResult<bool> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?.ListView_SetItem(self.hwnd(), item))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::LVM_SETITEMA,
+                0,
+                item as *mut _ as isize,
+            )? != 0)
+        }
+    }
+
+    fn native_set_item_text(
+        &self,
+        row: i32,
+        column: i32,
+        text: &CString,
+    ) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_SetItemText(
+                self.hwnd(),
+                row,
+                column,
+                text.as_ptr(),
+            );
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            let mut item = raw::LVITEM {
+                mask: raw::LVIF_TEXT,
+                iItem: row,
+                iSubItem: column,
+                pszText: text.as_ptr() as *mut _,
+                cchTextMax: text.as_bytes().len() as i32,
+                ..Default::default()
+            };
+            self.control().send_message(
+                raw::LVM_SETITEMA,
+                0,
+                &mut item as *mut _ as isize,
+            )?;
+            Ok(())
+        }
+    }
+
+    fn native_next_item(&self, start: i32, flags: i32) -> ReaperResult<i32> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?.ListView_GetNextItem(
+                self.hwnd(),
+                start,
+                flags,
+            ))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::LVM_GETNEXTITEM,
+                start as usize,
+                flags as isize,
+            )? as i32)
+        }
+    }
+
+    fn native_delete_item(&self, index: i32) -> ReaperResult<bool> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_DeleteItem(self.hwnd(), index);
+            Ok(true)
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::LVM_DELETEITEM,
+                index as usize,
+                0,
+            )? != 0)
+        }
+    }
+
+    fn native_delete_all_items(&self) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_DeleteAllItems(self.hwnd());
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.control().send_message(raw::LVM_DELETEALLITEMS, 0, 0)?;
+            Ok(())
+        }
+    }
+
+    fn native_set_item_state(
+        &self,
+        index: i32,
+        item: &mut raw::LVITEM,
+    ) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_SetItemState(
+                self.hwnd(),
+                index,
+                item.state as u32,
+                item.stateMask as u32,
+            );
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.control().send_message(
+                raw::LVM_SETITEMSTATE,
+                index as usize,
+                item as *mut _ as isize,
+            )?;
+            Ok(())
+        }
+    }
+
+    fn native_ensure_visible(&self, index: i32) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_EnsureVisible(
+                self.hwnd(),
+                index,
+                0,
+            );
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.control().send_message(
+                raw::LVM_ENSUREVISIBLE,
+                index as usize,
+                0,
+            )?;
+            Ok(())
+        }
+    }
+}
+
+/// An owned report-view column description.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ListViewColumn {
+    pub title: String,
+    pub width: i32,
+}
+
+/// An owned row. Additional cells map to subsequent report-view columns.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ListViewRow {
+    pub cells: Vec<String>,
+    pub image_index: Option<i32>,
+}
+
+impl TreeView {
+    /// Wraps a control handle after validating its registered kind.
+    pub fn from_control(control: ReaperControl) -> ReaperResult<Self> {
+        if control.kind() != ControlKind::TreeView {
+            return Err(ReaRsError::InvalidObject(
+                "control is not a TreeView",
+            ));
+        }
+        Ok(Self(control))
+    }
+
+    /// Appends a child or root node and returns its stable logical ID.
+    pub fn insert_node(
+        &self,
+        parent: Option<SwellId>,
+        text: &str,
+    ) -> ReaperResult<SwellId> {
+        self.insert_node_with_children(parent, text, false)
+    }
+
+    /// Inserts a node while optionally indicating that children will be
+    /// added later. This is necessary for SWELL TreeViews to render the native
+    /// expand/collapse affordance before a child exists.
+    pub fn insert_node_with_children(
+        &self,
+        parent: Option<SwellId>,
+        text: &str,
+        has_children: bool,
+    ) -> ReaperResult<SwellId> {
+        let id = SwellId::new_tree_item();
+        let parent_handle = match parent {
+            Some(parent) => self.native_item(parent)?.ok_or(
+                ReaRsError::InvalidObject("TreeView parent ID is not present"),
+            )?,
+            None => raw::TVI_ROOT as raw::HTREEITEM,
+        };
+        let text = CString::new(text)?;
+        let mut insertion = raw::TVINSERTSTRUCT {
+            hParent: parent_handle,
+            hInsertAfter: raw::TVI_LAST as raw::HTREEITEM,
+            item: raw::TVITEM {
+                mask: raw::TVIF_TEXT
+                    | raw::TVIF_PARAM
+                    | if has_children { raw::TVIF_CHILDREN } else { 0 },
+                pszText: text.as_ptr() as *mut _,
+                cchTextMax: text.as_bytes().len() as i32,
+                lParam: id.0 as isize,
+                cChildren: i32::from(has_children),
+                ..Default::default()
+            },
+        };
+        #[cfg(target_family = "unix")]
+        let item = unsafe {
+            ReaperWindow::swell()?
+                .TreeView_InsertItem(self.hwnd(), &mut insertion)
+        };
+        #[cfg(target_family = "windows")]
+        let item = self.control().send_message(
+            raw::TVM_INSERTITEMA,
+            0,
+            &mut insertion as *mut _ as isize,
+        )? as raw::HTREEITEM;
+        if item.is_null() {
+            log::error!(
+                "TreeView_InsertItem returned null: hwnd={:?} parent={:?} after={:?} logical_id={id:?}",
+                self.hwnd(),
+                insertion.hParent,
+                insertion.hInsertAfter,
+            );
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "TreeView node insertion",
+            ));
+        }
+        Ok(id)
+    }
+
+    /// Updates a node label by stable ID.
+    pub fn set_node_text(&self, id: SwellId, text: &str) -> ReaperResult<()> {
+        let item = self.native_item(id)?.ok_or(ReaRsError::InvalidObject(
+            "TreeView item ID is not present",
+        ))?;
+        let text = CString::new(text)?;
+        let mut native = raw::TVITEM {
+            mask: raw::TVIF_HANDLE | raw::TVIF_TEXT,
+            hItem: item,
+            pszText: text.as_ptr() as *mut _,
+            cchTextMax: text.as_bytes().len() as i32,
+            ..Default::default()
+        };
+        if !self.native_set_item(&mut native)? {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "TreeView node update",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Reads a node label into an owned string.
+    pub fn node_text(&self, id: SwellId) -> ReaperResult<String> {
+        let item = self.native_item(id)?.ok_or(ReaRsError::InvalidObject(
+            "TreeView item ID is not present",
+        ))?;
+        let mut buffer = vec![0i8; 4096];
+        let mut native = raw::TVITEM {
+            mask: raw::TVIF_HANDLE | raw::TVIF_TEXT,
+            hItem: item,
+            pszText: buffer.as_mut_ptr(),
+            cchTextMax: buffer.len() as i32,
+            ..Default::default()
+        };
+        if !self.native_get_item(&mut native)? {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "TreeView node text retrieval",
+            ));
+        }
+        Ok(unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) }
+            .to_string_lossy()
+            .into_owned())
+    }
+
+    /// Removes a node and its native descendants.
+    pub fn remove_node(&self, id: SwellId) -> ReaperResult<()> {
+        let item = self.native_item(id)?.ok_or(ReaRsError::InvalidObject(
+            "TreeView item ID is not present",
+        ))?;
+        if !self.native_delete_item(item)? {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "TreeView node removal",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Removes every node.
+    pub fn clear_nodes(&self) -> ReaperResult<()> {
+        self.native_delete_all_items()
+    }
+
+    /// Selects a node as the current keyboard item.
+    pub fn set_selected(&self, id: SwellId) -> ReaperResult<()> {
+        let item = self.native_item(id)?.ok_or(ReaRsError::InvalidObject(
+            "TreeView item ID is not present",
+        ))?;
+        self.native_select_item(item)
+    }
+
+    /// Returns the selected node's stable ID, if any.
+    pub fn selected_item(&self) -> ReaperResult<Option<SwellId>> {
+        let item = self.native_selected_item()?;
+        if item.is_null() {
+            return Ok(None);
+        }
+        let mut native = raw::TVITEM {
+            mask: raw::TVIF_HANDLE | raw::TVIF_PARAM,
+            hItem: item,
+            ..Default::default()
+        };
+        if !self.native_get_item(&mut native)? {
+            return Ok(None);
+        }
+        Ok(u32::try_from(native.lParam).ok().map(SwellId))
+    }
+
+    /// Expands or collapses a node.
+    pub fn set_expanded(
+        &self,
+        id: SwellId,
+        expanded: bool,
+    ) -> ReaperResult<()> {
+        let item = self.native_item(id)?.ok_or(ReaRsError::InvalidObject(
+            "TreeView item ID is not present",
+        ))?;
+        self.native_expand(item, expanded)
+    }
+
+    /// Shows or hides the native expand/collapse affordance for a node.
+    /// Use this when children will be inserted after the node is created.
+    pub fn set_has_children(
+        &self,
+        id: SwellId,
+        has_children: bool,
+    ) -> ReaperResult<()> {
+        let item = self.native_item(id)?.ok_or(ReaRsError::InvalidObject(
+            "TreeView item ID is not present",
+        ))?;
+        let mut native = raw::TVITEM {
+            mask: raw::TVIF_HANDLE | raw::TVIF_CHILDREN,
+            hItem: item,
+            cChildren: i32::from(has_children),
+            ..Default::default()
+        };
+        if !self.native_set_item(&mut native)? {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "TreeView child-indicator update",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Returns whether a node is currently expanded.
+    pub fn is_expanded(&self, id: SwellId) -> ReaperResult<bool> {
+        let item = self.native_item(id)?.ok_or(ReaRsError::InvalidObject(
+            "TreeView item ID is not present",
+        ))?;
+        let mut native = raw::TVITEM {
+            mask: raw::TVIF_HANDLE | raw::TVIF_STATE,
+            hItem: item,
+            stateMask: raw::TVIS_EXPANDED,
+            ..Default::default()
+        };
+        if !self.native_get_item(&mut native)? {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "TreeView node state retrieval",
+            ));
+        }
+        Ok(native.state & raw::TVIS_EXPANDED != 0)
+    }
+
+    /// Starts native in-place label editing. Requires `EDIT_LABELS` style.
+    pub fn edit_label(&self, id: SwellId) -> ReaperResult<()> {
+        let item = self.native_item(id)?.ok_or(ReaRsError::InvalidObject(
+            "TreeView item ID is not present",
+        ))?;
+        #[cfg(target_family = "unix")]
+        {
+            // SWELL exposes no label-edit helper in its provider API.
+            let _ = item;
+            Err(ReaRsError::UnsuccessfulOperation(
+                "TreeView label editing is unavailable through this SWELL backend",
+            ))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.control().send_message(
+                raw::TVM_EDITLABELA,
+                0,
+                item as usize as isize,
+            )?;
+            Ok(())
+        }
+    }
+
+    /// Returns all IDs in native preorder, optionally restricted to a
+    /// parent's descendants.
+    pub fn descendants(
+        &self,
+        parent: Option<SwellId>,
+    ) -> ReaperResult<Vec<SwellId>> {
+        let parent_handle = match parent {
+            Some(id) => self.native_item(id)?.ok_or(
+                ReaRsError::InvalidObject("TreeView parent ID is not present"),
+            )?,
+            None => std::ptr::null_mut(),
+        };
+        let mut result = Vec::new();
+        let mut item = self.native_first_child(parent_handle)?;
+        while !item.is_null() {
+            if let Some(id) = self.tree_id(item)? {
+                result.push(id);
+                result.extend(self.descendants(Some(id))?);
+            }
+            item = self.native_next_sibling(item)?;
+        }
+        Ok(result)
+    }
+
+    /// Returns the logical ID at a zero-based preorder row index.
+    pub fn item_id_at(
+        &self,
+        row_index: usize,
+    ) -> ReaperResult<Option<SwellId>> {
+        Ok(self.descendants(None)?.get(row_index).copied())
+    }
+
+    fn native_item(
+        &self,
+        wanted: SwellId,
+    ) -> ReaperResult<Option<raw::HTREEITEM>> {
+        let mut item = self.native_first_child(std::ptr::null_mut())?;
+        while !item.is_null() {
+            if self.tree_id(item)? == Some(wanted) {
+                return Ok(Some(item));
+            }
+            let id = self.tree_id(item)?;
+            if let Some(id) = id {
+                if let Some(found) =
+                    self.native_item_in_children(item, id, wanted)?
+                {
+                    return Ok(Some(found));
+                }
+            }
+            item = self.native_next_sibling(item)?;
+        }
+        Ok(None)
+    }
+
+    fn native_item_in_children(
+        &self,
+        parent: raw::HTREEITEM,
+        _parent_id: SwellId,
+        wanted: SwellId,
+    ) -> ReaperResult<Option<raw::HTREEITEM>> {
+        let mut item = self.native_first_child(parent)?;
+        while !item.is_null() {
+            if self.tree_id(item)? == Some(wanted) {
+                return Ok(Some(item));
+            }
+            if let Some(id) = self.tree_id(item)? {
+                if let Some(found) =
+                    self.native_item_in_children(item, id, wanted)?
+                {
+                    return Ok(Some(found));
+                }
+            }
+            item = self.native_next_sibling(item)?;
+        }
+        Ok(None)
+    }
+
+    fn tree_id(&self, item: raw::HTREEITEM) -> ReaperResult<Option<SwellId>> {
+        let mut native = raw::TVITEM {
+            mask: raw::TVIF_HANDLE | raw::TVIF_PARAM,
+            hItem: item,
+            ..Default::default()
+        };
+        if !self.native_get_item(&mut native)? {
+            return Ok(None);
+        }
+        Ok(u32::try_from(native.lParam).ok().map(SwellId))
+    }
+
+    fn native_get_item(&self, item: &mut raw::TVITEM) -> ReaperResult<bool> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(
+                ReaperWindow::swell()?.TreeView_GetItem(self.hwnd(), item)
+                    != 0,
+            )
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::TVM_GETITEMA,
+                0,
+                item as *mut _ as isize,
+            )? != 0)
+        }
+    }
+
+    fn native_set_item(&self, item: &mut raw::TVITEM) -> ReaperResult<bool> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(
+                ReaperWindow::swell()?.TreeView_SetItem(self.hwnd(), item)
+                    != 0,
+            )
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::TVM_SETITEMA,
+                0,
+                item as *mut _ as isize,
+            )? != 0)
+        }
+    }
+
+    fn native_delete_item(&self, item: raw::HTREEITEM) -> ReaperResult<bool> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.TreeView_DeleteItem(self.hwnd(), item);
+            Ok(true)
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::TVM_DELETEITEM,
+                0,
+                item as usize as isize,
+            )? != 0)
+        }
+    }
+
+    fn native_delete_all_items(&self) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.TreeView_DeleteAllItems(self.hwnd());
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.control().send_message(
+                raw::TVM_DELETEITEM,
+                0,
+                raw::TVI_ROOT as isize,
+            )?;
+            Ok(())
+        }
+    }
+
+    fn native_select_item(&self, item: raw::HTREEITEM) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.TreeView_SelectItem(self.hwnd(), item);
+            ReaperWindow::swell()?.TreeView_EnsureVisible(self.hwnd(), item);
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.control().send_message(
+                raw::TVM_SELECTITEM,
+                raw::TVGN_CARET,
+                item as usize as isize,
+            )?;
+            Ok(())
+        }
+    }
+
+    fn native_selected_item(&self) -> ReaperResult<raw::HTREEITEM> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?.TreeView_GetSelection(self.hwnd()))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::TVM_GETNEXTITEM,
+                raw::TVGN_CARET,
+                0,
+            )? as raw::HTREEITEM)
+        }
+    }
+
+    fn native_expand(
+        &self,
+        item: raw::HTREEITEM,
+        expanded: bool,
+    ) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            if ReaperWindow::swell()?.TreeView_Expand(
+                self.hwnd(),
+                item,
+                if expanded {
+                    raw::TVE_EXPAND as u32
+                } else {
+                    raw::TVE_COLLAPSE as u32
+                },
+            ) == 0
+            {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "TreeView expand/collapse",
+                ));
+            }
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.control().send_message(
+                raw::TVM_EXPAND,
+                if expanded {
+                    raw::TVE_EXPAND
+                } else {
+                    raw::TVE_COLLAPSE
+                },
+                item as usize as isize,
+            )?;
+            Ok(())
+        }
+    }
+
+    fn native_first_child(
+        &self,
+        parent: raw::HTREEITEM,
+    ) -> ReaperResult<raw::HTREEITEM> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            let swell = ReaperWindow::swell()?;
+            Ok(if parent.is_null() {
+                swell.TreeView_GetRoot(self.hwnd())
+            } else {
+                swell.TreeView_GetChild(self.hwnd(), parent)
+            })
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::TVM_GETNEXTITEM,
+                if parent.is_null() {
+                    raw::TVGN_ROOT
+                } else {
+                    raw::TVGN_CHILD
+                },
+                parent as usize as isize,
+            )? as raw::HTREEITEM)
+        }
+    }
+
+    fn native_next_sibling(
+        &self,
+        item: raw::HTREEITEM,
+    ) -> ReaperResult<raw::HTREEITEM> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?
+                .TreeView_GetNextSibling(self.hwnd(), item))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::TVM_GETNEXTITEM,
+                raw::TVGN_NEXT,
+                item as usize as isize,
+            )? as raw::HTREEITEM)
+        }
+    }
 }
 
 impl GroupBox {
@@ -1167,10 +2252,10 @@ impl ControlRegistry {
 /// context that creates children under it. Use the pure
 /// [`super::layout::PanelLayout`] API for panel allocation.
 pub struct CreationContext<'a> {
-    window: &'a ReaperWindow,
-    parent: raw::HWND,
-    container: Option<SwellId>,
-    panel: Option<Panel>,
+    pub(super) window: &'a ReaperWindow,
+    pub(super) parent: raw::HWND,
+    pub(super) container: Option<SwellId>,
+    pub(super) panel: Option<Panel>,
 }
 
 impl<'a> CreationContext<'a> {
@@ -1211,6 +2296,50 @@ impl<'a> CreationContext<'a> {
         }
         drop(layout);
         self
+    }
+
+    /// Sets horizontal alignment for this context's container, or its
+    /// assigned panel when this is a panel context.
+    pub fn with_horizontal_alignment(self, align: Align) -> Self {
+        self.update_alignment(|alignment| alignment.horizontal = align);
+        self
+    }
+
+    /// Sets vertical alignment for this context's container, or its
+    /// assigned panel when this is a panel context.
+    pub fn with_vertical_alignment(self, align: Align) -> Self {
+        self.update_alignment(|alignment| alignment.vertical = align);
+        self
+    }
+
+    fn update_alignment(
+        &self,
+        update: impl FnOnce(&mut super::layout::PanelAlignment),
+    ) {
+        if let Some(panel) = self.panel {
+            self.window
+                .update_panel_layout(|layout| {
+                    let mut alignment = layout.alignment(panel);
+                    update(&mut alignment);
+                    layout.alignments.set(panel, alignment);
+                })
+                .ok();
+        } else {
+            let mut layout = self.window.layout.borrow_mut();
+            let node = match self.container {
+                Some(container) => layout.groups.get_mut(&container),
+                None => Some(&mut layout.root),
+            };
+            if let Some(node) = node {
+                let mut alignment = super::layout::PanelAlignment {
+                    horizontal: node.horizontal_alignment,
+                    vertical: node.vertical_alignment,
+                };
+                update(&mut alignment);
+                node.horizontal_alignment = alignment.horizontal;
+                node.vertical_alignment = alignment.vertical;
+            }
+        }
     }
 
     /// Starts management of a panel layout for this window's client area.
@@ -1502,6 +2631,8 @@ impl<'a> CreationContext<'a> {
                     right: 15,
                     bottom: 10,
                 },
+                horizontal_alignment: Align::default(),
+                vertical_alignment: Align::default(),
             },
         );
         Ok(CreationContext {
@@ -1540,6 +2671,8 @@ impl<'a> CreationContext<'a> {
                 spacing: 8,
                 policy: OverflowPolicy::Clip,
                 insets: super::layout::Insets::default(),
+                horizontal_alignment: Align::default(),
+                vertical_alignment: Align::default(),
             },
         );
         Ok(CreationContext {
@@ -1644,6 +2777,8 @@ impl<'a> CreationContext<'a> {
                 spacing: 8,
                 policy: OverflowPolicy::WrapScroll,
                 insets: super::layout::Insets::default(),
+                horizontal_alignment: Align::default(),
+                vertical_alignment: Align::default(),
             },
         );
         self.window.scroll_views.borrow_mut().insert(
@@ -1731,6 +2866,8 @@ impl<'a> CreationContext<'a> {
                 spacing: 8,
                 policy: OverflowPolicy::Wrap,
                 insets: super::layout::Insets::default(),
+                horizontal_alignment: Align::default(),
+                vertical_alignment: Align::default(),
             });
         self.window
             .layout

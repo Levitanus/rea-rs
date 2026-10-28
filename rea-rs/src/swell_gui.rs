@@ -34,7 +34,6 @@ pub use layout::*;
 pub use menu::*;
 pub use scroll::*;
 pub use widgets::*;
-pub use widgets::*;
 pub use windowing::*;
 pub use windows::*;
 
@@ -287,6 +286,16 @@ mod tests {
     }
 
     #[test]
+    fn list_and_tree_item_ids_are_zero_based_and_independent() {
+        let list_first = SwellId::new_list_item();
+        let tree_first = SwellId::new_tree_item();
+        assert_eq!(list_first, SwellId(0));
+        assert_eq!(tree_first, SwellId(0));
+        assert_ne!(SwellId::new_list_item(), list_first);
+        assert_ne!(SwellId::new_tree_item(), tree_first);
+    }
+
+    #[test]
     fn added_native_notifications_decode_to_semantic_events() {
         let id = SwellId(77);
         assert_eq!(
@@ -303,7 +312,12 @@ mod tests {
                 id,
                 raw::LVN_ITEMCHANGED
             ),
-            ControlEvent::ListViewItemChanged { control: id },
+            ControlEvent::ListViewItemChanged {
+                control: id,
+                item: None,
+                row_index: None,
+                selected: false,
+            },
         );
         assert_eq!(
             events::decode_notify_event(
@@ -311,7 +325,10 @@ mod tests {
                 id,
                 raw::TVN_SELCHANGED
             ),
-            ControlEvent::TreeSelectionChanged { control: id },
+            ControlEvent::TreeSelectionChanged {
+                control: id,
+                item: None
+            },
         );
         assert_eq!(
             events::decode_notify_event(ControlKind::TreeView, id, 123),

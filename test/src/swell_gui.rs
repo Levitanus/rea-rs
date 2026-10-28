@@ -44,6 +44,8 @@
 //!
 //! - `TestSwellGuiWidgetGallery` toggles the gallery window.
 //! - `TestSwellPaintOver` toggles the MIDI-editor overlay.
+//! - `TestSwellGuiListViewDemo` and `TestSwellGuiTreeViewDemo` open focused
+//!   ListView and TreeView CRUD/selection demonstrations.
 //!
 //! Trigger the first action from REAPER's action list to open the gallery.
 //! The gallery can be docked or floated from its menu, and its dock preference

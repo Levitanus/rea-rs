@@ -1025,7 +1025,7 @@ pub mod root {
         ) -> root::BOOL,
     >;
     #[repr(C)]
-    #[derive(Debug, Copy, Clone, Hash)]
+    #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
     pub struct reaper_plugin_info_t {
         pub caller_version: ::std::os::raw::c_int,
         pub hwnd_main: root::HWND,
@@ -1225,7 +1225,7 @@ pub mod root {
         }
     }
     #[repr(C)]
-    #[derive(Debug, Default, Copy, Clone, Hash)]
+    #[derive(Debug, Default, Copy, Clone, Hash, PartialEq, Eq)]
     pub struct _REAPER_pcmsrc_register_t {
         pub CreateFromType: ::std::option::Option<
             unsafe extern "C" fn(
@@ -1296,7 +1296,7 @@ pub mod root {
         }
     }
     #[repr(C)]
-    #[derive(Debug, Default, Copy, Clone)]
+    #[derive(Debug, Default, Copy, Clone, Hash, PartialEq, Eq)]
     pub struct _REAPER_pcmsink_register_t {
         pub GetFmt: ::std::option::Option<
             unsafe extern "C" fn(
@@ -1388,7 +1388,7 @@ pub mod root {
         }
     }
     #[repr(C)]
-    #[derive(Debug, Copy, Clone, Hash)]
+    #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
     pub struct accelerator_register_t {
         pub translateAccel: ::std::option::Option<
             unsafe extern "C" fn(
@@ -1443,7 +1443,7 @@ pub mod root {
     }
     pub type gaccel_register_t = root::_REAPER_gaccel_register_t;
     #[repr(C)]
-    #[derive(Debug, Default, Copy, Clone)]
+    #[derive(Debug, Default, Copy, Clone, Hash, PartialEq, Eq)]
     pub struct _REAPER_editor_register_t {
         pub editFile: ::std::option::Option<
             unsafe extern "C" fn(
@@ -1460,7 +1460,7 @@ pub mod root {
     }
     pub type editor_register_t = root::_REAPER_editor_register_t;
     #[repr(C)]
-    #[derive(Debug, Default, Copy, Clone, Hash)]
+    #[derive(Debug, Default, Copy, Clone, Hash, PartialEq, Eq)]
     pub struct _REAPER_project_import_register_t {
         pub WantProjectFile: ::std::option::Option<
             unsafe extern "C" fn(fn_: *const ::std::os::raw::c_char) -> bool,
@@ -1481,7 +1481,7 @@ pub mod root {
     pub type project_import_register_t =
         root::_REAPER_project_import_register_t;
     #[repr(C)]
-    #[derive(Debug, Copy, Clone, Hash)]
+    #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
     pub struct project_config_extension_t {
         pub ProcessExtensionLine: ::std::option::Option<
             unsafe extern "C" fn(
@@ -1516,7 +1516,7 @@ pub mod root {
         }
     }
     #[repr(C)]
-    #[derive(Debug, Copy, Clone, Hash)]
+    #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
     pub struct prefs_page_register_t {
         pub idstr: *const ::std::os::raw::c_char,
         pub displayname: *const ::std::os::raw::c_char,
@@ -1540,7 +1540,7 @@ pub mod root {
         }
     }
     #[repr(C)]
-    #[derive(Debug, Copy, Clone, Hash)]
+    #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
     pub struct audio_hook_register_t {
         pub OnAudioBuffer: ::std::option::Option<
             unsafe extern "C" fn(
@@ -1595,7 +1595,7 @@ pub mod root {
     }
     pub type KbdKeyBindingInfo = root::_REAPER_KbdKeyBindingInfo;
     #[repr(C)]
-    #[derive(Debug, Copy, Clone, Hash)]
+    #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
     pub struct _REAPER_KbdSectionInfo {
         pub uniqueID: ::std::os::raw::c_int,
         pub name: *const ::std::os::raw::c_char,
