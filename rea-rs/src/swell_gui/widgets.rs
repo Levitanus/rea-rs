@@ -436,7 +436,21 @@ define_style_options!(
     {
         REPORT = 0x0001 => "Use report/details view.",
         SINGLE_SELECT = 0x0004 => "Allow at most one selected item.",
-        SHOW_SELECTION_ALWAYS = 0x0008 => "Keep selection visible when the control loses focus."
+        SHOW_SELECTION_ALWAYS = 0x0008 => "Keep selection visible when the control loses focus.",
+        EDIT_LABELS = 0x0200 => "Enable native in-place editing of item labels where supported.",
+        OWNER_DATA = 0x1000 => "Use native owner-data mode; applications must synchronously supply LVN_GETDISPINFO text."
+    }
+);
+define_style_options!(
+    ListViewExtendedOptions,
+    "Semantic extended styles for a list view.",
+    {
+        GRIDLINES = raw::LVS_EX_GRIDLINES => "Draw grid lines between report-view rows and columns.",
+        CHECKBOXES = raw::LVS_EX_CHECKBOXES => "Display a state checkbox for each item.",
+        HEADER_DRAG_DROP = raw::LVS_EX_HEADERDRAGDROP => "Allow users to reorder columns by dragging headers.",
+        FULL_ROW_SELECT = raw::LVS_EX_FULLROWSELECT => "Select the full row rather than only the label.",
+        ONE_CLICK_ACTIVATE = raw::LVS_EX_ONECLICKACTIVATE => "Activate items with one click.",
+        TWO_CLICK_ACTIVATE = raw::LVS_EX_TWOCLICKACTIVATE => "Activate items with a single click and a visual hover cue."
     }
 );
 define_style_options!(
@@ -1050,6 +1064,194 @@ impl ListView {
         }
     }
 
+    /// Returns the number of columns currently in the ListView header.
+    pub fn column_count(&self) -> ReaperResult<usize> {
+        self.native_column_count()
+    }
+
+    /// Removes a column by its current zero-based index.
+    pub fn remove_column(&self, column: usize) -> ReaperResult<()> {
+        let column = i32::try_from(column).map_err(|_| {
+            ReaRsError::UnsuccessfulOperation("ListView column index")
+        })?;
+        if column < 0 || column as usize >= self.column_count()? {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "ListView column index",
+            ));
+        }
+        if self.native_delete_column(column)? {
+            Ok(())
+        } else {
+            Err(ReaRsError::UnsuccessfulOperation("ListView column removal"))
+        }
+    }
+
+    /// Returns a column's current width in pixels.
+    pub fn column_width(&self, column: usize) -> ReaperResult<i32> {
+        let column = self.checked_column_index(column)?;
+        self.native_get_column_width(column)
+    }
+
+    /// Returns a column's title as an owned UTF-8 string.
+    pub fn column_title(&self, column: usize) -> ReaperResult<String> {
+        let column = self.checked_column_index(column)?;
+        let mut buffer = vec![0i8; 4096];
+        let mut native = raw::LVCOLUMN {
+            mask: raw::LVCF_TEXT,
+            pszText: buffer.as_mut_ptr(),
+            cchTextMax: buffer.len() as i32,
+            ..Default::default()
+        };
+        self.native_get_column(column, &mut native)?;
+        Ok(unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) }
+            .to_string_lossy()
+            .into_owned())
+    }
+
+    /// Replaces a column's title.
+    pub fn set_column_title(
+        &self,
+        column: usize,
+        title: &str,
+    ) -> ReaperResult<()> {
+        let column = self.checked_column_index(column)?;
+        let title = CString::new(title)?;
+        let mut native = raw::LVCOLUMN {
+            mask: raw::LVCF_TEXT,
+            pszText: title.as_ptr() as *mut _,
+            cchTextMax: title.as_bytes().len() as i32,
+            ..Default::default()
+        };
+        self.native_set_column(column, &mut native)
+    }
+
+    /// Returns the header format flags for a column.
+    pub fn column_format(&self, column: usize) -> ReaperResult<i32> {
+        let column = self.checked_column_index(column)?;
+        let mut native = raw::LVCOLUMN {
+            mask: raw::LVCF_FMT,
+            ..Default::default()
+        };
+        self.native_get_column(column, &mut native)?;
+        Ok(native.fmt)
+    }
+
+    /// Sets the header format flags for a column.
+    pub fn set_column_format(
+        &self,
+        column: usize,
+        format: i32,
+    ) -> ReaperResult<()> {
+        let column = self.checked_column_index(column)?;
+        let mut native = raw::LVCOLUMN {
+            mask: raw::LVCF_FMT,
+            fmt: format,
+            ..Default::default()
+        };
+        self.native_set_column(column, &mut native)
+    }
+
+    /// Sets a column's width in pixels. `width` must be non-negative.
+    pub fn set_column_width(
+        &self,
+        column: usize,
+        width: i32,
+    ) -> ReaperResult<()> {
+        if width < 0 {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "ListView column width",
+            ));
+        }
+        let column = self.checked_column_index(column)?;
+        self.native_set_column_width(column, width)
+    }
+
+    /// Returns the current display order, mapping each visual position to its
+    /// logical column index.
+    pub fn column_order(&self) -> ReaperResult<Vec<usize>> {
+        let count = self.column_count()?;
+        let mut order = vec![0i32; count];
+        self.native_get_column_order(&mut order)?;
+        order
+            .into_iter()
+            .map(|index| {
+                usize::try_from(index).map_err(|_| {
+                    ReaRsError::UnsuccessfulOperation("ListView column order")
+                })
+            })
+            .collect()
+    }
+
+    /// Sets the visual column order. `order[visual_position]` is the logical
+    /// column index placed at that position.
+    pub fn set_column_order(&self, order: &[usize]) -> ReaperResult<()> {
+        let count = self.column_count()?;
+        if order.len() != count {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "ListView column order length",
+            ));
+        }
+        let mut native_order = Vec::with_capacity(count);
+        let mut seen = vec![false; count];
+        for &index in order {
+            if index >= count || seen[index] {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "ListView column order",
+                ));
+            }
+            seen[index] = true;
+            native_order.push(i32::try_from(index).map_err(|_| {
+                ReaRsError::UnsuccessfulOperation("ListView column index")
+            })?);
+        }
+        self.native_set_column_order(&mut native_order)
+    }
+
+    /// Sorts rows using their stable logical IDs. The comparator is called
+    /// synchronously by the native control; panics are caught and reported.
+    pub fn sort_by<F>(&self, compare: F) -> ReaperResult<()>
+    where
+        F: FnMut(SwellId, SwellId) -> std::cmp::Ordering,
+    {
+        let mut context = ListViewSortContext {
+            compare,
+            panicked: false,
+        };
+        self.native_sort_by(&mut context)?;
+        if context.panicked {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "ListView sort comparator panicked",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Sorts rows lexically by a column's text, preserving stable row IDs.
+    pub fn sort_by_column(
+        &self,
+        column: usize,
+        descending: bool,
+    ) -> ReaperResult<()> {
+        self.checked_column_index(column)?;
+        let mut keys = HashMap::new();
+        for index in 0..self.item_count()? {
+            if let Some(id) = self.item_id(index)? {
+                keys.insert(id, self.cell_text(id, column)?);
+            }
+        }
+        self.sort_by(move |left, right| {
+            let ordering = keys
+                .get(&left)
+                .cmp(&keys.get(&right))
+                .then_with(|| left.0.cmp(&right.0));
+            if descending {
+                ordering.reverse()
+            } else {
+                ordering
+            }
+        })
+    }
+
     /// Inserts an owned row and returns its stable ID. The ID is stored in
     /// the native item data and remains valid when rows are reordered.
     pub fn insert_row(&self, row: &ListViewRow) -> ReaperResult<SwellId> {
@@ -1094,6 +1296,22 @@ impl ListView {
     /// Returns the number of native rows.
     pub fn item_count(&self) -> ReaperResult<usize> {
         Ok(self.native_item_count()?.max(0) as usize)
+    }
+
+    /// Sets the virtual row count for a ListView created with
+    /// [`ListViewOptions::OWNER_DATA`]. This configures native count only;
+    /// applications must separately handle synchronous `LVN_GETDISPINFO`
+    /// notifications to supply cell data.
+    pub fn set_virtual_item_count(&self, count: usize) -> ReaperResult<()> {
+        if !self.native_is_owner_data()? {
+            return Err(ReaRsError::InvalidObject(
+                "ListView was not created in owner-data mode",
+            ));
+        }
+        let count = i32::try_from(count).map_err(|_| {
+            ReaRsError::UnsuccessfulOperation("ListView virtual item count")
+        })?;
+        self.native_set_virtual_item_count(count)
     }
 
     /// Returns the stable logical ID for the row currently at zero-based
@@ -1199,6 +1417,21 @@ impl ListView {
         Ok(result)
     }
 
+    /// Returns the number of selected rows.
+    pub fn selected_count(&self) -> ReaperResult<usize> {
+        Ok(self.native_selected_count()?.max(0) as usize)
+    }
+
+    /// Returns the stable ID at the ListView's selection mark, if set.
+    pub fn selection_mark(&self) -> ReaperResult<Option<SwellId>> {
+        let index = self.native_selection_mark()?;
+        if index < 0 {
+            Ok(None)
+        } else {
+            self.item_id(index as usize)
+        }
+    }
+
     /// Selects or clears a row without exposing its native index.
     pub fn set_selected(
         &self,
@@ -1218,7 +1451,154 @@ impl ListView {
         let index = self.item_index(id)?.ok_or(ReaRsError::InvalidObject(
             "ListView item ID is not present",
         ))?;
-        self.native_ensure_visible(index as i32)
+        self.native_ensure_visible(index as i32, false)
+    }
+
+    /// Scrolls by a pixel offset. Positive `y` moves content upward and
+    /// positive `x` moves content leftward.
+    pub fn scroll_by(
+        &self,
+        offset: super::layout::SignedPoint,
+    ) -> ReaperResult<bool> {
+        self.native_scroll(offset.x, offset.y)
+    }
+
+    /// Makes a row visible, optionally allowing partial visibility.
+    pub fn ensure_visible(
+        &self,
+        id: SwellId,
+        partial_ok: bool,
+    ) -> ReaperResult<()> {
+        let index = self.item_index(id)?.ok_or(ReaRsError::InvalidObject(
+            "ListView item ID is not present",
+        ))?;
+        self.native_ensure_visible(index as i32, partial_ok)
+    }
+
+    /// Returns the first visible stable row ID and approximate number of rows
+    /// that fit in the current page.
+    pub fn viewport(&self) -> ReaperResult<ListViewViewport> {
+        let top = self.native_top_index()?;
+        Ok(ListViewViewport {
+            top_item: if top >= 0 {
+                self.item_id(top as usize)?
+            } else {
+                None
+            },
+            visible_rows: self.native_count_per_page()?.max(0) as usize,
+        })
+    }
+
+    /// Returns the row bounds in ListView client coordinates.
+    pub fn item_rect(
+        &self,
+        id: SwellId,
+    ) -> ReaperResult<Option<super::layout::SignedRect>> {
+        let index = self.item_index(id)?.ok_or(ReaRsError::InvalidObject(
+            "ListView item ID is not present",
+        ))?;
+        self.native_item_rect(index as i32, raw::LVIR_BOUNDS)
+    }
+
+    /// Returns a cell's bounds in ListView client coordinates.
+    pub fn subitem_rect(
+        &self,
+        id: SwellId,
+        column: usize,
+    ) -> ReaperResult<Option<super::layout::SignedRect>> {
+        let index = self.item_index(id)?.ok_or(ReaRsError::InvalidObject(
+            "ListView item ID is not present",
+        ))?;
+        let column = self.checked_column_index(column)?;
+        self.native_subitem_rect(index as i32, column, raw::LVIR_BOUNDS)
+    }
+
+    /// Hit-tests a client-coordinate point and returns the row, subitem, and
+    /// native hit flags when the point intersects a row.
+    pub fn hit_test(
+        &self,
+        point: super::layout::SignedPoint,
+    ) -> ReaperResult<ListViewHit> {
+        let mut native = raw::LVHITTESTINFO {
+            pt: raw::POINT {
+                x: point.x,
+                y: point.y,
+            },
+            ..Default::default()
+        };
+        let index = self.native_hit_test(&mut native)?;
+        let row_index = usize::try_from(index).ok();
+        Ok(ListViewHit {
+            item: match row_index {
+                Some(index) => self.item_id(index)?,
+                None => None,
+            },
+            row_index,
+            column: usize::try_from(native.iSubItem).ok(),
+            flags: native.flags,
+        })
+    }
+
+    /// Requests redraw for an inclusive row-index range.
+    pub fn redraw_items(&self, first: usize, last: usize) -> ReaperResult<()> {
+        let count = self.item_count()?;
+        if first > last || last >= count {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "ListView redraw range",
+            ));
+        }
+        self.native_redraw_items(first as i32, last as i32)
+    }
+
+    /// Enables/disables native redraw. Always re-enable redraw after a batch
+    /// operation, including error paths.
+    pub fn set_redraw(&self, enabled: bool) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        {
+            unsafe {
+                ReaperWindow::swell()?.SendMessage(
+                    self.hwnd(),
+                    raw::WM_SETREDRAW,
+                    usize::from(enabled),
+                    0,
+                );
+            }
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.control().send_message(
+                raw::WM_SETREDRAW,
+                usize::from(enabled),
+                0,
+            )?;
+            Ok(())
+        }
+    }
+
+    /// Applies extended native ListView styles.
+    pub fn set_extended_options(
+        &self,
+        options: ListViewExtendedOptions,
+    ) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_SetExtendedListViewStyleEx(
+                self.hwnd(),
+                ListViewExtendedOptions::all().bits(),
+                options.bits(),
+            );
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.control().send_message(
+                raw::LVM_SETEXTENDEDLISTVIEWSTYLE,
+                ListViewExtendedOptions::all().bits() as usize,
+                options.bits() as isize,
+            )?;
+            Ok(())
+        }
     }
 
     /// Sets a row's small-image-list index; `None` removes its image.
@@ -1256,7 +1636,7 @@ impl ListView {
         self.native_set_item_state(index as i32, &mut native)
     }
 
-    fn item_index(&self, wanted: SwellId) -> ReaperResult<Option<usize>> {
+    pub fn item_index(&self, wanted: SwellId) -> ReaperResult<Option<usize>> {
         for index in 0..self.item_count()? {
             if self.item_id(index)? == Some(wanted) {
                 return Ok(Some(index));
@@ -1468,13 +1848,376 @@ impl ListView {
         }
     }
 
-    fn native_ensure_visible(&self, index: i32) -> ReaperResult<()> {
+    fn checked_column_index(&self, column: usize) -> ReaperResult<i32> {
+        let column = i32::try_from(column).map_err(|_| {
+            ReaRsError::UnsuccessfulOperation("ListView column index")
+        })?;
+        if column < 0 || column as usize >= self.column_count()? {
+            return Err(ReaRsError::UnsuccessfulOperation(
+                "ListView column index",
+            ));
+        }
+        Ok(column)
+    }
+
+    fn native_column_count(&self) -> ReaperResult<usize> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            let header =
+                ReaperWindow::swell()?.ListView_GetHeader(self.hwnd());
+            if header.is_null() {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "ListView header is unavailable",
+                ));
+            }
+            Ok(ReaperWindow::swell()?.Header_GetItemCount(header).max(0)
+                as usize)
+        }
+        #[cfg(target_family = "windows")]
+        {
+            let header =
+                self.control().send_message(raw::LVM_GETHEADER, 0, 0)?
+                    as raw::HWND;
+            if header.is_null() {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "ListView header is unavailable",
+                ));
+            }
+            Ok(unsafe {
+                ReaperWindow::swell()?.SendMessage(
+                    header,
+                    raw::HDM_GETITEMCOUNT,
+                    0,
+                    0,
+                )
+            }
+            .max(0) as usize)
+        }
+    }
+
+    fn native_delete_column(&self, column: i32) -> ReaperResult<bool> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?
+                .ListView_DeleteColumn(self.hwnd(), column))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::LVM_DELETECOLUMN,
+                column as usize,
+                0,
+            )? != 0)
+        }
+    }
+
+    fn native_get_column_width(&self, column: i32) -> ReaperResult<i32> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?
+                .ListView_GetColumnWidth(self.hwnd(), column))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::LVM_GETCOLUMNWIDTH,
+                column as usize,
+                0,
+            )? as i32)
+        }
+    }
+
+    fn native_set_column_width(
+        &self,
+        column: i32,
+        width: i32,
+    ) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_SetColumnWidth(
+                self.hwnd(),
+                column,
+                width,
+            );
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.control().send_message(
+                raw::LVM_SETCOLUMNWIDTH,
+                column as usize,
+                width as isize,
+            )?;
+            Ok(())
+        }
+    }
+
+    fn native_get_column(
+        &self,
+        column: i32,
+        native: &mut raw::LVCOLUMN,
+    ) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_GetColumn(
+                self.hwnd(),
+                column,
+                native,
+            );
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            if self.control().send_message(
+                raw::LVM_GETCOLUMNA,
+                column as usize,
+                native as *mut _ as isize,
+            )? == 0
+            {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "ListView column retrieval",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    fn native_set_column(
+        &self,
+        column: i32,
+        native: &mut raw::LVCOLUMN,
+    ) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_SetColumn(
+                self.hwnd(),
+                column,
+                native,
+            );
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            if self.control().send_message(
+                raw::LVM_SETCOLUMNA,
+                column as usize,
+                native as *mut _ as isize,
+            )? == 0
+            {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "ListView column update",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    fn native_get_column_order(&self, order: &mut [i32]) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            if ReaperWindow::swell()?.ListView_GetColumnOrderArray(
+                self.hwnd(),
+                order.len() as i32,
+                order.as_mut_ptr(),
+            ) == 0
+            {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "ListView column order retrieval",
+                ));
+            }
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            if self.control().send_message(
+                raw::LVM_GETCOLUMNORDERARRAY,
+                order.len(),
+                order.as_mut_ptr() as isize,
+            )? == 0
+            {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "ListView column order retrieval",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    fn native_set_column_order(&self, order: &mut [i32]) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            if ReaperWindow::swell()?.ListView_SetColumnOrderArray(
+                self.hwnd(),
+                order.len() as i32,
+                order.as_mut_ptr(),
+            ) == 0
+            {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "ListView column order update",
+                ));
+            }
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            if self.control().send_message(
+                raw::LVM_SETCOLUMNORDERARRAY,
+                order.len(),
+                order.as_mut_ptr() as isize,
+            )? == 0
+            {
+                return Err(ReaRsError::UnsuccessfulOperation(
+                    "ListView column order update",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    fn native_sort_by<F>(
+        &self,
+        context: &mut ListViewSortContext<F>,
+    ) -> ReaperResult<()>
+    where
+        F: FnMut(SwellId, SwellId) -> std::cmp::Ordering,
+    {
+        let callback: raw::PFNLVCOMPARE = Some(list_view_sort_compare::<F>);
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_SortItems(
+                self.hwnd(),
+                callback,
+                context as *mut _ as isize,
+            );
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.control().send_message(
+                raw::LVM_SORTITEMS,
+                context as *mut _ as usize,
+                callback.map_or(0, |f| f as usize as isize),
+            )?;
+            Ok(())
+        }
+    }
+
+    fn native_selected_count(&self) -> ReaperResult<i32> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?.ListView_GetSelectedCount(self.hwnd()))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self
+                .control()
+                .send_message(raw::LVM_GETSELECTEDCOUNT, 0, 0)?
+                as i32)
+        }
+    }
+
+    fn native_is_owner_data(&self) -> ReaperResult<bool> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?
+                .GetWindowLong(self.hwnd(), raw::GWL_STYLE)
+                & ListViewOptions::OWNER_DATA.bits() as isize
+                != 0)
+        }
+        #[cfg(target_family = "windows")]
+        unsafe {
+            Ok(ReaperWindow::swell()?
+                .GetWindowLong(self.hwnd(), raw::GWL_STYLE)
+                & ListViewOptions::OWNER_DATA.bits() as isize
+                != 0)
+        }
+    }
+
+    fn native_set_virtual_item_count(&self, count: i32) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_SetItemCount(self.hwnd(), count);
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.control().send_message(
+                raw::LVM_SETITEMCOUNT,
+                count as usize,
+                0,
+            )?;
+            Ok(())
+        }
+    }
+
+    fn native_selection_mark(&self) -> ReaperResult<i32> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?.ListView_GetSelectionMark(self.hwnd()))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self
+                .control()
+                .send_message(raw::LVM_GETSELECTIONMARK, 0, 0)?
+                as i32)
+        }
+    }
+
+    fn native_scroll(&self, x: i32, y: i32) -> ReaperResult<bool> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?.ListView_Scroll(self.hwnd(), x, y))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::LVM_SCROLL,
+                x as usize,
+                y as isize,
+            )? != 0)
+        }
+    }
+
+    fn native_top_index(&self) -> ReaperResult<i32> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?.ListView_GetTopIndex(self.hwnd()))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(
+                self.control().send_message(raw::LVM_GETTOPINDEX, 0, 0)?
+                    as i32,
+            )
+        }
+    }
+
+    fn native_count_per_page(&self) -> ReaperResult<i32> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?.ListView_GetCountPerPage(self.hwnd()))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self
+                .control()
+                .send_message(raw::LVM_GETCOUNTPERPAGE, 0, 0)?
+                as i32)
+        }
+    }
+
+    fn native_ensure_visible(
+        &self,
+        index: i32,
+        partial_ok: bool,
+    ) -> ReaperResult<()> {
         #[cfg(target_family = "unix")]
         unsafe {
             ReaperWindow::swell()?.ListView_EnsureVisible(
                 self.hwnd(),
                 index,
-                0,
+                (if partial_ok { 1 } else { 0 }) as raw::BOOL,
             );
             Ok(())
         }
@@ -1483,11 +2226,162 @@ impl ListView {
             self.control().send_message(
                 raw::LVM_ENSUREVISIBLE,
                 index as usize,
-                0,
+                isize::from(partial_ok),
             )?;
             Ok(())
         }
     }
+
+    fn native_item_rect(
+        &self,
+        index: i32,
+        code: i32,
+    ) -> ReaperResult<Option<super::layout::SignedRect>> {
+        let mut rect = raw::RECT {
+            left: code,
+            ..Default::default()
+        };
+        #[cfg(target_family = "unix")]
+        let success = unsafe {
+            ReaperWindow::swell()?.ListView_GetItemRect(
+                self.hwnd(),
+                index,
+                &mut rect,
+                code,
+            )
+        };
+        #[cfg(target_family = "windows")]
+        let success = self.control().send_message(
+            raw::LVM_GETITEMRECT,
+            index as usize,
+            &mut rect as *mut _ as isize,
+        )? != 0;
+        Ok(success.then(|| native_rect_to_gui(rect)))
+    }
+
+    fn native_subitem_rect(
+        &self,
+        index: i32,
+        column: i32,
+        code: i32,
+    ) -> ReaperResult<Option<super::layout::SignedRect>> {
+        let mut rect = raw::RECT {
+            left: code,
+            top: column,
+            ..Default::default()
+        };
+        #[cfg(target_family = "unix")]
+        let success = unsafe {
+            ReaperWindow::swell()?.ListView_GetSubItemRect(
+                self.hwnd(),
+                index,
+                column,
+                code,
+                &mut rect,
+            )
+        };
+        #[cfg(target_family = "windows")]
+        let success = self.control().send_message(
+            raw::LVM_GETSUBITEMRECT,
+            index as usize,
+            &mut rect as *mut _ as isize,
+        )? != 0;
+        Ok(success.then(|| native_rect_to_gui(rect)))
+    }
+
+    fn native_hit_test(
+        &self,
+        info: &mut raw::LVHITTESTINFO,
+    ) -> ReaperResult<i32> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?
+                .ListView_SubItemHitTest(self.hwnd(), info))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::LVM_SUBITEMHITTEST,
+                0,
+                info as *mut _ as isize,
+            )? as i32)
+        }
+    }
+
+    fn native_redraw_items(&self, first: i32, last: i32) -> ReaperResult<()> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            ReaperWindow::swell()?.ListView_RedrawItems(
+                self.hwnd(),
+                first,
+                last,
+            );
+            Ok(())
+        }
+        #[cfg(target_family = "windows")]
+        {
+            self.control().send_message(
+                raw::LVM_REDRAWITEMS,
+                first as usize,
+                last as isize,
+            )?;
+            Ok(())
+        }
+    }
+}
+
+fn native_rect_to_gui(rect: raw::RECT) -> super::layout::SignedRect {
+    super::layout::SignedRect::from(rect)
+}
+
+struct ListViewSortContext<F> {
+    compare: F,
+    panicked: bool,
+}
+
+unsafe extern "C" fn list_view_sort_compare<F>(
+    left: raw::LPARAM,
+    right: raw::LPARAM,
+    context: raw::LPARAM,
+) -> i32
+where
+    F: FnMut(SwellId, SwellId) -> std::cmp::Ordering,
+{
+    let context = &mut *(context as *mut ListViewSortContext<F>);
+    if context.panicked {
+        return 0;
+    }
+    let (Ok(left), Ok(right)) = (u32::try_from(left), u32::try_from(right))
+    else {
+        return left.cmp(&right) as i32;
+    };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        (context.compare)(SwellId(left), SwellId(right))
+    })) {
+        Ok(std::cmp::Ordering::Less) => -1,
+        Ok(std::cmp::Ordering::Equal) => 0,
+        Ok(std::cmp::Ordering::Greater) => 1,
+        Err(_) => {
+            context.panicked = true;
+            0
+        }
+    }
+}
+
+/// Visible-row information for a ListView.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ListViewViewport {
+    pub top_item: Option<SwellId>,
+    pub visible_rows: usize,
+}
+
+/// Result of hit-testing a point in ListView client coordinates.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ListViewHit {
+    pub item: Option<SwellId>,
+    pub row_index: Option<usize>,
+    pub column: Option<usize>,
+    pub flags: u32,
 }
 
 /// An owned report-view column description.

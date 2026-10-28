@@ -3,7 +3,8 @@ use rea_rs::{
         layout::WidgetSize,
         widgets::{ListViewColumn, ListViewOptions, ListViewRow},
     },
-    ControlEvent, EventResponse, ReaperWindow, SwellId,
+    ControlEvent, EventResponse, ListViewExtendedOptions, ReaperWindow,
+    SwellId,
 };
 
 const LIST_ID: SwellId = SwellId(0x7301);
@@ -25,17 +26,6 @@ pub(super) fn build(window: &ReaperWindow) -> anyhow::Result<()> {
     let clear = row.button(CLEAR_ID, "Clear", WidgetSize::new(90, 28))?;
     let select =
         row.button(SELECT_ID, "Select first", WidgetSize::new(110, 28))?;
-    let checks = ui.row(SwellId(0x7308), WidgetSize::new_fill_x(620, 32))?;
-    let check_one = checks.checkbox(
-        CHECK_ONE_ID,
-        "Show active only",
-        WidgetSize::new(180, 28),
-    )?;
-    let check_two = checks.checkbox(
-        CHECK_TWO_ID,
-        "Enable monitoring",
-        WidgetSize::new(180, 28),
-    )?;
     let edit_row = ui.row(SwellId(0x730c), WidgetSize::new_fill_x(620, 32))?;
     let cell_edit = edit_row.edit_field(
         CELL_EDIT_ID,
@@ -50,7 +40,13 @@ pub(super) fn build(window: &ReaperWindow) -> anyhow::Result<()> {
     let list = ui.list_view(
         LIST_ID,
         WidgetSize::new_fill_both(620, 320).set_min_y(180),
-        ListViewOptions::REPORT | ListViewOptions::SINGLE_SELECT,
+        ListViewOptions::REPORT
+            | ListViewOptions::SINGLE_SELECT
+            | ListViewOptions::EDIT_LABELS,
+    )?;
+    list.set_extended_options(
+        ListViewExtendedOptions::CHECKBOXES
+            | ListViewExtendedOptions::TWO_CLICK_ACTIVATE,
     )?;
     list.add_column(&ListViewColumn {
         title: "Name".into(),
@@ -124,24 +120,7 @@ pub(super) fn build(window: &ReaperWindow) -> anyhow::Result<()> {
         }
         Ok(EventResponse::Handled)
     });
-    ui.on_widget_event(check_one.id(), move |event| {
-        if let ControlEvent::CheckBoxChanged { control } = event {
-            log::info!(
-                "ListView demo checkbox changed: control={control:?}, checked={:?}",
-                check_one.checked()?
-            );
-        }
-        Ok(EventResponse::Handled)
-    });
-    ui.on_widget_event(check_two.id(), move |event| {
-        if let ControlEvent::CheckBoxChanged { control } = event {
-            log::info!(
-                "ListView demo checkbox changed: control={control:?}, checked={:?}",
-                check_two.checked()?
-            );
-        }
-        Ok(EventResponse::Handled)
-    });
+
     let list_edit = list;
     let cell_edit_for_apply = cell_edit;
     ui.on_widget_event(apply_cell.id(), move |event| {
@@ -197,6 +176,7 @@ pub(super) fn build(window: &ReaperWindow) -> anyhow::Result<()> {
                 if control == LIST_ID =>
             {
                 log::info!("ListView column clicked: {column}");
+                list.sort_by_column(column, false)?;
             }
             _ => (),
         }
