@@ -1,7 +1,8 @@
 use crate::{
     misc_enums::ProjectContext,
-    ptr_wrappers::Hwnd,
+    ptr_wrappers::{Hwnd, ReaperHwnd},
     reaper_pointer::ReaperPointer,
+    swell_gui::ReaperWindow,
     utils::{string_from_buf, string_from_const_i8},
     AutomationMode, Color, CommandId, MIDIEditor, MessageBoxType,
     MessageBoxValue, Project, ReaRsError, Reaper, ReaperResult, Section,
@@ -27,6 +28,36 @@ pub fn db_to_linear(db: f64) -> f64 {
 }
 
 impl Reaper {
+    /// Opens REAPER's synchronous system color selection dialog.
+    ///
+    /// `initial` specifies the color shown when the dialog opens. `owner`
+    /// optionally provides a [`ReaperWindow`] to own the dialog. Returns
+    /// `None` if the user cancels. An error is returned if REAPER does not
+    /// provide the selection or native color conversion APIs. Call on
+    /// REAPER's UI thread and avoid invoking this where a nested modal message
+    /// loop is unsafe.
+    pub fn select_color(
+        &self,
+        initial: Color,
+        owner: Option<ReaperWindow>,
+    ) -> ReaperResult<Option<Color>> {
+        if let Some(owner) = owner.as_ref() {
+            ReaperHwnd::from_raw(owner.hwnd()).validate()?;
+        }
+        let hwnd = owner
+            .as_ref()
+            .map_or(std::ptr::null_mut(), |window| window.hwnd());
+        let mut native_color = initial.to_native();
+        let accepted = unsafe {
+            self.low()
+                .GR_SelectColor(hwnd, &mut native_color as *mut i32)
+        };
+        if accepted == 0 {
+            return Ok(None);
+        }
+        Ok(Some(Color::from_native(native_color)))
+    }
+
     /// Converts decibels to REAPER's normalized slider domain.
     ///
     /// The returned value follows REAPER's `DB2SLIDER` taper and range.
