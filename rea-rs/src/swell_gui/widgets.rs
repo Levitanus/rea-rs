@@ -3192,6 +3192,20 @@ impl<'a> CreationContext<'a> {
         self
     }
 
+    /// Sets the overflow policy for this context's current flow container.
+    pub fn with_overflow_policy(self, policy: OverflowPolicy) -> Self {
+        let mut layout = self.window.layout.borrow_mut();
+        let node = match self.container {
+            Some(container) => layout.groups.get_mut(&container),
+            None => Some(&mut layout.root),
+        };
+        if let Some(node) = node {
+            node.policy = policy;
+        }
+        drop(layout);
+        self
+    }
+
     /// Sets horizontal alignment for this context's container, or its
     /// assigned panel when this is a panel context.
     pub fn with_horizontal_alignment(self, align: Align) -> Self {
