@@ -3192,7 +3192,11 @@ impl<'a> CreationContext<'a> {
         self
     }
 
-    /// Sets the overflow policy for this context's current flow container.
+    /// Overrides the overflow policy for this context's current flow
+    /// container.
+    ///
+    /// By default, nested containers derive wrapping behavior from their
+    /// parent. This setting takes precedence over that inferred policy.
     pub fn with_overflow_policy(self, policy: OverflowPolicy) -> Self {
         let mut layout = self.window.layout.borrow_mut();
         let node = match self.container {
@@ -3200,7 +3204,7 @@ impl<'a> CreationContext<'a> {
             None => Some(&mut layout.root),
         };
         if let Some(node) = node {
-            node.policy = policy;
+            node.policy_override = Some(policy);
         }
         drop(layout);
         self
@@ -3533,6 +3537,7 @@ impl<'a> CreationContext<'a> {
                 axis: Axis::Y,
                 spacing: 8,
                 policy: OverflowPolicy::Wrap,
+                policy_override: None,
                 insets: super::layout::Insets {
                     left: 15,
                     top: 28,
@@ -3578,6 +3583,7 @@ impl<'a> CreationContext<'a> {
                 axis: Axis::X,
                 spacing: 8,
                 policy: OverflowPolicy::Clip,
+                policy_override: None,
                 insets: super::layout::Insets::default(),
                 horizontal_alignment: Align::default(),
                 vertical_alignment: Align::default(),
@@ -3684,6 +3690,7 @@ impl<'a> CreationContext<'a> {
                 axis: Axis::Y,
                 spacing: 8,
                 policy: OverflowPolicy::WrapScroll,
+                policy_override: None,
                 insets: super::layout::Insets::default(),
                 horizontal_alignment: Align::default(),
                 vertical_alignment: Align::default(),
@@ -3773,6 +3780,7 @@ impl<'a> CreationContext<'a> {
                 axis: Axis::Y,
                 spacing: 8,
                 policy: OverflowPolicy::Wrap,
+                policy_override: None,
                 insets: super::layout::Insets::default(),
                 horizontal_alignment: Align::default(),
                 vertical_alignment: Align::default(),

@@ -476,6 +476,7 @@ pub(super) struct LayoutNode {
     pub(super) axis: Axis,
     pub(super) spacing: u32,
     pub(super) policy: OverflowPolicy,
+    pub(super) policy_override: Option<OverflowPolicy>,
     pub(super) insets: Insets,
     pub(super) horizontal_alignment: Align,
     pub(super) vertical_alignment: Align,
@@ -514,6 +515,7 @@ impl Default for WindowLayout {
                 axis: Axis::Y,
                 spacing: 8,
                 policy: OverflowPolicy::WrapScroll,
+                policy_override: None,
                 insets: Insets::default(),
                 horizontal_alignment: Align::default(),
                 vertical_alignment: Align::default(),
@@ -1746,29 +1748,39 @@ impl ReaperWindow {
             .values()
             .find(|runtime| runtime.id == id)
             .map(|runtime| runtime.view);
-        let explicit_single_line =
-            node.axis == Axis::X && node.policy == OverflowPolicy::Clip;
-        let wraps = if explicit_single_line {
+        let explicit_single_line = node.policy_override.is_none()
+            && node.axis == Axis::X
+            && node.policy == OverflowPolicy::Clip;
+        let inferred_wraps = if explicit_single_line {
             false
         } else if scroll_view.is_some() {
             rect.width > rect.height
         } else {
             parent_wraps
         };
-        let policy = if explicit_single_line {
-            // Rows remain one lane, but overflowing children must still be
-            // placed and measured so their structural viewport can grow and
-            // let the enclosing ScrollView provide horizontal scrolling.
-            OverflowPolicy::Scroll
-        } else if wraps {
-            if scroll_view.is_some() {
-                OverflowPolicy::WrapScroll
+        let policy = node.policy_override.unwrap_or_else(|| {
+            if explicit_single_line {
+                // Rows remain one lane, but overflowing children must still be
+                // placed and measured so their structural viewport can grow
+                // and let the enclosing ScrollView provide
+                // horizontal scrolling.
+                OverflowPolicy::Scroll
+            } else if inferred_wraps {
+                if scroll_view.is_some() {
+                    OverflowPolicy::WrapScroll
+                } else {
+                    OverflowPolicy::Wrap
+                }
             } else {
-                OverflowPolicy::Wrap
+                OverflowPolicy::Scroll
             }
-        } else {
-            OverflowPolicy::Scroll
-        };
+        });
+        let wraps = matches!(
+            policy,
+            OverflowPolicy::WrapScroll
+                | OverflowPolicy::WrapClip
+                | OverflowPolicy::Wrap
+        );
         let is_structural = layout.structural.contains_key(&id);
         let bounds = insets.apply(Rect::new(0, 0, rect.width, rect.height));
         // A ScrollView wraps against its viewport; nested containers may
@@ -2012,6 +2024,7 @@ impl ReaperWindow {
             axis: layout.root.axis,
             spacing: layout.root.spacing,
             policy: layout.root.policy,
+            policy_override: layout.root.policy_override,
             insets: layout.root.insets,
             horizontal_alignment: layout.root.horizontal_alignment,
             vertical_alignment: layout.root.vertical_alignment,
