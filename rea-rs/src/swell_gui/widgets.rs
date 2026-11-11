@@ -2561,6 +2561,18 @@ impl TreeView {
         Ok(u32::try_from(native.lParam).ok().map(SwellId))
     }
 
+    /// Returns the logical ID of a node's parent, or `None` if it is a root.
+    pub fn node_parent(&self, node: SwellId) -> ReaperResult<Option<SwellId>> {
+        let item = self.native_item(node)?.ok_or(
+            ReaRsError::InvalidObject("TreeView item ID is not present"),
+        )?;
+        let parent = self.native_parent_item(item)?;
+        if parent.is_null() {
+            return Ok(None);
+        }
+        self.tree_id(parent)
+    }
+
     /// Expands or collapses a node.
     pub fn set_expanded(
         &self,
@@ -2827,6 +2839,24 @@ impl TreeView {
                 raw::TVM_GETNEXTITEM,
                 raw::TVGN_CARET,
                 0,
+            )? as raw::HTREEITEM)
+        }
+    }
+
+    fn native_parent_item(
+        &self,
+        item: raw::HTREEITEM,
+    ) -> ReaperResult<raw::HTREEITEM> {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            Ok(ReaperWindow::swell()?.TreeView_GetParent(self.hwnd(), item))
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Ok(self.control().send_message(
+                raw::TVM_GETNEXTITEM,
+                raw::TVGN_PARENT,
+                item as usize as isize,
             )? as raw::HTREEITEM)
         }
     }

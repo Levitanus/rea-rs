@@ -250,6 +250,7 @@ pub const TVE_EXPAND: usize = 0x0002;
 pub const TVE_TOGGLE: usize = 0x0003;
 pub const TVGN_ROOT: usize = 0;
 pub const TVGN_NEXT: usize = 1;
+pub const TVGN_PARENT: usize = 3;
 pub const TVGN_CHILD: usize = 4;
 pub const TVGN_CARET: usize = 9;
 pub const TVI_ROOT: usize = 0xFFFF_0000;
