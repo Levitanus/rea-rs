@@ -674,13 +674,19 @@ pub type ContainerEventCallback =
     Box<dyn FnMut(ContainerEvent) -> anyhow::Result<EventResponse>>;
 
 fn report_callback_failure(context: &str, error: &anyhow::Error) {
-    log::error!("GUI callback failed ({context}): {error:#}");
+    let message = format_callback_failure(context, error);
+    log::error!("{message}");
+    log::error!("Backstrace:\n{:#?}", error.backtrace());
     if crate::Reaper::is_available() {
-        let message = format!("GUI callback failed ({context}): {error}\n");
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = crate::Reaper::get().show_console_msg(message);
+            let _ =
+                crate::Reaper::get().show_console_msg(format!("{message}\n"));
         }));
     }
+}
+
+fn format_callback_failure(context: &str, error: &anyhow::Error) -> String {
+    format!("GUI callback failed ({context}): {error:#}")
 }
 
 pub(crate) fn invoke_callback<T>(
@@ -718,7 +724,7 @@ fn invoke_callback_with_reporter<T>(
 
 #[cfg(test)]
 mod callback_boundary_tests {
-    use super::invoke_callback_with_reporter;
+    use super::{format_callback_failure, invoke_callback_with_reporter};
     use std::cell::Cell;
 
     #[test]
@@ -776,6 +782,17 @@ mod callback_boundary_tests {
             .to_string()
             .contains("callback panicked: expected panic"));
         assert_eq!(reports.get(), 1);
+    }
+
+    #[test]
+    fn callback_failure_report_includes_error_chain_and_backtrace() {
+        let error = anyhow::anyhow!("expected failure");
+
+        let message = format_callback_failure("test callback", &error);
+
+        assert!(message.contains("GUI callback failed (test callback)"));
+        assert!(message.contains("expected failure"));
+        assert!(message.contains("Backtrace:"));
     }
 }
 #[derive(Default)]
