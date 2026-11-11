@@ -2997,6 +2997,22 @@ impl ComboBox {
         Ok(usize::try_from(index).ok())
     }
 
+    /// Finds the first item matching `text` using the native exact-match
+    /// search. Returns `None` when no item matches. Matching details, such as
+    /// case sensitivity, follow the active SWELL/Win32 backend.
+    pub fn find_item_index(&self, text: &str) -> ReaperResult<Option<i32>> {
+        let text = CString::new(text)?;
+        let index = self.send_message(
+            raw::CB_FINDSTRINGEXACT,
+            usize::MAX,
+            text.as_ptr() as isize,
+        )? as i32;
+        if index < 0 {
+            return Ok(None);
+        }
+        Ok(Some(index))
+    }
+
     /// Selects an item by zero-based index. `-1` clears the selection.
     /// Selects the item at `index`. The index is zero-based; native behavior
     /// determines how out-of-range values are handled.
